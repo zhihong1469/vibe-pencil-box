@@ -1,0 +1,78 @@
+<Window x:Class="PencilBox.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:PencilBox.Desktop.ViewModels"
+        xmlns:v="clr-namespace:PencilBox.Desktop.Views"
+        mc:Ignorable="d"
+        Title="PencilBox - USB HID Control" Height="650" Width="950"
+        WindowStartupLocation="CenterScreen"
+        MinWidth="700" MinHeight="450">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Title / connection indicator -->
+        <Border Grid.Row="0" Background="#2C3E50" Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="PencilBox Desktop" Foreground="White" FontSize="16" FontWeight="Bold"/>
+                    <TextBlock Text=" - USB HID / BLE Dongle Controller" Foreground="#B0B0B0" FontSize="13" VerticalAlignment="Bottom" Margin="8,0,0,1"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse Width="10" Height="10" Margin="4,0">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="Gray"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                        <Setter Property="Fill" Value="#2ECC71"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock Text="{Binding StatusMessage}" Foreground="White" VerticalAlignment="Center" FontSize="12"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main content tabs -->
+        <TabControl Grid.Row="1" TabStripPlacement="Left" Margin="4">
+            <TabItem Header="Device" Width="90" Height="32">
+                <v:DevicePageView DataContext="{Binding DevicePage}"/>
+            </TabItem>
+            <TabItem Header="Macros" Width="90" Height="32">
+                <v:MacroEditorView DataContext="{Binding MacroEditor}"/>
+            </TabItem>
+            <TabItem Header="Audio" Width="90" Height="32">
+                <v:AudioRecorderView DataContext="{Binding AudioRecorder}"/>
+            </TabItem>
+            <TabItem Header="Serial" Width="90" Height="32">
+                <v:SerialTerminalView DataContext="{Binding SerialTerminal}"/>
+            </TabItem>
+            <TabItem Header="DSP" Width="90" Height="32">
+                <v:DspPageView DataContext="{Binding DspPage}"/>
+            </TabItem>
+        </TabControl>
+
+        <!-- Status bar -->
+        <StatusBar Grid.Row="2" Background="#F0F0F0">
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusMessage}" FontSize="12"/>
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Text="Ready" FontSize="12" Opacity="0.6"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>

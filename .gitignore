@@ -1,0 +1,77 @@
+# ==========================================================
+#  PencilBox - .gitignore
+#  忽略构建产物、IDE 缓存、日志、可重新下载的依赖库等
+# ==========================================================
+
+# ---------- .NET 构建产物 ----------
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+apphost
+*.dll
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+*.exe
+
+# ---------- IDE / 编辑器缓存 ----------
+.vs/
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.ncb
+*.opendb
+*.cache
+*.VC.db
+.resharper/
+_ReSharper*/
+
+# ---------- NuGet 包（可重新下载） ----------
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+
+# ---------- 日志 ----------
+*.log
+logs/
+log/
+
+# ---------- 测试结果 / 覆盖率 ----------
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+TestResults/
+coverage/
+*.coverage
+
+# ---------- Python (DSP 脚本运行产物) ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.env
+
+# ---------- 本地生成/临时文件 ----------
+# 生成的测试音频与分析报告（可通过脚本重新生成）
+test_audio.wav
+report.json
+*.tmp
+*.bak
+*.swp
+
+# ---------- 操作系统文件 ----------
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="PencilBox.Core/PencilBox.Core.csproj" />
+  <Project Path="PencilBox.Infrastructure/PencilBox.Infrastructure.csproj" />
+  <Project Path="PencilBox.Cli/PencilBox.Cli.csproj" />
+  <Project Path="PencilBox.Desktop/PencilBox.Desktop.csproj" />
+  <Project Path="PencilBox.Tests/PencilBox.Tests.csproj" />
+</Solution>

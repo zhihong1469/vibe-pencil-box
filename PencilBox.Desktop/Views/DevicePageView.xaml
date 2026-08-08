@@ -1,0 +1,217 @@
+<UserControl x:Class="PencilBox.Desktop.Views.DevicePageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:conv="clr-namespace:PencilBox.Desktop.Converters"
+             mc:Ignorable="d" 
+             d:DesignHeight="650" d:DesignWidth="1000">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </UserControl.Resources>
+
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 设备扫描 / 连接 控制行 -->
+        <GroupBox Grid.Row="0" Header="Device Selection" Margin="4">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="HID Devices:" Grid.Column="0" VerticalAlignment="Center" Margin="4"/>
+                <ComboBox Grid.Column="1" ItemsSource="{Binding AvailableDevices}" 
+                          SelectedItem="{Binding SelectedDevice}" Margin="4">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock>
+                                <Run Text="VID_"/><Run Text="{Binding VendorId, StringFormat={}{0:X4}}"/>
+                                <Run Text=" PID_"/><Run Text="{Binding ProductId, StringFormat={}{0:X4}}"/>
+                                <Run Text=" - "/><Run Text="{Binding ProductName}"/>
+                            </TextBlock>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Grid.Column="2" Content="Scan" Command="{Binding ScanDevicesCommand}" Style="{StaticResource ActionButton}"/>
+                <Button Grid.Column="3" Content="Connect" Command="{Binding ConnectCommand}" 
+                        Style="{StaticResource ActionButton}" IsEnabled="{Binding CanConnect}"/>
+                <Button Grid.Column="4" Content="Disconnect" Command="{Binding DisconnectCommand}" 
+                        Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
+                <Button Grid.Column="5" Content="Refresh Info" Command="{Binding RefreshDeviceInfoCommand}" 
+                        Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
+            </Grid>
+        </GroupBox>
+
+        <!-- 端点信息 + Feature Report (控制传输) -->
+        <GroupBox Grid.Row="1" Header="Endpoint / Feature Report" Margin="4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- 端点信息 -->
+                <StackPanel Grid.Column="0" Margin="4">
+                    <TextBlock Text="Endpoint Info" FontWeight="Bold" Margin="2"/>
+                    <TextBox Text="{Binding EndpointInfo, Mode=OneWay}" IsReadOnly="True" 
+                             FontFamily="Consolas" Height="60" AcceptsReturn="True" 
+                             VerticalScrollBarVisibility="Auto"/>
+                </StackPanel>
+
+                <!-- Feature Report (控制传输) -->
+                <Grid Grid.Column="2" Margin="4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Control Transfer (Feature Report)" FontWeight="Bold" Margin="2"/>
+                    <Grid Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Text="Type" Grid.Row="0" Grid.Column="0" Margin="4,6" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding FeatureRequestType}" Grid.Row="0" Grid.Column="1" Margin="4"/>
+                        <TextBlock Text="Request" Grid.Row="0" Grid.Column="2" Margin="4,6" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding FeatureRequest}" Grid.Row="0" Grid.Column="3" Margin="4"/>
+                        <TextBlock Text="Value" Grid.Row="0" Grid.Column="4" Margin="4,6" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding FeatureValue}" Grid.Row="0" Grid.Column="5" Margin="4"/>
+                        <TextBlock Text="Index" Grid.Row="0" Grid.Column="6" Margin="4,6" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding FeatureIndex}" Grid.Row="0" Grid.Column="7" Margin="4"/>
+                        <TextBlock Text="Length" Grid.Row="0" Grid.Column="8" Margin="4,6" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding FeatureLength}" Grid.Row="0" Grid.Column="9" Margin="4"/>
+                        <Button Content="Execute" Grid.Row="0" Grid.Column="10" Margin="4" 
+                                Command="{Binding ExecuteFeatureReportCommand}" 
+                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
+                    </Grid>
+                </Grid>
+            </Grid>
+        </GroupBox>
+
+        <!-- 发送配置 -->
+        <GroupBox Grid.Row="2" Header="Send (Output Report)" Margin="4">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- 发送参数 -->
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Report ID:" Grid.Column="0" VerticalAlignment="Center" Margin="4"/>
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding AvailableReportIds}" 
+                              SelectedItem="{Binding SelectedSendReportId}" Width="80" Margin="4">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock>
+                                    <Run Text="0x"/><Run Text="{Binding ., StringFormat={}{0:X2}}"/>
+                                </TextBlock>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+
+                    <TextBox Grid.Column="2" Text="{Binding SendText}" Margin="4" 
+                             FontFamily="Consolas" AcceptsReturn="True" TextWrapping="Wrap"
+                             ToolTip="Data to send (HEX or ASCII)"/>
+                    <CheckBox Grid.Column="3" Content="HEX" IsChecked="{Binding IsHexSend}" 
+                              VerticalAlignment="Center" Margin="4"/>
+                    <CheckBox Grid.Column="4" Content="HEX RX" IsChecked="{Binding IsHexReceive}" 
+                              VerticalAlignment="Center" Margin="4"/>
+
+                    <TextBlock Text="Interval(ms):" Grid.Column="5" VerticalAlignment="Center" Margin="4,0"/>
+                    <TextBox Grid.Column="6" Text="{Binding SendIntervalMs}" Width="50" Margin="4"/>
+
+                    <Button Grid.Column="7" Content="Send" Command="{Binding SendRawReportCommand}" 
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
+                    <Button Grid.Column="8" Content="Loop" Command="{Binding ToggleLoopSendCommand}" 
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
+                </Grid>
+
+                <!-- 占位 -->
+                <TextBlock Grid.Row="1" Margin="4" 
+                           Text="Send data to the selected Report ID. Toggle HEX for binary or text input."
+                           Foreground="Gray"/>
+                <TextBlock Grid.Row="2" Text="{Binding StatusMessage}" Margin="4" TextTrimming="CharacterEllipsis"/>
+            </Grid>
+        </GroupBox>
+
+        <!-- 中间分隔 / 标题 -->
+        <Border Grid.Row="3" Background="#F0F0F0" Padding="6,2">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Communication Log" FontWeight="Bold" VerticalAlignment="Center"/>
+                <Button Grid.Column="1" Content="Save Log" Command="{Binding SaveLogCommand}" 
+                        Style="{StaticResource ToolbarButton}"/>
+                <Button Grid.Column="2" Content="Clear" Command="{Binding ClearLogCommand}" 
+                        Style="{StaticResource ToolbarButton}"/>
+            </Grid>
+        </Border>
+
+        <!-- 通信日志 -->
+        <GroupBox Grid.Row="4" Margin="4">
+            <ListBox ItemsSource="{Binding LogEntries}" 
+                     FontFamily="Consolas" FontSize="11"
+                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </GroupBox>
+
+        <!-- 底部状态栏 -->
+        <StatusBar Grid.Row="5" Background="#F0F0F0">
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusMessage}" FontSize="12"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</UserControl>
