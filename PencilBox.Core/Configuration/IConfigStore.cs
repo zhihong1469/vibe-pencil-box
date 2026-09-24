@@ -26,6 +26,16 @@ public interface IConfigStore
     /// 保存应用设置
     /// </summary>
     Task SaveSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 加载 Keymap 本地缓存
+    /// </summary>
+    Task<IReadOnlyList<KeymapEntry>> LoadKeymapAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 保存 Keymap 本地缓存
+    /// </summary>
+    Task SaveKeymapAsync(IEnumerable<KeymapEntry> entries, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

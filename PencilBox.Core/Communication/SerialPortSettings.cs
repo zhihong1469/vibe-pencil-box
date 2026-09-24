@@ -39,6 +39,17 @@ public class SerialPortSettings
     /// 写入超时（毫秒）
     /// </summary>
     public int WriteTimeout { get; set; } = 100;
+
+    /// <summary>
+    /// 打开时是否施加 DTR 电平。**默认 false**：笔端 R1 板 `DTR→RESET` 低有效，
+    /// 误拉会复位笔端（笔端测试需求 `06 §1.1` 明确要求上位机侧不要施加 DTR/RTS）。
+    /// </summary>
+    public bool DtrEnable { get; set; } = false;
+
+    /// <summary>
+    /// 打开时是否施加 RTS 电平。**默认 false**（同上；F5 通路与 BOOT/RESET 无关）。
+    /// </summary>
+    public bool RtsEnable { get; set; } = false;
 }
 
 public enum SerialStopBits

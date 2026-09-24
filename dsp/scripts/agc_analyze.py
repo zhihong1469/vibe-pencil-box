@@ -75,7 +75,7 @@ def _simulate_agc(samples, sr, target_db, threshold_db, max_gain_db, ratio,
     return output, {"gain_reduction_events": reduction_events}
 
 
-def process_file(file_path, sample_rate=16000, bits_per_sample=16, channels=1):
+def process_file(file_path, sample_rate=16000, bits_per_sample=16, channels=1, **kwargs):
     samples, sr = load_audio(file_path, sample_rate, bits_per_sample, channels)
 
     vad = vad_process(file_path, sample_rate=sr, bits_per_sample=bits_per_sample, channels=channels)
@@ -161,13 +161,13 @@ def process_file(file_path, sample_rate=16000, bits_per_sample=16, channels=1):
     }
 
 
-def process_raw(raw, sample_rate=16000, bits_per_sample=16, channels=1):
+def process_raw(raw, sample_rate=16000, bits_per_sample=16, channels=1, **kwargs):
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as f:
         f.write(raw)
         tmp = f.name
     try:
-        return process_file(tmp, sample_rate, bits_per_sample, channels)
+        return process_file(tmp, sample_rate, bits_per_sample, channels, **kwargs)
     finally:
         import os
         os.unlink(tmp)

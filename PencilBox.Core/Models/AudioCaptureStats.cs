@@ -6,6 +6,11 @@ namespace PencilBox.Core.Models;
 public class AudioCaptureStats
 {
     /// <summary>
+    /// 实际采集设备的友好名（测量工具必须自证"采的是谁"——静默回落默认设备类 bug 的防复发观测点）
+    /// </summary>
+    public string DeviceName { get; set; } = string.Empty;
+
+    /// <summary>
     /// 总接收字节数
     /// </summary>
     public long TotalBytesReceived { get; set; }

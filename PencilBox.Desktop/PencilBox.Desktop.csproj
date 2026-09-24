@@ -17,10 +17,20 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <!-- 调试工具开关（研发用；成品外发面向普通人时关闭）
+       默认：Debug 开、Release 关；可命令行覆盖：-p:EnableDebugTools=true|false -->
+  <PropertyGroup>
+    <EnableDebugTools Condition="'$(EnableDebugTools)' == '' and '$(Configuration)' == 'Debug'">true</EnableDebugTools>
+    <EnableDebugTools Condition="'$(EnableDebugTools)' == ''">false</EnableDebugTools>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableDebugTools)' == 'true'">
+    <DefineConstants>$(DefineConstants);DEBUG_TOOLS</DefineConstants>
   </PropertyGroup>
 
 </Project>

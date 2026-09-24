@@ -1,0 +1,90 @@
+namespace PencilBox.Core.Protocol;
+
+/// <summary>
+/// CUSTOM（CMD=0xFF）下的 Sub-CMD 消息 ID 分配。
+/// 权威：link/dongle/usb/design/01_协议/02_命令族全集.md（v3.1）§3；只增不改，编号冻结。
+/// 注意：Sub 0x22~0x2F 为预留（本地配对已在 CMD 层 PAIR_* 0xA1~0xA4，勿在此段重复分配）。
+/// </summary>
+public enum PcSubCommand : byte
+{
+    // ========== 音频 / DSP 参数（0x01~0x04，本地） ==========
+    FirUpdate = 0x01,
+    AgcUpdate = 0x02,
+    VadUpdate = 0x03,
+    FullParamsUpdate = 0x04,
+
+    // ========== 快捷键管理（0x10~0x17，本地 PC↔Dongle） ==========
+    GetKeymap = 0x10,
+    SetKeyEntry = 0x11,
+    DeleteKeyEntry = 0x12,
+    ResetKeymap = 0x13,
+    // 0x14 预留（权威为空）
+    GetKeymapInfo = 0x15,
+    CommitKeymap = 0x16,
+    RollbackKeymap = 0x17,
+
+    // ========== 设备控制（0x20~0x2F，穿透） ==========
+    // 本地配对走 CMD 层 PAIR_*（0xA1~0xA4）；0x22~0x2F 预留勿用（含未来 PAIR_REPLACE 等规划）
+    SetVoiceState = 0x20,
+    GetVoiceState = 0x21,
+
+    // ========== 参数配置（0x30~0x3F，穿透/本地） ==========
+    SetMouseSensitivity = 0x30,
+    GetMouseSensitivity = 0x31,
+
+    // ========== 状态查询（0x40~0x4F） ==========
+    QueryDeviceInfo = 0x40,     // 穿透：→[status][型号2][fw_ver4][proto_ver1]
+    QueryBattery = 0x41,        // 穿透：→[status][%]
+    GetPencilState = 0x42,      // 本地（DG 缓存秒回）：→[status][mode][batt][conn][rssi]
+    GetOtaSupport = 0x43,       // 本地：→[status][support][ota_ch]
+
+    // ========== 上行事件通知（0x50~0x5F，DG→PC） ==========
+    EvtBatteryReport = 0x50,    // [%][charging]（变化才发）
+    EvtVoiceState = 0x51,       // [state]
+    EvtConnectionState = 0x52,  // [state][MAC6]
+    EvtKeyMonitor = 0x53,       // [key_id][action]（监听模式）
+}
+
+/// <summary>
+/// Keymap 条目的事件类型（event_type）
+/// </summary>
+public enum KeyEventType : byte
+{
+    Click = 0x01,
+    DoubleClick = 0x02,
+    LongPress = 0x03,
+    LongRelease = 0x04,
+    LongSpecial = 0x05,
+}
+
+/// <summary>
+/// Keymap 条目的动作类型（action_type）
+/// </summary>
+public enum KeyActionType : byte
+{
+    None = 0x00,
+    Keyboard = 0x01,
+    MouseButton = 0x02,
+    Consumer = 0x03,
+    Special = 0x04,
+    AppNotify = 0x05,
+}
+
+/// <summary>
+/// 笔端模式（mode，来自状态查询/状态槽）
+/// </summary>
+public enum PencilMode : byte
+{
+    Idle = 0x00,
+    Capturing = 0x01,
+    Amplifying = 0x02,
+}
+
+/// <summary>
+/// 笔端连接状态
+/// </summary>
+public enum PencilConnectionState : byte
+{
+    Disconnected = 0x00,
+    Connected = 0x01,
+}

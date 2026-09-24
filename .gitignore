@@ -75,3 +75,31 @@ report.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---------- 共享投影层（链接农场）----------
+# 见 respose: agent/control/tool/links/README.md（投影清单即权限清单）
+# 必须忽略：Windows Junction 会被 git 当普通目录，把 respose 文档副本吞进本仓
+#
+# 【本文件是建议，不是我方代改】
+#   目标工程根：E:\MCU\BLE\product\voice-paging\host_computer\PencilBox
+#   现状（2026-09-17 实测）：其 .gitignore **缺 `_share/`**（该目录为独立 git 仓）
+#   由【上位机负责人（Box）】自行把下面一行并入 `PencilBox/.gitignore`（并入与否由该端决定）
+_share/
+
+# ---------- 设备 bin 固件（OTA 输入镜像）----------
+# 体积大、随时可由各端重新产出，不入库（input/ 下 Dongle / pen 镜像均按此忽略）
+**/*.bin
+
+# ---------- 运行/联调中间产物 ----------
+# 串口抓日志的轮转备份（serial-scope.log.1 / serial-scope.jsonl.2 等；.log 与 .jsonl 本体见上/下行）
+*.log.*
+*.jsonl
+*.jsonl.*
+# CLI 参数误写曾把日志落进字面量 "--nologo/" 目录（2026-09-23 已清理），防再犯
+/--nologo/
+# 单文件发布产物（Desktop + CLI self-contained exe）；锚定仓库根，
+# 避免大小写不敏感匹配误伤源码目录 PencilBox.Cli/Output/
+/output/
+# ---------- 外部软链接上下文 / 本地输入固件（开发用，不入库） ----------
+/_share/
+/input/

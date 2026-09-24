@@ -72,8 +72,13 @@ public class NAudioAudioCapture : IAudioCapture, IDisposable
             if (!string.IsNullOrWhiteSpace(deviceId))
             {
                 var enumerator = new MMDeviceEnumerator();
-                captureDevice = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
-                    .FirstOrDefault(d => d.ID == deviceId);
+                var endpoints = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+                // 先按端点 ID 精确匹配，再按友好名称子串匹配；找不到即报错而非静默回落默认设备
+                //（静默回落曾让"指定 Realtek"实际采到默认死设备，排障时间翻倍）
+                captureDevice = endpoints.FirstOrDefault(d => d.ID == deviceId)
+                    ?? endpoints.FirstOrDefault(d => d.FriendlyName.Contains(deviceId, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new ArgumentException(
+                        $"未找到活跃采集端点: {deviceId}（注意：端点可能已在 Windows 声音设置中被禁用）");
             }
 
             captureDevice ??= new MMDeviceEnumerator().GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
@@ -106,6 +111,7 @@ public class NAudioAudioCapture : IAudioCapture, IDisposable
 
             _wasapiCapture.StartRecording();
 
+            _stats.DeviceName = captureDevice.FriendlyName;
             _logger.LogInformation("Audio capture started on device '{Device}' ({SampleRate}Hz, {Channels}ch)",
                 captureDevice.FriendlyName, sampleRate, channels);
 
@@ -205,6 +211,7 @@ public class NAudioAudioCapture : IAudioCapture, IDisposable
         {
             return new AudioCaptureStats
             {
+                DeviceName = _stats.DeviceName,
                 TotalBytesReceived = _stats.TotalBytesReceived,
                 TotalFramesReceived = _stats.TotalFramesReceived,
                 ExpectedBytes = _stats.ExpectedBytes,

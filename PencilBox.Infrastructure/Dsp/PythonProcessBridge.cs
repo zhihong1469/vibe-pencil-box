@@ -220,20 +220,43 @@ public class PythonProcessBridge : IDspService
         DspAnalysisOptions? options = null,
         CancellationToken ct = default)
     {
-        options ??= new DspAnalysisOptions();
+        options ??= new DspAnalysisOptions { GeneratePlots = true };
 
         ProgressChanged?.Invoke(this, new DspProgressEventArgs("Starting full analysis", 0, null));
+
+        var plots = new Dictionary<string, string>();
 
         // Step 1: Waveform stats (R1)
         ProgressChanged?.Invoke(this, new DspProgressEventArgs("Waveform analysis (R1)", 10, null));
         var waveform = await ExecuteAsync(new DspRequest(
-            "waveform_render", inputFilePath, null, null, null), ct);
+            "waveform_render", inputFilePath, null, null,
+            new Dictionary<string, object>
+            {
+                ["sample_rate"] = options.SampleRate,
+                ["generate_image"] = options.GeneratePlots
+            }), ct);
+        if (options.GeneratePlots && waveform.Data != null &&
+            waveform.Data.TryGetValue("image_base64", out var waveformImg))
+        {
+            plots["waveform"] = waveformImg?.ToString() ?? string.Empty;
+            waveform.Data.Remove("image_base64");
+        }
 
         // Step 2: FFT spectrum (R2)
         ProgressChanged?.Invoke(this, new DspProgressEventArgs("FFT analysis (R2)", 25, null));
         var fft = await ExecuteAsync(new DspRequest(
             "fft_analysis", inputFilePath, null, null,
-            new Dictionary<string, object> { ["sample_rate"] = options.SampleRate }), ct);
+            new Dictionary<string, object>
+            {
+                ["sample_rate"] = options.SampleRate,
+                ["generate_image"] = options.GeneratePlots
+            }), ct);
+        if (options.GeneratePlots && fft.Data != null &&
+            fft.Data.TryGetValue("image_base64", out var fftImg))
+        {
+            plots["spectrum"] = fftImg?.ToString() ?? string.Empty;
+            fft.Data.Remove("image_base64");
+        }
 
         // Step 3: VAD (R4)
         ProgressChanged?.Invoke(this, new DspProgressEventArgs("VAD detection (R4)", 45, null));
@@ -265,7 +288,7 @@ public class PythonProcessBridge : IDspService
             summary = $"Dominant frequency: {freq} Hz";
         }
 
-        return new DspFullReport(waveform, fft, vad, filter, agc, null, summary);
+        return new DspFullReport(waveform, fft, vad, filter, agc, null, summary, plots.Count > 0 ? plots : null);
     }
 
     public async ValueTask DisposeAsync()
@@ -336,6 +359,21 @@ public class PythonProcessBridge : IDspService
         return (await stdoutTask, await stderrTask, process.ExitCode);
     }
 
+    private static object? DeserializeElement(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => DeserializeToDict(element),
+            JsonValueKind.Array => element.EnumerateArray().Select(DeserializeElement).ToList(),
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.GetDouble(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            _ => element.GetRawText()
+        };
+    }
+
     private static Dictionary<string, object>? DeserializeToDict(JsonElement element)
     {
         if (element.ValueKind != JsonValueKind.Object)
@@ -344,15 +382,7 @@ public class PythonProcessBridge : IDspService
         var result = new Dictionary<string, object>();
         foreach (var prop in element.EnumerateObject())
         {
-            result[prop.Name] = prop.Value.ValueKind switch
-            {
-                JsonValueKind.String => prop.Value.GetString() ?? string.Empty,
-                JsonValueKind.Number => prop.Value.GetDouble(),
-                JsonValueKind.True => true,
-                JsonValueKind.False => false,
-                JsonValueKind.Null => null!,
-                _ => prop.Value.GetRawText()
-            };
+            result[prop.Name] = DeserializeElement(prop.Value)!;
         }
         return result;
     }

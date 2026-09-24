@@ -110,10 +110,14 @@ public class DspCommands
             ConsoleFormatter.Info($"  [{e.Percent,3}%] {e.CurrentStep}");
         };
 
-        var report = await _dspService.AnalyzeFullAsync(input);
+        var report = await _dspService.AnalyzeFullAsync(input, new DspAnalysisOptions { GeneratePlots = true });
 
         ConsoleFormatter.Success("Analysis complete");
         Console.WriteLine($"  Summary: {report.Summary}");
+        if (report.Plots != null && report.Plots.Count > 0)
+        {
+            Console.WriteLine($"  Plots: {string.Join(", ", report.Plots.Keys)} ({report.Plots.Count})");
+        }
 
         var results = new Dictionary<string, object?>
         {
@@ -121,7 +125,8 @@ public class DspCommands
             ["fft"] = report.FftSpectrum?.Data,
             ["vad"] = report.VadResult?.Data,
             ["filter"] = report.FilterDesign?.Data,
-            ["agc"] = report.AgcRecommendation?.Data
+            ["agc"] = report.AgcRecommendation?.Data,
+            ["plots"] = report.Plots
         };
 
         if (!string.IsNullOrEmpty(output))

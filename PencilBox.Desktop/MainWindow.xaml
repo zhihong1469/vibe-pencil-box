@@ -3,21 +3,21 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:vm="clr-namespace:PencilBox.Desktop.ViewModels"
         xmlns:v="clr-namespace:PencilBox.Desktop.Views"
         mc:Ignorable="d"
-        Title="PencilBox - USB HID Control" Height="650" Width="950"
+        Title="PencilBox - 语音翻页笔控制台" Height="720" Width="1100"
         WindowStartupLocation="CenterScreen"
-        MinWidth="700" MinHeight="450">
+        MinWidth="800" MinHeight="550">
 
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Title / connection indicator -->
+        <!-- 标题栏 -->
         <Border Grid.Row="0" Background="#2C3E50" Padding="12,8">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -25,8 +25,9 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="PencilBox Desktop" Foreground="White" FontSize="16" FontWeight="Bold"/>
-                    <TextBlock Text=" - USB HID / BLE Dongle Controller" Foreground="#B0B0B0" FontSize="13" VerticalAlignment="Bottom" Margin="8,0,0,1"/>
+                    <TextBlock Text="PencilBox" Foreground="White" FontSize="16" FontWeight="Bold"/>
+                    <TextBlock Text=" - 语音翻页笔控制台" Foreground="#B0B0B0" FontSize="13"
+                               VerticalAlignment="Bottom" Margin="8,0,0,1"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse Width="10" Height="10" Margin="4,0">
@@ -46,27 +47,45 @@
             </Grid>
         </Border>
 
-        <!-- Main content tabs -->
-        <TabControl Grid.Row="1" TabStripPlacement="Left" Margin="4">
-            <TabItem Header="Device" Width="90" Height="32">
-                <v:DevicePageView DataContext="{Binding DevicePage}"/>
+        <!-- 一级 Tab：给人用的主流程（仪表盘 / 升级 / 串口）
+             —— Serial 与 OTA 已从"调试工具"提升到这里，日常使用无需再展开调试面板 -->
+        <TabControl Grid.Row="1" Margin="6,4,6,0">
+            <TabItem Header="仪表盘">
+                <v:ProductHomeView DataContext="{Binding ProductHome}"/>
             </TabItem>
-            <TabItem Header="Macros" Width="90" Height="32">
-                <v:MacroEditorView DataContext="{Binding MacroEditor}"/>
+            <TabItem Header="升级">
+                <v:OtaPageView DataContext="{Binding OtaPage}"/>
             </TabItem>
-            <TabItem Header="Audio" Width="90" Height="32">
-                <v:AudioRecorderView DataContext="{Binding AudioRecorder}"/>
+            <TabItem Header="串口">
+                <v:SerialScopeView DataContext="{Binding SerialScope}"/>
             </TabItem>
-            <TabItem Header="Serial" Width="90" Height="32">
-                <v:SerialTerminalView DataContext="{Binding SerialTerminal}"/>
-            </TabItem>
-            <TabItem Header="DSP" Width="90" Height="32">
-                <v:DspPageView DataContext="{Binding DspPage}"/>
+            <TabItem Header="扩音">
+                <v:PassthroughView DataContext="{Binding Passthrough}"/>
             </TabItem>
         </TabControl>
 
-        <!-- Status bar -->
-        <StatusBar Grid.Row="2" Background="#F0F0F0">
+        <!-- 调试工具（折叠收缩面板；仅研发版显示——由编译开关 DEBUG_TOOLS 控制，
+             Release/成品外发默认隐藏，见 PencilBox.Desktop.csproj: EnableDebugTools） -->
+        <Expander x:Name="DebugToolsExpander" Grid.Row="2" Header="调试工具" IsExpanded="False" Margin="6"
+                  Background="#F7F7F7">
+            <TabControl MinHeight="320" Margin="4">
+                <TabItem Header="Device">
+                    <v:DevicePageView DataContext="{Binding DevicePage}"/>
+                </TabItem>
+                <TabItem Header="Macros">
+                    <v:MacroEditorView DataContext="{Binding MacroEditor}"/>
+                </TabItem>
+                <TabItem Header="Audio">
+                    <v:AudioRecorderView DataContext="{Binding AudioRecorder}"/>
+                </TabItem>
+                <TabItem Header="DSP">
+                    <v:DspPageView DataContext="{Binding DspPage}"/>
+                </TabItem>
+            </TabControl>
+        </Expander>
+
+        <!-- 状态栏 -->
+        <StatusBar Grid.Row="3" Background="#F0F0F0">
             <StatusBarItem>
                 <TextBlock Text="{Binding StatusMessage}" FontSize="12"/>
             </StatusBarItem>

@@ -2,7 +2,11 @@
 
 Input: WAV/RAW audio file.
 Output: frequency spectrum (dB), peaks, SNR estimate, dominant frequency.
+Optional: base64 PNG spectrum plot.
 """
+import base64
+import io
+
 import numpy as np
 
 from ._audio_utils import load_audio, rms_db
@@ -15,8 +19,40 @@ WINDOWS = {
 }
 
 
+def _render_spectrum_image(freqs, mags_db, peaks, width=800, height=240, dpi=100):
+    """Generate a spectrum PNG as base64 string."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+    ax.plot(freqs, mags_db, color='#4CAF50', linewidth=0.7)
+
+    # Mark top peaks
+    for pk in peaks[:3]:
+        ax.axvline(pk["freq"], color='#FF5722', linestyle='--', linewidth=0.8, alpha=0.7)
+        ax.text(pk["freq"], max(mags_db) - 3, f'{pk["freq"]:.0f}Hz', rotation=90, va='top', ha='right', color='#FF5722', fontsize=7)
+
+    ax.set_xlim(0.0, min(8000.0, max(freqs)))
+    ax.set_ylim(min(mags_db) - 5, max(mags_db) + 3)
+    ax.set_xlabel('Frequency (Hz)')
+    ax.set_ylabel('Magnitude (dB)')
+    ax.set_title('FFT Spectrum')
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=dpi, facecolor='white', edgecolor='none')
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode('ascii')
+
+
 def process_file(file_path, fft_size=1024, window="hann", sample_rate=16000,
-                 bits_per_sample=16, channels=1, num_peaks=5):
+                 bits_per_sample=16, channels=1, num_peaks=5, generate_image=False, **kwargs):
     samples, sr = load_audio(file_path, sample_rate, bits_per_sample, channels)
 
     if window not in WINDOWS:
@@ -71,7 +107,7 @@ def process_file(file_path, fft_size=1024, window="hann", sample_rate=16000,
     else:
         snr_db = 0.0
 
-    return {
+    result = {
         "sample_rate": int(sr),
         "fft_size": int(n),
         "window_function": window,
@@ -84,15 +120,20 @@ def process_file(file_path, fft_size=1024, window="hann", sample_rate=16000,
         "rms_db": round(rms_db(samples), 2)
     }
 
+    if generate_image:
+        result["image_base64"] = _render_spectrum_image(freqs, mags_db, peaks)
+
+    return result
+
 
 def process_raw(raw, fft_size=1024, window="hann", sample_rate=16000,
-                bits_per_sample=16, channels=1, num_peaks=5):
+                bits_per_sample=16, channels=1, num_peaks=5, generate_image=False, **kwargs):
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as f:
         f.write(raw)
         tmp = f.name
     try:
-        return process_file(tmp, fft_size, window, sample_rate, bits_per_sample, channels, num_peaks)
+        return process_file(tmp, fft_size, window, sample_rate, bits_per_sample, channels, num_peaks, generate_image, **kwargs)
     finally:
         import os
         os.unlink(tmp)

@@ -77,16 +77,16 @@ public class PencilBoxProtocol
     }
 
     /// <summary>
-    /// 解析响应帧
+    /// 解析响应帧（输入不含 HID Report ID，从 0x4A 开始）
     /// </summary>
-    /// <param name="reportData">完整的 HID Report 数据</param>
+    /// <param name="reportData">完整帧字节（不含 Report ID）</param>
     /// <returns>解析结果，失败返回 null</returns>
     public static DecodedFrame? ParseResponse(byte[] reportData)
     {
-        if (CommandFrame.TryParse(reportData, out byte reportId, out HidChannel channel,
+        if (CommandFrame.TryParse(reportData, out HidChannel channel,
             out CommandId commandId, out byte[] payload))
         {
-            return new DecodedFrame(reportId, channel, commandId, payload);
+            return new DecodedFrame(channel, commandId, payload);
         }
         return null;
     }
@@ -96,7 +96,6 @@ public class PencilBoxProtocol
 /// 解析后的帧结构
 /// </summary>
 public record DecodedFrame(
-    byte ReportId,
     HidChannel Channel,
     CommandId CommandId,
     byte[] Payload)

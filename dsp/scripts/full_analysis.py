@@ -67,14 +67,23 @@ def _build_param_package(filter_result, agc_result):
 def process_file(file_path, max_taps=64, sample_rate=16000,
                  bits_per_sample=16, channels=1, generate_plots=False):
     steps = {}
+    plots = {}
 
     steps["waveform"] = waveform_render.process_file(
         file_path, sample_rate=sample_rate,
-        bits_per_sample=bits_per_sample, channels=channels)
+        bits_per_sample=bits_per_sample, channels=channels,
+        generate_image=generate_plots)
+
+    if generate_plots and "image_base64" in steps["waveform"]:
+        plots["waveform"] = steps["waveform"].pop("image_base64")
 
     steps["fft"] = fft_analysis.process_file(
         file_path, sample_rate=sample_rate,
-        bits_per_sample=bits_per_sample, channels=channels)
+        bits_per_sample=bits_per_sample, channels=channels,
+        generate_image=generate_plots)
+
+    if generate_plots and "image_base64" in steps["fft"]:
+        plots["spectrum"] = steps["fft"].pop("image_base64")
 
     steps["vad"] = vad_detect.process_file(
         file_path, sample_rate=sample_rate,
@@ -103,16 +112,16 @@ def process_file(file_path, max_taps=64, sample_rate=16000,
         f"阈值 {agc['recommended_params']['threshold_dbfs']:.0f}dBFS"
     )
 
-    return {"steps": steps, "summary": summary}
+    return {"steps": steps, "summary": summary, "plots": plots}
 
 
-def process_raw(raw, max_taps=64, sample_rate=16000, bits_per_sample=16, channels=1):
+def process_raw(raw, max_taps=64, sample_rate=16000, bits_per_sample=16, channels=1, generate_plots=False):
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as f:
         f.write(raw)
         tmp = f.name
     try:
-        return process_file(tmp, max_taps, sample_rate, bits_per_sample, channels)
+        return process_file(tmp, max_taps, sample_rate, bits_per_sample, channels, generate_plots)
     finally:
         import os
         os.unlink(tmp)

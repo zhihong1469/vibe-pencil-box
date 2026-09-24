@@ -15,7 +15,7 @@ from ._audio_utils import load_audio
 
 
 def process_file(file_path, frame_ms=20, sample_rate=16000, bits_per_sample=16, channels=1,
-                 hangover_frames=5, min_voice_ms=150):
+                 hangover_frames=5, min_voice_ms=150, **kwargs):
     samples, sr = load_audio(file_path, sample_rate, bits_per_sample, channels)
 
     frame_len = int(sr * frame_ms / 1000)
@@ -149,13 +149,13 @@ def process_file(file_path, frame_ms=20, sample_rate=16000, bits_per_sample=16, 
     }
 
 
-def process_raw(raw, frame_ms=20, sample_rate=16000, bits_per_sample=16, channels=1):
+def process_raw(raw, frame_ms=20, sample_rate=16000, bits_per_sample=16, channels=1, **kwargs):
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as f:
         f.write(raw)
         tmp = f.name
     try:
-        return process_file(tmp, frame_ms, sample_rate, bits_per_sample, channels)
+        return process_file(tmp, frame_ms, sample_rate, bits_per_sample, channels, **kwargs)
     finally:
         import os
         os.unlink(tmp)

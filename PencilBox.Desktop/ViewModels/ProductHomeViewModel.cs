@@ -1,0 +1,1123 @@
+using System.Collections.ObjectModel;
+using System.Windows;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
+using PencilBox.Core.Ble;
+using PencilBox.Core.Communication;
+using PencilBox.Core.Fsm;
+using PencilBox.Core.Models;
+using PencilBox.Core.Protocol;
+using PencilBox.Core.Protocol.Company;
+using PencilBox.Core.Services;
+using PencilBox.Desktop.Helpers;
+
+namespace PencilBox.Desktop.ViewModels;
+
+/// <summary>
+/// 产品主页 ViewModel（默认首页）
+/// 专属产品控制面板：设备连接 + 笔端状态（电池/信号）+ Keymap 表格管理。
+/// </summary>
+public partial class ProductHomeViewModel : ObservableObject
+{
+    private readonly IDeviceService _deviceService;
+    private readonly IPencilStateService _pencilStateService;
+    private readonly IKeymapService _keymapService;
+    private readonly IPenBindingService _penBindingService;
+    private readonly IDongleCommandClient _dongle;
+    private readonly ISerialTransport _serialTransport;
+    private readonly CompanyPenStatusService _penStatus;
+    private readonly IVpCommandService _vpCmd;
+    private readonly ILogger<ProductHomeViewModel> _logger;
+
+    private CancellationTokenSource? _pollCts;
+    private CancellationTokenSource? _penPushCts;
+
+    // ============ 设备连接 ============
+    [ObservableProperty]
+    private ObservableCollection<HidDeviceInfo> _availableDevices = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
+    private HidDeviceInfo? _selectedDevice;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
+    [NotifyPropertyChangedFor(nameof(CanUseK2))]
+    private bool _isConnected;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
+    private bool _isConnecting;
+
+    [ObservableProperty]
+    private DeviceInfo? _dongleInfo;
+
+    /// <summary>Dongle 配对状态（A1 GET_STATE）文本，连接后自动/手动刷新</summary>
+    [ObservableProperty]
+    private string _donglePairText = "未连接：配对状态不可用";
+
+    /// <summary>是否有配对状态（已连接并收到 A1 应答）</summary>
+    [ObservableProperty]
+    private bool _hasPairState;
+
+    [ObservableProperty]
+    private string _statusMessage = "请扫描并连接接收器（Dongle）";
+
+    public bool CanConnect => SelectedDevice != null && !IsConnected && !IsConnecting;
+
+    // ============ 笔端绑定（**两条来源、一份存储**） ============
+    // 统一原则：BLE 扫描与串口 0x51 读目的完全相同（拿到笔端 MAC），都汇入同一份 KnownPen 目录
+    // （显示序 12HEX 单源）；因此"下发给基站"只有一条路径（0x51 写，显示序直传、PC 零转换）。
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPenTargets))]
+    private ObservableCollection<KnownPen> _penTargets = new();
+
+    /// <summary>目录是否有记录（控制"清除记录"按钮可用态）</summary>
+    public bool HasPenTargets => PenTargets.Count > 0;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanBind))]
+    [NotifyPropertyChangedFor(nameof(SelectedPenDisplayMac))]
+    [NotifyPropertyChangedFor(nameof(SelectedPenSummary))]
+    private KnownPen? _selectedPen;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanBind))]
+    private bool _isScanningBle;
+
+    [ObservableProperty]
+    private bool _isBinding;
+
+    // ---- 来源②：串口直连笔端读 MAC（公司协议 0x51） ----
+    [ObservableProperty]
+    private ObservableCollection<string> _serialPorts = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanReadPenBySerial))]
+    [NotifyPropertyChangedFor(nameof(CanClearBinding))]
+    private string? _selectedSerialPort;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanReadPenBySerial))]
+    private bool _isReadingPenBySerial;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanClearBinding))]
+    private bool _isClearingBinding;
+
+    public bool CanBind => SelectedPen != null && !IsBinding;
+
+    public bool CanReadPenBySerial =>
+        !string.IsNullOrWhiteSpace(SelectedSerialPort) && !IsReadingPenBySerial;
+
+    /// <summary>笔端清绑定可用态（已选串口且无在途会话；仅串口直达路径）</summary>
+    public bool CanClearBinding =>
+        !string.IsNullOrWhiteSpace(SelectedSerialPort) && !IsClearingBinding;
+
+    /// <summary>选中笔端的显示序 MAC（= 下发值；PC 零转换，原样进 `0x51` 写）</summary>
+    public string? SelectedPenDisplayMac => SelectedPen?.MacDisplayText;
+
+    /// <summary>选中笔端摘要：来源 + 协议 `BT_NAME`（确认展示）</summary>
+    public string? SelectedPenSummary => SelectedPen == null
+        ? null
+        : $"来源：{SelectedPen.SourceName}　下发名：{SelectedPen.EffectiveBtName}";
+
+    // ============ 笔端状态 ============
+    [ObservableProperty]
+    private int _batteryLevel;
+
+    [ObservableProperty]
+    private int _rssi;
+
+    [ObservableProperty]
+    private bool _pencilConnected;
+
+    [ObservableProperty]
+    private string _pencilModeText = "未知";
+
+    /// <summary>连接状态文本（A1 驱动）：已连接 / 已配对·未连接 / 未配对 / 未知</summary>
+    [ObservableProperty]
+    private string _pencilStateText = "未连接";
+
+    /// <summary>电量/信号是否可用（0x53 状态上行已通即亮卡；RSSI 仍待 0x42）</summary>
+    [ObservableProperty]
+    private bool _hasPenTelemetry;
+
+    /// <summary>笔端设备状态（0x53 DEV_STATE 槽）：正常 / 休眠</summary>
+    [ObservableProperty]
+    private string _penDevStateText = "—";
+
+    /// <summary>0x53 推送监听开关态（连笔/槽变化/断连实时上卡）</summary>
+    [ObservableProperty]
+    private bool _isPenPushListening;
+
+    /// <summary>0x53 最近一帧的来源/元信息（拉取时间戳或推送序号）</summary>
+    [ObservableProperty]
+    private string _penStatusMetaText = "未获取（连接后点「刷新笔端状态」）";
+
+    // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
+    [ObservableProperty]
+    private int _k2ModeIndex;
+
+    [ObservableProperty]
+    private string _k2ModeResultText = "未查询：应用/查询经 0x54 信封 → 基站 → 当前连接笔端";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanUseK2))]
+    private bool _isK2Busy;
+
+    /// <summary>K2 卡片可用态（USB 命令通道已连且无在途信封事务）</summary>
+    public bool CanUseK2 => IsConnected && !IsK2Busy;
+
+    // ============ Keymap ============
+    [ObservableProperty]
+    private ObservableCollection<KeymapRowViewModel> _keymapRows = new();
+
+    [ObservableProperty]
+    private KeymapInfo? _keymapInfo;
+
+    [ObservableProperty]
+    private bool _isKeymapDirty;
+
+    public ProductHomeViewModel(
+        IDeviceService deviceService,
+        IPencilStateService pencilStateService,
+        IKeymapService keymapService,
+        IPenBindingService penBindingService,
+        IDongleCommandClient dongle,
+        ISerialTransport serialTransport,
+        CompanyPenStatusService penStatus,
+        IVpCommandService vpCmd,
+        ILogger<ProductHomeViewModel> logger)
+    {
+        _deviceService = deviceService;
+        _pencilStateService = pencilStateService;
+        _keymapService = keymapService;
+        _penBindingService = penBindingService;
+        _dongle = dongle;
+        _serialTransport = serialTransport;
+        _penStatus = penStatus;
+        _vpCmd = vpCmd;
+        _logger = logger;
+
+        _deviceService.ConnectionStateChanged += OnConnectionStateChanged;
+        _deviceService.DeviceListChanged += OnDeviceListChanged;
+        _deviceService.DeviceInfoChanged += OnDeviceInfoChanged;
+        _pencilStateService.StateUpdated += OnPencilStateUpdated;
+
+        // 启动时加载本地缓存（掉电不丢失）
+        _ = LoadCacheAsync();
+
+        // 启动时加载本地已知笔端目录（显示"上次使用/使用过/出现过"历史）
+        _ = LoadKnownPensAsync();
+
+        // 启动时枚举可用串口（供"串口读笔端"这条来源直接选）
+        _ = LoadSerialPortsAsync();
+    }
+
+    // ============ 设备连接命令 ============
+
+    [RelayCommand]
+    private async Task ScanDevicesAsync()
+    {
+        try
+        {
+            StatusMessage = "正在扫描设备...";
+            var devices = await _deviceService.ScanDevicesAsync();
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                // 三层：无关设备过滤掉 → 只留本产品设备（浅黄底）→ 命令接口 0xFF02（★）排最前并选中
+                var ours = devices.Where(d => d.IsOurDevice).ToList();
+                var ordered = ours.OrderByDescending(d => d.IsCommandChannel).ToList();
+                AvailableDevices = new ObservableCollection<HidDeviceInfo>(ordered);
+
+                var target = ordered.FirstOrDefault(d => d.IsCommandChannel);
+                if (target != null)
+                {
+                    SelectedDevice = target;
+                    StatusMessage = $"已识别接收器命令通道：{target.ProductName}（VID_0x{target.VendorId:X4} PID_0x{target.ProductId:X4}）";
+                }
+                else if (ordered.Count > 0)
+                {
+                    SelectedDevice = ordered[0];
+                    StatusMessage = "已发现本产品设备，但未识别到 0xFF02 命令通道接口";
+                }
+                else
+                {
+                    StatusMessage = "未发现本产品设备（VID 0x2F70/0xEA11），请确认接收器已插入";
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"扫描失败: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task ConnectAsync()
+    {
+        if (SelectedDevice == null)
+            return;
+
+        try
+        {
+            IsConnecting = true;
+            StatusMessage = $"正在连接 {SelectedDevice.ProductName}...";
+
+            var ok = await _deviceService.ConnectAsync(SelectedDevice.DevicePath);
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsConnecting = false;
+                if (ok)
+                {
+                    StatusMessage = "已连接，正在同步状态与 Keymap...";
+                    _ = RefreshAfterConnectAsync();
+                }
+                else
+                {
+                    StatusMessage = "连接失败";
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsConnecting = false;
+                StatusMessage = $"连接错误: {ex.Message}";
+            });
+        }
+    }
+
+    [RelayCommand]
+    private async Task DisconnectAsync()
+    {
+        StopPolling();
+        StopPenPushLoop(null);
+        await _deviceService.DisconnectAsync();
+        StatusMessage = "已断开";
+        PencilConnected = false;
+        BatteryLevel = 0;
+        Rssi = 0;
+        HasPenTelemetry = false;
+        PenDevStateText = "—";
+        IsPenPushListening = false;
+        PenStatusMetaText = "未获取（连接后点「刷新笔端状态」）";
+        K2ModeResultText = "未查询：应用/查询经 0x54 信封 → 基站 → 当前连接笔端";
+    }
+
+    // ============ 笔端绑定命令 ============
+
+    [RelayCommand]
+    private async Task ScanPensAsync()
+    {
+        try
+        {
+            IsScanningBle = true;
+            StatusMessage = "正在扫描笔端蓝牙广播（并入本地目录）...";
+
+            var pens = (await _penBindingService.ScanPensAsync(5)).ToList();
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                PenTargets = new ObservableCollection<KnownPen>(pens);
+                IsScanningBle = false;
+
+                if (pens.Count == 0)
+                {
+                    SelectedPen = null;
+                    StatusMessage = "目录为空：未发现 SunVote 笔端。请确认笔已上电 / 已进入配对视窗（HOME+UP 2s）后再次扫描";
+                    return;
+                }
+
+                // 目录已按"上次使用>使用过>出现过"、层内在场+信号排序；默认选中首个（最优先）
+                SelectedPen = pens[0];
+
+                // 区分"本次扫描在线"与"目录总数"：笔端 USB 连线中 / 已被基站连接时**不广播**
+                // （BLE 从机被连即停广播，属正常行为）——不算扫描链路故障，但要给出可判读的提示。
+                var present = pens.Count(p => p.IsPresent);
+                StatusMessage = present > 0
+                    ? $"本次扫描在线 {present} 支 / 目录共 {pens.Count} 支，已选中：{pens[0].MacDisplayText}（{pens[0].LevelName}）"
+                    : $"本次扫描在线 0 支（目录 {pens.Count} 支为历史记录）。提示：笔端 USB 连线中或已被基站连接时不会广播，拔线/断开后重扫";
+            });
+        }
+        catch (Exception ex)
+        {
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsScanningBle = false;
+                StatusMessage = $"扫描失败: {ex.Message}";
+            });
+        }
+    }
+
+    /// <summary>清空本地已知笔端目录（出现/使用记录全部抹掉；不影响已下发到基站的绑定）</summary>
+    [RelayCommand]
+    private async Task ClearPenTargetsAsync()
+    {
+        try
+        {
+            var count = PenTargets.Count;
+            await _penBindingService.ClearKnownPensAsync();
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                PenTargets = new ObservableCollection<KnownPen>();
+                SelectedPen = null;
+                StatusMessage = count > 0
+                    ? $"已清除全部 {count} 条笔端记录（不影响基站已下发的绑定）"
+                    : "目录本就为空，无需清除";
+            });
+        }
+        catch (Exception ex)
+        {
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                StatusMessage = $"清除记录失败: {ex.Message}";
+            });
+        }
+    }
+
+    // ---- 来源②：串口直连笔端读 MAC（公司协议 0x51） ----
+
+    /// <summary>刷新可用串口列表（笔端串口：115200,N,8,1；不施加 DTR/RTS）</summary>
+    [RelayCommand]
+    private async Task LoadSerialPortsAsync()
+    {
+        try
+        {
+            var ports = await _serialTransport.EnumeratePortsAsync();
+            var names = ports.Select(p => p.PortName).ToList();
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                SerialPorts = new ObservableCollection<string>(names);
+                if (string.IsNullOrWhiteSpace(SelectedSerialPort) && names.Count > 0)
+                    SelectedSerialPort = names[0];
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to enumerate serial ports");
+        }
+    }
+
+    /// <summary>
+    /// **串口直连笔端读 MAC**（公司协议 `0x51`）→ 并入**同一份**笔端目录。
+    /// 与"扫描笔端"（BLE）只是取 MAC 的两条路径；产物同构、与来源无关，
+    /// 之后"绑定"走同一条 `0x51` 下发（显示序直传、PC 零转换）。
+    /// </summary>
+    [RelayCommand]
+    private async Task ReadPenBySerialAsync()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedSerialPort))
+        {
+            StatusMessage = "请先选择笔端串口（如 COM20）";
+            return;
+        }
+
+        try
+        {
+            IsReadingPenBySerial = true;
+            StatusMessage = $"正在经串口 {SelectedSerialPort} 读笔端（0x51）...";
+
+            var pens = (await _penBindingService.ScanPenViaSerialAsync(SelectedSerialPort)).ToList();
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsReadingPenBySerial = false;
+                PenTargets = new ObservableCollection<KnownPen>(pens);
+
+                var read = pens.FirstOrDefault(p => p.Source == PenMacSource.SerialRead) ?? pens.FirstOrDefault();
+                if (read != null)
+                    SelectedPen = read;
+
+                StatusMessage = read != null
+                    ? $"串口读到笔端 {read.MacDisplayText}（{read.EffectiveBtName}），已并入同一份目录"
+                    : "串口读完成，但目录仍为空";
+            });
+        }
+        catch (Exception ex)
+        {
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsReadingPenBySerial = false;
+                StatusMessage = $"串口读笔端失败：{ex.Message}";
+            });
+        }
+    }
+
+    /// <summary>
+    /// **笔端清绑定**（`0x51 PARAM=03`，协议补充 01）——**仅串口直达**：笔端删自身 bond →
+    /// 断连 → 进配对名视窗（60s）。破坏性副作用，先弹确认；与 Dongle 侧 A3 清目标互不影响。
+    /// </summary>
+    [RelayCommand]
+    private async Task ClearPenBindingAsync()
+    {
+        if (!CanClearBinding)
+        {
+            StatusMessage = "请先选择笔端串口（清绑定仅串口直达路径；BLE 透传不提供，防误清）";
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"将经串口 {SelectedSerialPort} 直连笔端发送清绑定（0x51/03）。\n\n" +
+            "笔端将执行：删除自身蓝牙绑定 → 断开当前连接 → 进配对名学习视窗（SunVote-R1#，60 秒，不复位）。\n" +
+            "该操作清除笔端本体的绑定信息（接收器 Dongle 侧目标不受影响）。\n\n确认执行？",
+            "笔端清绑定确认（串口直达）", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.Yes)
+            return;
+
+        IsClearingBinding = true;
+        try
+        {
+            StatusMessage = $"正在经串口 {SelectedSerialPort} 直达笔端发送清绑定（0x51/03）...";
+            var status = await _penBindingService.ClearPenBindingAsync(SelectedSerialPort!);
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                StatusMessage = status switch
+                {
+                    0x00 => "清绑定已受理（00，幂等）：笔端删 bond → 断连 → 配对视窗 60s；稍后「扫描笔端」可见 # 配对态广播，再续配对",
+                    0xFF => "清绑定被拒（FF）：笔端升级会话进行中（笔端状态未受影响）；会话结束后重发即可",
+                    _ => $"清绑定返回 STATUS=0x{status:X2}（未知值，以笔端口径为准）"
+                };
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"清绑定失败：{ex.Message}";
+        }
+        finally
+        {
+            MainThreadHelper.EnsureOnMainThread(() => IsClearingBinding = false);
+        }
+    }
+
+    /// <summary>启动时加载本地已知笔端目录（无需扫描即可展示历史，含"上次使用"）</summary>
+    private async Task LoadKnownPensAsync()
+    {
+        try
+        {
+            var pens = (await _penBindingService.LoadKnownPensAsync()).ToList();
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                if (pens.Count > 0)
+                {
+                    PenTargets = new ObservableCollection<KnownPen>(pens);
+                    SelectedPen = pens[0];
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load known pens catalog");
+        }
+    }
+
+    [RelayCommand]
+    private async Task BindPenAsync()
+    {
+        if (SelectedPen == null)
+        {
+            StatusMessage = "请先扫描并选择要绑定的笔端";
+            return;
+        }
+
+        if (!IsConnected)
+        {
+            StatusMessage = "请先连接接收器（Dongle）USB 接口，再绑定笔端";
+            return;
+        }
+
+        try
+        {
+            IsBinding = true;
+            StatusMessage = $"正在绑定笔端 {SelectedPen.MacDisplayText}...";
+
+            var result = await _penBindingService.BindPenByMacAsync(SelectedPen);
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsBinding = false;
+                StatusMessage = result.Message;
+                if (result.Success)
+                    _ = RefreshPairStateAsync();   // 绑定成功 → 回读 A1 展示新目标
+            });
+        }
+        catch (Exception ex)
+        {
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsBinding = false;
+                StatusMessage = $"绑定失败: {ex.Message}";
+            });
+        }
+    }
+
+    [RelayCommand]
+    private async Task PairByNameAsync()
+    {
+        if (!IsConnected)
+        {
+            StatusMessage = "请先连接接收器（Dongle）USB 接口，再进入名称配对";
+            return;
+        }
+
+        try
+        {
+            IsBinding = true;
+            StatusMessage = "正在让 Dongle 进入名称配对（匹配 SunVote-R1#）...";
+
+            var result = await _penBindingService.StartNamePairingAsync();
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsBinding = false;
+                StatusMessage = result.Message;
+                if (result.Success)
+                    _ = RefreshPairStateAsync();   // 配对窗开启 → 回读 A1 模式变化
+            });
+        }
+        catch (Exception ex)
+        {
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                IsBinding = false;
+                StatusMessage = $"名称配对失败: {ex.Message}";
+            });
+        }
+    }
+
+    private async Task RefreshAfterConnectAsync()
+    {
+        try
+        {
+            // Dongle 配对状态（A1 GET_STATE）
+            await RefreshPairStateAsync();
+            // 笔端状态快照（0x53 拉管对齐：UI 打开/重连时主动拉一次）+ 推送监听（推管实时）
+            await RefreshPenStatusAsync();
+            StartPenPushLoop();
+            // 实时读取笔端状态
+            await _pencilStateService.GetPencilStateAsync();
+            // 实时读取 Keymap（不是预制）
+            await ReadKeymapAsync();
+            // 启动轮询
+            StartPolling();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to refresh after connect");
+        }
+    }
+
+    // ============ Dongle 配对状态（EP4 A1） ============
+
+    /// <summary>
+    /// 查询 Dongle 配对状态（A1 GET_STATE）并刷新展示。
+    /// 仅内部调用（连接后刷新 / 2s 轮询 / 绑定·配对后回读）；手动刷新按钮已于 2026-09-23 裁决摘除
+    /// （设备侧 4A4C 已退役，对现行固件恒超时；遗留联调走 CLI `device ep4 send --cmd A1`，10 号 §4.2）。
+    /// </summary>
+    private async Task RefreshPairStateAsync()
+    {
+        if (!_deviceService.IsConnected)
+        {
+            DonglePairText = "未连接：配对状态不可用";
+            HasPairState = false;
+            return;
+        }
+
+        try
+        {
+            var reply = await _dongle.SendCommandAsync((byte)CommandId.PairGetState, timeoutMs: 1500);
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                if (!reply.Received || reply.Status != 0x00)
+                {
+                    DonglePairText = reply.Received
+                        ? $"读取配对状态失败：status=0x{reply.Status:X2}（{reply.StatusText}）"
+                        : "查询配对状态超时（Dongle 无应答）";
+                    HasPairState = false;
+                    return;
+                }
+
+                var st = DonglePairState.Parse(reply.Payload);
+                if (!st.Valid)
+                {
+                    DonglePairText = "应答格式异常（A1 载荷过短）";
+                    HasPairState = false;
+                    return;
+                }
+
+                // A1 是"已连接/配对"的真实数据源（0x42 Dongle 未实现前，连接态以 A1 为准）
+                PencilConnected = st.IsConnected;
+                PencilStateText = st.IsConnected ? "已连接" : (st.IsPaired ? "已配对·未连接" : "未配对");
+
+                var sb = new System.Text.StringBuilder();
+                sb.Append(st.IsPaired
+                    ? $"● 已绑定目标：{st.MacDisplay}"
+                    : "○ 未绑定目标（可绑定笔端或名称配对）");
+                sb.Append($"   配对模式:{st.ModeText}");
+                if (st.IsConnected)
+                    sb.Append("   笔端已连接");
+                else if (st.IsPaired)
+                    sb.Append("   笔端未连接（出现即自动建联）");
+                if (!string.IsNullOrEmpty(st.Name))
+                    sb.Append($"   名称:{st.Name}");
+
+                DonglePairText = sb.ToString();
+                HasPairState = true;
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A1 query failed");
+            DonglePairText = "查询配对状态失败";
+            HasPairState = false;
+        }
+    }
+
+    // ============ 状态查询 ============
+
+    [RelayCommand]
+    private async Task RefreshStateAsync()
+    {
+        if (!IsConnected)
+        {
+            StatusMessage = "请先连接接收器";
+            return;
+        }
+
+        try
+        {
+            // 连接/配对态（A1，实时可靠）
+            await RefreshPairStateAsync();
+
+            // 笔端状态快照（0x53：电量/休眠/运行模式——基站已实现，实际数值来源）
+            await RefreshPenStatusAsync();
+
+            // 电量/信号（0x42；Dongle 未实现前返回失败 → RSSI 卡片保持占位）
+            var state = await _pencilStateService.GetPencilStateAsync();
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                HasPenTelemetry = state != null && state.Status == 0x00;
+                if (HasPenTelemetry)
+                    StatusMessage = "状态已刷新";
+                else
+                    StatusMessage = "连接/配对状态已刷新；电量与信号需 Dongle 实现 0x42(GET_PENCIL_STATE) 后可用";
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"刷新状态失败: {ex.Message}";
+        }
+    }
+
+    // ============ 笔端状态上行（0x53，协议补充 05）============
+
+    /// <summary>拉取笔端状态快照（0x53 拉：基站槽缓存即答）→ 上卡实际数值。</summary>
+    [RelayCommand]
+    private async Task RefreshPenStatusAsync()
+    {
+        if (!_penStatus.IsOpen)
+        {
+            StatusMessage = "请先连接接收器（USB 命令通道），再刷新笔端状态（0x53 仅 USB 基站轨）";
+            return;
+        }
+
+        try
+        {
+            var snapshot = await _penStatus.PullAsync();
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                if (snapshot == null)
+                {
+                    PenStatusMetaText = "0x53 无应答（基站旧固件对未知 CMDTYPE 静默丢弃）";
+                    return;
+                }
+                ApplyPenStatus(snapshot, "拉取");
+                StatusMessage = snapshot.Status == PenStatusStatus.Ok
+                    ? "笔端状态已刷新（0x53 快照）"
+                    : "0x53：笔未连接（基站答 STATUS=02；笔上电连接后推送/重拉即得）";
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"0x53 拉取失败: {ex.Message}";
+        }
+    }
+
+    /// <summary>推送监听开关：开 = 后台循环只等 `E1 01 53`（连笔/槽变化/断连实时上卡）。</summary>
+    [RelayCommand]
+    private void TogglePenPushListen()
+    {
+        if (IsPenPushListening)
+        {
+            StopPenPushLoop("已停止 0x53 推送监听");
+            return;
+        }
+        StartPenPushLoop();
+    }
+
+    private void StartPenPushLoop()
+    {
+        if (!_penStatus.IsOpen)
+        {
+            StatusMessage = "请先连接接收器，再开启 0x53 推送监听";
+            return;
+        }
+
+        StopPenPushLoop(null);
+        _penPushCts = new CancellationTokenSource();
+        var token = _penPushCts.Token;
+        IsPenPushListening = true;
+        StatusMessage = "已开启 0x53 推送监听（连笔 / 电量·休眠变化 / 断连 实时上卡）";
+
+        _ = Task.Run(async () =>
+        {
+            var pushes = 0;
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    var snapshot = await _penStatus.ListenAsync(2000, token);
+                    if (snapshot != null)
+                    {
+                        pushes++;
+                        MainThreadHelper.EnsureOnMainThread(() =>
+                            ApplyPenStatus(snapshot, $"推送 #{pushes} {DateTime.Now:HH:mm:ss}"));
+                    }
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { _logger.LogDebug(ex, "0x53 push listen error"); }
+            }
+        }, token);
+    }
+
+    private void StopPenPushLoop(string? message)
+    {
+        _penPushCts?.Cancel();
+        _penPushCts?.Dispose();
+        _penPushCts = null;
+        IsPenPushListening = false;
+        if (message != null)
+            StatusMessage = message;
+    }
+
+    /// <summary>把一帧 `0x53` 快照应用到状态卡（实际数值来源：BYTE2 位表 + 状态槽）。</summary>
+    private void ApplyPenStatus(PenStatusSnapshot s, string source)
+    {
+        PenStatusMetaText = $"0x53 {source}　BYTE2=0x{s.Byte2:X2}（mode={s.Mode} src={s.Src}）";
+        HasPenTelemetry = true;   // 0x53 已通：卡片亮起（RSSI 除外，仍待 0x42）
+
+        if (s.Status == PenStatusStatus.PenNotConnected)
+        {
+            PencilConnected = false;
+            PencilStateText = "笔未连接";
+            PenDevStateText = "—";
+            return;
+        }
+        if (s.Status != PenStatusStatus.Ok)
+        {
+            PenDevStateText = "—";
+            return;   // 未知状态：元信息已带原始值，卡片不乱覆盖
+        }
+
+        PencilConnected = true;
+
+        var batt = s.Find(PenStateSlotId.Batt);
+        if (batt != null)
+            BatteryLevel = batt.Value;
+
+        var dev = s.Find(PenStateSlotId.DevState);
+        var sleeping = dev?.Value == PenDevState.Sleep;
+        PenDevStateText = dev == null ? "—" : (sleeping ? "休眠" : "正常");
+
+        PencilModeText = s.Mode switch
+        {
+            0 => "待机",
+            1 => "识别中",
+            2 => "扩音中",
+            _ => $"未知({s.Mode})"
+        };
+        PencilStateText = sleeping ? "已连接·休眠" : "已连接";
+    }
+
+    // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
+
+    /// <summary>查询 K2 启动方式（`0x42` QUERY_VOICE_KEY_MODE；信封经基站中转当前连接笔端）。</summary>
+    [RelayCommand]
+    private async Task QueryK2ModeAsync()
+    {
+        if (!CanUseK2)
+        {
+            StatusMessage = "请先连接接收器（USB 命令通道），再查询 K2 启动方式（0x54 信封走基站中转）";
+            return;
+        }
+
+        IsK2Busy = true;
+        try
+        {
+            var r = await _vpCmd.QueryVoiceKeyModeAsync();
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                K2ModeResultText = DescribeK2(r);
+                if (r.Success && r.Payload.Length > 0 && r.Payload[0] is 1 or 2)
+                    K2ModeIndex = r.Payload[0] - 1;   // 下拉框 0/1 ↔ 方式 1/2
+            });
+        }
+        catch (Exception ex)
+        {
+            K2ModeResultText = $"查询失败：{ex.Message}";
+        }
+        finally
+        {
+            MainThreadHelper.EnsureOnMainThread(() => IsK2Busy = false);
+        }
+    }
+
+    /// <summary>应用 K2 启动方式（`0x21` SET_VOICE_KEY_MODE；笔端 NVDS 掉电保持）。</summary>
+    [RelayCommand]
+    private async Task ApplyK2ModeAsync()
+    {
+        if (!CanUseK2)
+        {
+            StatusMessage = "请先连接接收器（USB 命令通道），再设置 K2 启动方式（0x54 信封走基站中转）";
+            return;
+        }
+
+        var mode = K2ModeIndex is 0 or 1 ? K2ModeIndex + 1 : 1;
+        IsK2Busy = true;
+        try
+        {
+            var r = await _vpCmd.SetVoiceKeyModeAsync((byte)mode);
+            MainThreadHelper.EnsureOnMainThread(() =>
+                K2ModeResultText = r.Success ? $"K2 启动方式已设为 方式{mode}（掉电保持）" : DescribeK2(r));
+        }
+        catch (Exception ex)
+        {
+            K2ModeResultText = $"设置失败：{ex.Message}";
+        }
+        finally
+        {
+            MainThreadHelper.EnsureOnMainThread(() => IsK2Busy = false);
+        }
+    }
+
+    /// <summary>信封结果 → 用户文案（08 M4 异常映射：02→笔未连接、03→笔端无应答）。</summary>
+    private static string DescribeK2(PenCmdResult r) => r.Outcome switch
+    {
+        PenCmdOutcome.Success when r.Payload.Length > 0 => $"当前 K2 启动方式 = 方式{r.Payload[0]}",
+        PenCmdOutcome.Success => "成功",
+        PenCmdOutcome.PenNotConnected => "笔未连接（STATUS=02）：笔上电并被基站连接后重试",
+        PenCmdOutcome.PenRespTimeout => "笔端无应答（STATUS=03）：等待笔端无线命令面接线后可用",
+        PenCmdOutcome.PenRspError => $"笔端拒绝（RSP status=0x{r.PenStatus:X2}）",
+        PenCmdOutcome.ParamError => "参数错误（STATUS=01）",
+        PenCmdOutcome.Timeout => "无应答（重发耗尽）：基站旧固件不识 0x54 或链路异常",
+        _ => r.Message,
+    };
+
+    private void StartPolling()
+    {
+        StopPolling();
+        _pollCts = new CancellationTokenSource();
+        var token = _pollCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                // 轮询 A1 PAIR_GET_STATE：已连接/配对/模式（Dongle 已实现）——实时反映连接变动
+                try { await RefreshPairStateAsync(); }
+                catch (Exception ex) { _logger.LogDebug(ex, "A1 poll error"); }
+
+                try { await Task.Delay(2000, token); } catch (OperationCanceledException) { break; }
+            }
+        }, token);
+    }
+
+    private void StopPolling()
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+    }
+
+    // ============ Keymap 命令 ============
+
+    [RelayCommand]
+    private async Task ReadKeymapAsync()
+    {
+        if (!IsConnected)
+        {
+            StatusMessage = "未连接，显示本地缓存";
+            await LoadCacheAsync();
+            return;
+        }
+
+        try
+        {
+            StatusMessage = "正在读取 Keymap...";
+            var info = await _keymapService.GetKeymapInfoAsync();
+            var entries = await _keymapService.ReadKeymapAsync();
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                KeymapInfo = info;
+                KeymapRows = new ObservableCollection<KeymapRowViewModel>(
+                    entries.Select((e, i) => new KeymapRowViewModel((byte)i, e)));
+                IsKeymapDirty = false;
+                StatusMessage = $"已读取 {entries.Count} 条 Keymap";
+            });
+
+            // 读取后缓存到本地（掉电不丢失）
+            await _keymapService.SaveCacheAsync(entries);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"读取 Keymap 失败: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadCacheAsync()
+    {
+        try
+        {
+            await _keymapService.LoadCacheAsync();
+            var cached = _keymapService.CachedKeymap;
+
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                KeymapRows = new ObservableCollection<KeymapRowViewModel>(
+                    cached.Select((e, i) => new KeymapRowViewModel((byte)i, e)));
+                StatusMessage = cached.Count > 0
+                    ? $"已从本地缓存加载 {cached.Count} 条 Keymap"
+                    : "本地无 Keymap 缓存";
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load keymap cache");
+        }
+    }
+
+    [RelayCommand]
+    private async Task ApplyKeymapAsync()
+    {
+        if (!IsConnected)
+        {
+            StatusMessage = "请先连接接收器";
+            return;
+        }
+
+        try
+        {
+            StatusMessage = "正在应用 Keymap 修改...";
+
+            foreach (var row in KeymapRows)
+            {
+                await _keymapService.SetKeyEntryAsync(row.Index, row.ToEntry());
+            }
+
+            var ok = await _keymapService.CommitAsync();
+            StatusMessage = ok ? "Keymap 已提交并写入 NVDS" : "Keymap 提交失败";
+            IsKeymapDirty = !ok;
+
+            if (ok)
+                await ReadKeymapAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"应用 Keymap 失败: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task ResetKeymapAsync()
+    {
+        if (!IsConnected)
+        {
+            StatusMessage = "请先连接接收器";
+            return;
+        }
+
+        var ok = await _keymapService.ResetKeymapAsync();
+        StatusMessage = ok ? "已恢复出厂默认" : "恢复默认失败";
+
+        if (ok)
+            await ReadKeymapAsync();
+    }
+
+    [RelayCommand]
+    private void MarkKeymapDirty()
+    {
+        IsKeymapDirty = true;
+    }
+
+    // ============ 事件处理 ============
+
+    private void OnConnectionStateChanged(object? sender, bool connected)
+    {
+        MainThreadHelper.EnsureOnMainThread(() =>
+        {
+            IsConnected = connected;
+            if (!connected)
+            {
+                StopPenPushLoop(null);
+                PencilConnected = false;
+                BatteryLevel = 0;
+                Rssi = 0;
+                HasPenTelemetry = false;
+                PencilStateText = "未连接";
+                PenDevStateText = "—";
+                PenStatusMetaText = "未获取（连接后点「刷新笔端状态」）";
+                K2ModeResultText = "未查询：应用/查询经 0x54 信封 → 基站 → 当前连接笔端";
+                DonglePairText = "未连接：配对状态不可用";
+                HasPairState = false;
+            }
+        });
+    }
+
+    private void OnDeviceListChanged(object? sender, IReadOnlyList<HidDeviceInfo> devices)
+    {
+        MainThreadHelper.EnsureOnMainThread(() =>
+        {
+            AvailableDevices = new ObservableCollection<HidDeviceInfo>(devices);
+        });
+    }
+
+    private void OnDeviceInfoChanged(object? sender, DeviceInfo? info)
+    {
+        MainThreadHelper.EnsureOnMainThread(() =>
+        {
+            DongleInfo = info;
+        });
+    }
+
+    private void OnPencilStateUpdated(object? sender, PencilState state)
+    {
+        MainThreadHelper.EnsureOnMainThread(() =>
+        {
+            if (state.Status != 0x00)
+            {
+                HasPenTelemetry = false;
+                return;   // 0x42 未实现/失败：不覆盖卡片
+            }
+            HasPenTelemetry = true;
+            BatteryLevel = state.Battery == 0xFF ? 0 : state.Battery;
+            PencilConnected = state.IsConnected;
+            Rssi = state.Rssi;
+            PencilModeText = state.Mode switch
+            {
+                Core.Protocol.PencilMode.Idle => "待机",
+                Core.Protocol.PencilMode.Capturing => "采集中",
+                Core.Protocol.PencilMode.Amplifying => "扩音中",
+                _ => "未知"
+            };
+        });
+    }
+}

@@ -62,6 +62,12 @@ public interface IHidTransport : IAsyncDisposable
     /// 当前连接的设备信息
     /// </summary>
     HidDeviceInfo? CurrentDevice { get; }
+
+    /// <summary>
+    /// 当前设备是否为 custom_hid(EP4, 0xFF02) 无 Report ID 承载。
+    /// 命中时写/读按纯帧处理。
+    /// </summary>
+    bool IsNoReportIdDevice { get; }
 }
 
 /// <summary>

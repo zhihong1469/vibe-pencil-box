@@ -8,6 +8,8 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <conv:InvertBooleanConverter x:Key="InvertBoolConverter"/>
         <conv:NullToBoolConverter x:Key="NullToBoolConverter"/>
+        <conv:NullToVisibilityConverter x:Key="NullToVisConverter"/>
+        <conv:BoolToOpacityConverter x:Key="BoolToOpacityConverter"/>
         <conv:StateToProgressConverter x:Key="StateToProgressConverter"/>
 
         <!-- Global button style referenced by all views -->

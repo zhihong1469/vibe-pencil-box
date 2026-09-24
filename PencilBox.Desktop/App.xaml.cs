@@ -57,8 +57,11 @@ public partial class App : Application
         services.AddSingleton<DevicePageViewModel>();
         services.AddSingleton<MacroEditorViewModel>();
         services.AddSingleton<AudioRecorderViewModel>();
-        services.AddSingleton<SerialTerminalViewModel>();
+        services.AddSingleton<SerialScopeViewModel>();
+        services.AddSingleton<PassthroughPageViewModel>();
         services.AddSingleton<DspPageViewModel>();
+        services.AddSingleton<OtaPageViewModel>();
+        services.AddSingleton<ProductHomeViewModel>();
 
         services.AddTransient<MainWindow>();
     }

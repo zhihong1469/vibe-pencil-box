@@ -102,29 +102,48 @@ def _choose_filter_type(noise):
 
 
 def _design_fir(filter_type, cutoff, sample_rate, max_taps):
-    """Design FIR filter, returns (b, params)."""
+    """Design FIR filter, returns (b, params).
+
+    Always uses an odd number of taps (Type I linear phase). Even taps are
+    Type II filters with a forced zero response at Nyquist, which is invalid
+    for highpass / bandstop whose passband reaches Nyquist (scipy.firwin
+    raises "A filter with an even number of coefficients must have zero
+    response at the Nyquist frequency"). All cutoffs are also clamped into
+    (0, nyq) to stay valid at any sample rate.
+    """
     nyq = sample_rate / 2.0
 
+    # Type I: odd tap count, no Nyquist constraint
+    taps = max(3, min(max_taps, 128))
+    if taps % 2 == 0:
+        taps -= 1
+
     if filter_type == "highpass":
-        taps = max_taps if max_taps % 2 == 0 else max_taps - 1
+        cutoff = min(float(cutoff), nyq * 0.98)
         b = sig.firwin(taps, cutoff, pass_zero=False, window="hann", fs=sample_rate)
         params = {"type": "high-pass", "cutoff_hz": float(cutoff)}
     elif filter_type == "lowpass":
-        taps = max_taps if max_taps % 2 == 0 else max_taps - 1
+        cutoff = min(float(cutoff), nyq * 0.95)
         b = sig.firwin(taps, cutoff, pass_zero=True, window="hann", fs=sample_rate)
         params = {"type": "low-pass", "cutoff_hz": float(cutoff)}
     elif filter_type == "bandstop":
         # Notch around cutoff with modest width
         width = 60.0
         low = max(10.0, cutoff - width / 2)
-        high = min(nyq - 10.0, cutoff + width / 2)
-        taps = min(max_taps, 128)
+        high = min(nyq * 0.95, cutoff + width / 2)
+        if high - low < 20.0:
+            # Band too narrow near the edge; keep a valid minimum width
+            mid = 0.5 * (low + high)
+            low = max(10.0, mid - 10.0)
+            high = min(nyq * 0.95, mid + 10.0)
         b = sig.firwin(taps, [low, high], pass_zero=True, window="hann", fs=sample_rate)
-        params = {"type": "band-stop", "center_hz": float(cutoff), "bandwidth_hz": float(width)}
+        params = {"type": "band-stop", "center_hz": float(cutoff), "bandwidth_hz": float(high - low)}
     else:  # bandpass
-        taps = max_taps if max_taps % 2 == 0 else max_taps - 1
         low = VOICE_LOW
-        high = min(VOICE_HIGH, nyq - 100.0)
+        high = min(VOICE_HIGH, nyq * 0.95)
+        if high - low < 20.0:
+            # Voice band larger than Nyquist: collapse to a valid passband
+            low = max(10.0, high - 20.0)
         b = sig.firwin(taps, [low, high], pass_zero=False, window="hann", fs=sample_rate)
         params = {"type": "band-pass", "low_hz": float(low), "high_hz": float(high)}
 

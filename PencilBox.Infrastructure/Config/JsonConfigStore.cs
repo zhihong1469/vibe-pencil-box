@@ -140,4 +140,47 @@ public class JsonConfigStore : IConfigStore
 
     private string GetMacrosFilePath() => Path.Combine(_basePath, "config", "macros.json");
     private string GetSettingsFilePath() => Path.Combine(_basePath, "config", "settings.json");
+    private string GetKeymapFilePath() => Path.Combine(_basePath, "config", "keymap.json");
+
+    public async Task<IReadOnlyList<KeymapEntry>> LoadKeymapAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var filePath = GetKeymapFilePath();
+
+        if (!File.Exists(filePath))
+        {
+            _logger.LogInformation("No keymap cache found at {Path}", filePath);
+            return new List<KeymapEntry>();
+        }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(filePath, cancellationToken);
+            var entries = JsonSerializer.Deserialize<List<KeymapEntry>>(json, _jsonOptions);
+            return entries ?? new List<KeymapEntry>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load keymap cache from {Path}", filePath);
+            return new List<KeymapEntry>();
+        }
+    }
+
+    public async Task SaveKeymapAsync(IEnumerable<KeymapEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        var filePath = GetKeymapFilePath();
+
+        try
+        {
+            var json = JsonSerializer.Serialize(entries.ToList(), _jsonOptions);
+            await File.WriteAllTextAsync(filePath, json, cancellationToken);
+            _logger.LogInformation("Saved keymap cache to {Path}", filePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save keymap cache to {Path}", filePath);
+            throw;
+        }
+    }
 }

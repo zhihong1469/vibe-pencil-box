@@ -26,6 +26,39 @@ public class DeviceInfo
     public byte Version { get; set; }
 
     /// <summary>
+    /// Dongle 型号（GET_DONGLE_MASSAGE 0x01 应答，2 字节）
+    /// </summary>
+    public ushort Model { get; set; }
+
+    /// <summary>
+    /// Dongle 固件版本（4 字节，大端 BCD）
+    /// </summary>
+    public uint FirmwareVersion { get; set; }
+
+    /// <summary>
+    /// 协议版本（1 字节）
+    /// </summary>
+    public byte ProtocolVersion { get; set; }
+
+    /// <summary>
+    /// 能力位（bit0=支持OTA；bit1=支持Keymap；bit2=笔端已连接）
+    /// </summary>
+    public byte Capabilities { get; set; }
+
+    /// <summary>是否支持 OTA</summary>
+    public bool SupportsOta => (Capabilities & 0x01) != 0;
+
+    /// <summary>是否支持 Keymap</summary>
+    public bool SupportsKeymap => (Capabilities & 0x02) != 0;
+
+    /// <summary>笔端是否已连接</summary>
+    public bool PencilConnected => (Capabilities & 0x04) != 0;
+
+    /// <summary>固件版本显示字符串</summary>
+    public string FirmwareDisplay =>
+        $"{(FirmwareVersion >> 24) & 0xFF}.{(FirmwareVersion >> 16) & 0xFF}.{(FirmwareVersion >> 8) & 0xFF}.{FirmwareVersion & 0xFF}";
+
+    /// <summary>
     /// USB 厂商 ID
     /// </summary>
     public ushort VendorId { get; set; }

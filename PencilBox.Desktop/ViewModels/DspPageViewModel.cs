@@ -1,6 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Text.Json;
+using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
@@ -47,6 +47,9 @@ public partial class DspPageViewModel : ObservableObject
 
     [ObservableProperty]
     private string _progressText = string.Empty;
+
+    [ObservableProperty]
+    private BitmapImage? _resultImage;
 
     /// <summary>
     /// 可用 DSP 脚本
@@ -142,7 +145,7 @@ public partial class DspPageViewModel : ObservableObject
 
             if (result.Success)
             {
-                ResultText = JsonSerializer.Serialize(result.Data, new JsonSerializerOptions { WriteIndented = true });
+                ResultText = FormatSingleScriptResult(result.Data);
                 StatusMessage = $"Completed in {result.Duration.TotalMilliseconds:F0}ms";
             }
             else
@@ -167,26 +170,15 @@ public partial class DspPageViewModel : ObservableObject
             var options = new DspAnalysisOptions
             {
                 SampleRate = SampleRate,
-                MaxFirTaps = MaxTaps
+                MaxFirTaps = MaxTaps,
+                GeneratePlots = true
             };
 
             var report = await _dspService.AnalyzeFullAsync(InputFilePath, options);
 
-            if (report.FftSpectrum?.Success == true)
-            {
-                Summary = report.Summary;
-            }
-
-            var sections = new Dictionary<string, object?>
-            {
-                ["waveform"] = report.WaveformStats?.Data,
-                ["fft"] = report.FftSpectrum?.Data,
-                ["vad"] = report.VadResult?.Data,
-                ["filter_design"] = report.FilterDesign?.Data,
-                ["agc"] = report.AgcRecommendation?.Data
-            };
-
-            ResultText = JsonSerializer.Serialize(sections, new JsonSerializerOptions { WriteIndented = true });
+            Summary = report.FftSpectrum?.Success == true ? report.Summary : "Analysis completed";
+            ResultText = BuildSummaryText(report);
+            ResultImage = LoadFirstPlot(report.Plots);
             StatusMessage = "Full analysis completed";
         });
     }
@@ -196,6 +188,7 @@ public partial class DspPageViewModel : ObservableObject
     {
         ResultText = string.Empty;
         Summary = string.Empty;
+        ResultImage = null;
         ProgressPercent = 0;
         ProgressText = string.Empty;
         StatusMessage = "Cleared";
@@ -242,5 +235,100 @@ public partial class DspPageViewModel : ObservableObject
             ProgressPercent = 100;
             IsBusy = false;
         }
+    }
+
+    // === Helpers ===
+
+    private static BitmapImage? LoadFirstPlot(Dictionary<string, string>? plots)
+    {
+        if (plots == null || plots.Count == 0)
+            return null;
+
+        try
+        {
+            var bytes = Convert.FromBase64String(plots.First().Value);
+            using var ms = new MemoryStream(bytes);
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.StreamSource = ms;
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static object? GetValue(Dictionary<string, object>? data, params string[] keys)
+    {
+        if (data == null)
+            return null;
+        foreach (var key in keys)
+        {
+            if (data.TryGetValue(key, out var value) && value != null)
+                return value;
+        }
+        return null;
+    }
+
+    private static string FormatSingleScriptResult(Dictionary<string, object>? data)
+    {
+        if (data == null)
+            return "No data returned";
+
+        var lines = new List<string>();
+
+        foreach (var kv in data)
+        {
+            if (kv.Value is string s && s.Length > 120)
+            {
+                lines.Add($"{kv.Key}: <{s.Length} chars>");
+            }
+            else if (kv.Value is System.Collections.IEnumerable enumerable && kv.Value is not string)
+            {
+                var count = 0;
+                foreach (var _ in enumerable)
+                    count++;
+                lines.Add($"{kv.Key}: [{count} items]");
+            }
+            else
+            {
+                lines.Add($"{kv.Key}: {kv.Value}");
+            }
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string BuildSummaryText(DspFullReport report)
+    {
+        var wf = report.WaveformStats?.Data;
+        var fft = report.FftSpectrum?.Data;
+        var filt = report.FilterDesign?.Data;
+        var agc = report.AgcRecommendation?.Data;
+
+        var stats = GetValue(wf, "stats") as Dictionary<string, object>;
+        var filtParams = GetValue(filt, "parameters") as Dictionary<string, object>;
+        var agcParams = GetValue(agc, "recommended_params") as Dictionary<string, object>;
+
+        var lines = new List<string>
+        {
+            $"Duration:        {GetValue(wf, "duration_seconds")} s",
+            $"Samples:         {GetValue(wf, "num_samples")}",
+            $"RMS:             {GetValue(stats, "rms_db")} dBFS",
+            $"Peak:            {GetValue(stats, "peak_db")} dBFS",
+            $"DC offset:       {GetValue(stats, "dc_offset")}",
+            $"Clipping:        {GetValue(stats, "clipping_ratio")}",
+            $"Dominant freq:   {GetValue(fft, "dominant_freq")} Hz",
+            $"SNR:             {GetValue(fft, "snr_db")} dB",
+            $"Filter:          {GetValue(filtParams, "type")} {GetValue(filtParams, "cutoff_hz", "center_hz", "low_hz")} Hz ({GetValue(filtParams, "numtaps")} taps)",
+            $"AGC target:      {GetValue(agcParams, "target_level_dbfs")} dBFS",
+            $"AGC threshold:   {GetValue(agcParams, "threshold_dbfs")} dBFS"
+        };
+
+        return string.Join(Environment.NewLine, lines);
     }
 }

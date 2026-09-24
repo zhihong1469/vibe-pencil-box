@@ -54,7 +54,7 @@ public record DspResult(
 public record DspAnalysisOptions(
     int? MaxFirTaps = 64,
     int SampleRate = 16000,
-    bool GeneratePlots = false,
+    bool GeneratePlots = true,
     bool IncludeParamPackage = true);
 
 /// <summary>
@@ -67,7 +67,8 @@ public record DspFullReport(
     DspResult? FilterDesign,
     DspResult? AgcRecommendation,
     byte[]? DeviceParamsPackage,
-    string Summary);
+    string Summary,
+    Dictionary<string, string>? Plots = null);
 
 /// <summary>
 /// 执行进度事件

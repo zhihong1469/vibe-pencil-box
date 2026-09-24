@@ -31,8 +31,11 @@ public partial class MainViewModel : ObservableObject
     public DevicePageViewModel DevicePage { get; }
     public MacroEditorViewModel MacroEditor { get; }
     public AudioRecorderViewModel AudioRecorder { get; }
-    public SerialTerminalViewModel SerialTerminal { get; }
+    public SerialScopeViewModel SerialScope { get; }
+    public PassthroughPageViewModel Passthrough { get; }
     public DspPageViewModel DspPage { get; }
+    public OtaPageViewModel OtaPage { get; }
+    public ProductHomeViewModel ProductHome { get; }
 
     public MainViewModel(
         IDeviceService deviceService,
@@ -41,8 +44,11 @@ public partial class MainViewModel : ObservableObject
         DevicePageViewModel devicePage,
         MacroEditorViewModel macroEditor,
         AudioRecorderViewModel audioRecorder,
-        SerialTerminalViewModel serialTerminal,
-        DspPageViewModel dspPage)
+        SerialScopeViewModel serialScope,
+        PassthroughPageViewModel passthrough,
+        DspPageViewModel dspPage,
+        OtaPageViewModel otaPage,
+        ProductHomeViewModel productHome)
     {
         _deviceService = deviceService;
         _macroService = macroService;
@@ -51,8 +57,11 @@ public partial class MainViewModel : ObservableObject
         DevicePage = devicePage;
         MacroEditor = macroEditor;
         AudioRecorder = audioRecorder;
-        SerialTerminal = serialTerminal;
+        SerialScope = serialScope;
+        Passthrough = passthrough;
         DspPage = dspPage;
+        OtaPage = otaPage;
+        ProductHome = productHome;
 
         _deviceService.ConnectionStateChanged += OnConnectionStateChanged;
         _deviceService.DeviceInfoChanged += OnDeviceInfoChanged;

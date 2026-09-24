@@ -13,6 +13,18 @@ public static class AudioDeviceEnumerator
     /// 获取所有可用录音设备，并标注 USB 信息
     /// </summary>
     public static IReadOnlyList<AudioDeviceInfo> GetCaptureDevices()
+        => EnumerateDevices(DataFlow.Capture);
+
+    /// <summary>
+    /// 获取所有可用播放设备，并标注 USB 信息（扩音渲染端选择用）
+    /// </summary>
+    public static IReadOnlyList<AudioDeviceInfo> GetRenderDevices()
+        => EnumerateDevices(DataFlow.Render);
+
+    /// <summary>
+    /// 按数据流方向枚举活动端点，并经 WMI 标注 USB 信息
+    /// </summary>
+    private static IReadOnlyList<AudioDeviceInfo> EnumerateDevices(DataFlow flow)
     {
         // 先通过 WMI 获取 USB 音频设备的 VID/PID 与设备 ID 映射
         var usbAudioDevices = GetUsbAudioDeviceMappings();
@@ -22,8 +34,8 @@ public static class AudioDeviceEnumerator
         // 每次重新创建 enumerator，确保设备插拔后能看到最新列表
         using var enumerator = new MMDeviceEnumerator();
 
-        // NAudio 的 Capture 设备列表
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        // NAudio 的端点列表
+        foreach (var device in enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active))
         {
             var info = new AudioDeviceInfo
             {

@@ -86,12 +86,23 @@
 
         <!-- 5. 结果 -->
         <GroupBox Header="Result" Grid.Row="4" Margin="0,8,0,0" Padding="4">
-            <TextBox Text="{Binding ResultText}" IsReadOnly="True"
-                     FontFamily="Consolas" FontSize="12"
-                     TextWrapping="NoWrap" AcceptsReturn="True"
-                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                     Background="#1E1E1E" Foreground="#D4D4D4"
-                     BorderThickness="0"/>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Image Grid.Row="0" Source="{Binding ResultImage}" Stretch="Uniform"
+                       MaxHeight="280" Margin="0,0,0,4"
+                       Visibility="{Binding ResultImage, Converter={StaticResource NullToVisConverter}}"/>
+                <TextBox Grid.Row="1" Text="{Binding ResultText, Mode=OneWay}" IsReadOnly="True"
+                         FontFamily="Consolas" FontSize="12"
+                         TextWrapping="Wrap" AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                         Background="White" Foreground="Black"
+                         VerticalContentAlignment="Bottom"
+                         BorderThickness="1" BorderBrush="#CCCCCC"
+                         Padding="6"/>
+            </Grid>
         </GroupBox>
     </Grid>
 </UserControl>

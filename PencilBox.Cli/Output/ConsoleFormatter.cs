@@ -103,6 +103,19 @@ public static class ConsoleFormatter
     }
 
     /// <summary>
+    /// Print a warning: 自动恢复类提示（如 OTA 重查/重发）——不是失败，勿用 [ERROR] 误导判读
+    /// </summary>
+    public static void Warn(string message)
+    {
+        if (Format != OutputFormat.Quiet)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"[WARN] {message}");
+            Console.ResetColor();
+        }
+    }
+
+    /// <summary>
     /// Print a success line (suppressed in quiet mode)
     /// </summary>
     public static void Success(string message)
