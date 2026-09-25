@@ -1,3 +1,8 @@
+// <copyright file="CompanyModels.cs" company="PencilBox Contributors">
+//   Copyright (c) 2026 PencilBox Contributors. All rights reserved.
+//   Licensed under the Polyform Noncommercial License 1.0.0.
+//   See LICENSE file in the project root for full license information.
+// </copyright>
 namespace PencilBox.Core.Protocol.Company;
 
 /// <summary>公司 V0.9 `CMDTYPE`（本端接入用到的命令族；`0x16` 升级在 S2-3 落地）</summary>
