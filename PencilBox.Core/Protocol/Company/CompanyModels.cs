@@ -176,7 +176,7 @@ public static class PenStateSlotId
     public const byte Batt = 0x02;
 }
 
-/// <summary>`DEV_STATE` 取值（统一TX §15.2）</summary>
+/// <summary>`DEV_STATE` 取值（统一TX §15.2 专业叫法；PC 显示即 正常/休眠）</summary>
 public static class PenDevState
 {
     /// <summary>正常</summary>
@@ -210,9 +210,9 @@ public static class PenStatusText
 {
     public static string ModeText(byte mode) => mode switch
     {
-        0 => "IDLE",
-        1 => "CAPTURING(识别)",
-        2 => "AMPLIFYING(扩音)",
+        0 => "待机(IDLE)",
+        1 => "识别(CAPTURING)",
+        2 => "扩音(AMPLIFYING)",
         _ => $"0x{mode:X2}"
     };
 

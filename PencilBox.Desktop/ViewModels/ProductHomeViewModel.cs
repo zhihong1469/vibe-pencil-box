@@ -838,9 +838,15 @@ public partial class ProductHomeViewModel : ObservableObject
             BatteryLevel = batt.Value;
 
         var dev = s.Find(PenStateSlotId.DevState);
-        var sleeping = dev?.Value == PenDevState.Sleep;
-        PenDevStateText = dev == null ? "—" : (sleeping ? "休眠" : "正常");
+        // DEV_STATE 槽：0x00=正常 / 0x01=休眠（专业叫法，随统一TX §15.2）；未知值原样露出（新态前向兼容，不误标正常）
+        PenDevStateText = dev == null ? "—" : dev.Value switch
+        {
+            PenDevState.Normal => "正常",
+            PenDevState.Sleep => "休眠",
+            _ => $"未知(0x{dev.Value:X2})"
+        };
 
+        // 运行模式（BYTE2 mode bit1-0）：0=待机 / 1=识别 / 2=扩音（键盘端回到待机即 mode 清零）
         PencilModeText = s.Mode switch
         {
             0 => "待机",
@@ -848,7 +854,7 @@ public partial class ProductHomeViewModel : ObservableObject
             2 => "扩音中",
             _ => $"未知({s.Mode})"
         };
-        PencilStateText = sleeping ? "已连接·休眠" : "已连接";
+        PencilStateText = dev?.Value == PenDevState.Sleep ? "已连接·休眠" : "已连接";
     }
 
     // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
@@ -1119,7 +1125,7 @@ public partial class ProductHomeViewModel : ObservableObject
             PencilModeText = state.Mode switch
             {
                 Core.Protocol.PencilMode.Idle => "待机",
-                Core.Protocol.PencilMode.Capturing => "采集中",
+                Core.Protocol.PencilMode.Capturing => "识别中",
                 Core.Protocol.PencilMode.Amplifying => "扩音中",
                 _ => "未知"
             };

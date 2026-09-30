@@ -146,9 +146,11 @@ public class CompanyPenStatusTests
     [Fact]
     public void PenStatusText_ModesAndSlots()
     {
-        Assert.Equal("IDLE", PenStatusText.ModeText(0));
-        Assert.Equal("CAPTURING(识别)", PenStatusText.ModeText(1));
-        Assert.Equal("AMPLIFYING(扩音)", PenStatusText.ModeText(2));
+        // 显示命名（专业叫法定版）：mode 0=待机；DEV_STATE 0x00=正常 / 0x01=休眠
+        Assert.Equal("待机(IDLE)", PenStatusText.ModeText(0));
+        Assert.Equal("识别(CAPTURING)", PenStatusText.ModeText(1));
+        Assert.Equal("扩音(AMPLIFYING)", PenStatusText.ModeText(2));
+        Assert.Equal("DEV_STATE=正常", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.DevState, 0)));
         Assert.Equal("DEV_STATE=休眠", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.DevState, 1)));
         Assert.Equal("BATT=95%", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.Batt, 95)));
     }
