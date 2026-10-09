@@ -84,10 +84,13 @@ public sealed class CompanyConfig
     public int EnvelopeMaxRetry { get; init; } = 3;
 
     /// <summary>
-    /// 固件镜像长度上限（字节）= **`0x32000`（204800）**。
+    /// 固件镜像长度上限（字节）= **`0x38000`（229376）**。
     /// 笔端约束（`06 §T7-0`）：`FILELEN` 超此值 → `DCMD=0xFF` + 原因 `0x02`（空间不足）。
+    /// 2026-10-05 分区扩容 200KB→224KB（A/B 双区，`OTA_APP_MAXLEN`/`VP_F5_IMAGE_MAX_LEN`
+    /// 同改 `0x38000`，笔端工单"OTA分区扩容200KB到224KB"）：旧值 `0x32000`（204800）作废；
+    /// 旧固件仍按 200KB 拒收超限镜像（设备侧才是真闸，PC 值只做预检提示）。
     /// </summary>
-    public int MaxImageBytes { get; init; } = 0x32000;
+    public int MaxImageBytes { get; init; } = 0x38000;
 
     /// <summary>
     /// **G14 冻结（issues/05 §1-D）**：无线轨（B1 透传）`0x03` 读**笔端**版本时，

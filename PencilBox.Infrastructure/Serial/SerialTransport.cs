@@ -25,7 +25,6 @@ public class SerialTransport : ISerialTransport
     private CancellationTokenSource? _readCts;
     private Task? _readTask;
     private bool _isConnected;
-    private bool _readErrorReported;
 
     public bool IsConnected => _isConnected;
     public string? CurrentPortName { get; private set; }
@@ -357,7 +356,6 @@ public class SerialTransport : ISerialTransport
                 var data = new byte[bytesRead];
                 Buffer.BlockCopy(buffer, 0, data, 0, bytesRead);
 
-                _readErrorReported = false;   // 恢复正常读取，允许下次错误突发重新提示
                 _logger.LogDebug("Received {Bytes} bytes from {Port}", bytesRead, CurrentPortName);
                 DataReceived?.Invoke(this, new Core.Communication.SerialDataReceivedEventArgs(data));
             }
@@ -367,28 +365,40 @@ public class SerialTransport : ISerialTransport
             }
             catch (Exception ex)
             {
-                // 关闭/拔线期间的 IO 中止属正常收尾，降噪为 Debug；其余按"每次错误突发只提示一次"处理
+                // 关闭/拔线期间的 IO 中止属正常收尾，降噪为 Debug
                 if (!_isConnected || _readCts?.IsCancellationRequested == true)
                 {
                     _logger.LogDebug(ex, "Serial read loop ended during shutdown");
                     break;
                 }
 
-                if (!_readErrorReported)
-                {
-                    _readErrorReported = true;
-                    _logger.LogWarning("串口读取异常（后续同类错误降为 Debug）：{Message}", ex.Message);
-                }
-                else
-                {
-                    _logger.LogDebug(ex, "Error reading from serial port");
-                }
-
-                // 出错后小歇（可被取消唤醒），避免句柄已坏时热转
-                if (cancellationToken.WaitHandle.WaitOne(50))
-                    break;
+                // 句柄已失效（设备拔出/驱动卸载）：立即落"已断开"并广播，然后退出循环。
+                // 必须在这里做——`SerialPort.IsOpen` 只是缓存标志、不探测系统句柄；若只记
+                // 警告继续转，`IsConnected` 恒 true，上层"同名端口不重连"的短路判断会一直
+                // 拿死通道（重插后必须换口再切回才恢复——2026-10-08 修复的根因）。
+                MarkFaulted(ex);
+                break;
             }
         }
+    }
+
+    /// <summary>
+    /// 读循环遭遇致命错误：落"已断开"并广播状态。死句柄不在此处置——
+    /// 下次 <see cref="ConnectAsync"/> 开头的 <see cref="DisconnectAsync"/> 收尾
+    /// （彼时读任务已退出，走同步关闭路径即可）。
+    /// </summary>
+    private void MarkFaulted(Exception ex)
+    {
+        _isConnected = false;
+        var portName = CurrentPortName;
+        _logger.LogWarning(ex,
+            "串口 {Port} 连接丢失（设备拔出或句柄失效），已自动断开；下次操作将自动重连", portName);
+        ConnectionStateChanged?.Invoke(this,
+            new ConnectionStateChangedEventArgs(false, new HidDeviceInfo
+            {
+                DevicePath = portName ?? string.Empty,
+                ProductName = $"Serial {portName}"
+            }));
     }
 
     private static Dictionary<string, string> GetPortDescriptions(IReadOnlyList<string> portNames)

@@ -277,24 +277,52 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- 操作按钮 -->
+                    <!-- 命名配置行（pc-issues/04 提案 B：exe 同级 configs/keymap/，一配置一 JSON；出厂默认只读） -->
                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="4">
-                        <Button Content="读取 Keymap" Command="{Binding ReadKeymapCommand}"
-                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
-                        <Button Content="应用修改" Command="{Binding ApplyKeymapCommand}"
-                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
-                        <Button Content="恢复默认" Command="{Binding ResetKeymapCommand}"
-                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"/>
-                        <TextBlock Text="{Binding KeymapInfo.Version, StringFormat=版本: {0}}" VerticalAlignment="Center" Margin="16,0,0,0" Foreground="#666"/>
-                        <TextBlock Text="{Binding KeymapInfo.EntryCount, StringFormat=条目数: {0}}" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666"/>
+                        <TextBlock Text="配置：" VerticalAlignment="Center" Foreground="#555"/>
+                        <ComboBox ItemsSource="{Binding KeymapConfigNames}"
+                                  SelectedItem="{Binding SelectedKeymapConfig}"
+                                  MinWidth="150" VerticalContentAlignment="Center" Margin="0,0,8,0"/>
+                        <Button Content="另存为…" Command="{Binding SaveKeymapConfigAsCommand}"
+                                Style="{StaticResource ActionButton}"
+                                ToolTip="把当前表格内容存为新配置（可对出厂默认另存后修改）"/>
+                        <Button Content="保存" Command="{Binding SaveKeymapConfigCommand}"
+                                Style="{StaticResource ActionButton}"
+                                ToolTip="把表格修改保存回当前配置（出厂默认只读，不可保存）"/>
+                        <Button Content="改名" Command="{Binding RenameKeymapConfigCommand}"
+                                Style="{StaticResource ActionButton}" Margin="8,0,0,0"
+                                ToolTip="重命名当前配置（出厂默认只读）"/>
+                        <Button Content="删除" Command="{Binding DeleteKeymapConfigCommand}"
+                                Style="{StaticResource ActionButton}"
+                                ToolTip="删除当前配置（出厂默认不可删）"/>
+                        <TextBlock Text="{Binding KeymapRows.Count, StringFormat=条目数: {0}}"
+                                   VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666"/>
                     </StackPanel>
 
-                    <!-- Keymap 表格 -->
-                    <DataGrid Grid.Row="1" ItemsSource="{Binding KeymapRows}"
+                    <!-- 设备读写行（固件 0xA0 协议未实现：按下提示且不发帧——pc-issues/04） -->
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,0,4,4">
+                        <Button Content="读取设备表" Command="{Binding ReadKeymapCommand}"
+                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"
+                                ToolTip="暂未开通：固件 Keymap 读写协议（0xA0，阶段 6）未实现；按下仅提示并重载当前配置。方案见 pc-issues/04。"/>
+                        <Button Content="应用到设备" Command="{Binding ApplyKeymapCommand}"
+                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"
+                                ToolTip="暂未开通：固件 Keymap 读写协议（0xA0，阶段 6）未实现；按下仅提示、不下发。方案见 pc-issues/04。"/>
+                        <Button Content="恢复设备默认" Command="{Binding ResetKeymapCommand}"
+                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"
+                                ToolTip="暂未开通：固件 Keymap 读写协议（0xA0，阶段 6）未实现；按下仅提示、不下发。方案见 pc-issues/04。"/>
+                        <TextBlock Text="（设备读写暂未开通：固件协议未实现；当前表格仅本地配置）"
+                                   VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#B03A2E" FontSize="11"/>
+                    </StackPanel>
+
+                    <!-- Keymap 表格（出厂默认=只读） -->
+                    <DataGrid Grid.Row="2" ItemsSource="{Binding KeymapRows}"
                               AutoGenerateColumns="False" CanUserAddRows="False"
+                              IsReadOnly="{Binding IsFactoryConfigSelected}"
                               HeadersVisibility="Column" GridLinesVisibility="All"
                               SelectionMode="Single" Margin="4" MinHeight="200" MaxHeight="420">
                         <DataGrid.Columns>
@@ -303,13 +331,16 @@
                             <DataGridTemplateColumn Header="事件类型" Width="110">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding EventTypeName}" VerticalAlignment="Center" Margin="4,0"/>
+                                        <TextBlock Text="{Binding EventTypeName}" VerticalAlignment="Center" Margin="4,0"
+                                                   ToolTip="{Binding EventLockTip}"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                                 <DataGridTemplateColumn.CellEditingTemplate>
                                     <DataTemplate>
                                         <ComboBox ItemsSource="{StaticResource EventTypeOptions}"
-                                                  SelectedItem="{Binding EventType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                                  SelectedItem="{Binding EventType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  IsEnabled="{Binding CanEditEvent}"
+                                                  ToolTip="{Binding EventLockTip}"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
@@ -332,6 +363,24 @@
                             <DataGridTextColumn Header="CodeHi" Binding="{Binding CodeHi, StringFormat=X2}" Width="70"/>
                         </DataGrid.Columns>
                     </DataGrid>
+
+                    <!-- S1 档位切换快捷键（固件切换表出厂真值，只读；暂无读写协议——pc-issues/04 §4） -->
+                    <StackPanel Grid.Row="3" Margin="4,2,4,4">
+                        <TextBlock Text="S1 档位切换快捷键（档位→热键，出厂真值只读；设备读写待固件 0xA0 扩展）"
+                                   Foreground="#666" FontSize="11" Margin="0,2,0,2"/>
+                        <DataGrid ItemsSource="{Binding SwitchRows}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                                  HeadersVisibility="Column" GridLinesVisibility="All"
+                                  SelectionMode="Single" MinHeight="70">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="档位" Binding="{Binding ModeName}" Width="90"/>
+                                <DataGridTextColumn Header="动作" Binding="{Binding ActionName}" Width="90"/>
+                                <DataGridTextColumn Header="码值" Binding="{Binding CodeName}" Width="130"/>
+                                <DataGridTextColumn Header="修饰键" Binding="{Binding ModifierName}" Width="90"/>
+                                <DataGridTextColumn Header="RAW" Binding="{Binding Raw}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
                 </Grid>
             </GroupBox>
 

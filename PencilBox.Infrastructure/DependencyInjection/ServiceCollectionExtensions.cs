@@ -92,6 +92,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMacroService, MacroService>();
         services.AddSingleton<IAudioService, AudioService>();
         services.AddSingleton<IKeymapService, KeymapService>();
+        // 命名 Keymap 配置存储（pc-issues/04 提案 B：exe 同级 configs/keymap/，默认目录参数走可选构造注入）
+        services.AddSingleton<IKeymapConfigStore, KeymapConfigStore>();
         services.AddSingleton<IPencilStateService, PencilStateService>();
 
         // 笔端绑定服务（取 MAC + 目录 + 下发 门面）：两条来源（BLE 扫描 / 串口 0x51 读）汇入同一份目录

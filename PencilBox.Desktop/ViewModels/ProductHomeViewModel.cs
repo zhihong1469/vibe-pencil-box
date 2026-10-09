@@ -16,6 +16,7 @@ using PencilBox.Core.Protocol;
 using PencilBox.Core.Protocol.Company;
 using PencilBox.Core.Services;
 using PencilBox.Desktop.Helpers;
+using PencilBox.Desktop.Views;
 
 namespace PencilBox.Desktop.ViewModels;
 
@@ -28,6 +29,7 @@ public partial class ProductHomeViewModel : ObservableObject
     private readonly IDeviceService _deviceService;
     private readonly IPencilStateService _pencilStateService;
     private readonly IKeymapService _keymapService;
+    private readonly IKeymapConfigStore _keymapConfigStore;
     private readonly IPenBindingService _penBindingService;
     private readonly IDongleCommandClient _dongle;
     private readonly ISerialTransport _serialTransport;
@@ -179,16 +181,48 @@ public partial class ProductHomeViewModel : ObservableObject
     [ObservableProperty]
     private ObservableCollection<KeymapRowViewModel> _keymapRows = new();
 
+    /// <summary>S1 档位切换快捷键（固件切换表出厂真值，只读；暂无读写协议——pc-issues/04 §4）</summary>
+    [ObservableProperty]
+    private ObservableCollection<KeymapSwitchRowViewModel> _switchRows = new();
+
     [ObservableProperty]
     private KeymapInfo? _keymapInfo;
 
     [ObservableProperty]
     private bool _isKeymapDirty;
 
+    // 命名配置（pc-issues/04 提案 B：configs/keymap/ 一配置一 JSON；出厂默认只读）
+    [ObservableProperty]
+    private ObservableCollection<string> _keymapConfigNames = new();
+
+    [ObservableProperty]
+    private string? _selectedKeymapConfig;
+
+    /// <summary>当前选中是否出厂默认（只读）——驱动保存/改名/删除按钮与表格可编辑性</summary>
+    public bool IsFactoryConfigSelected =>
+        string.Equals(SelectedKeymapConfig, _keymapConfigStore.FactoryName, StringComparison.Ordinal);
+
+    partial void OnSelectedKeymapConfigChanged(string? value)
+    {
+        IsKeymapDirty = false;
+        try { _keymapConfigStore.SetCurrentName(value ?? _keymapConfigStore.FactoryName); }
+        catch (Exception ex) { _logger.LogWarning(ex, "记录当前 Keymap 配置失败"); }
+        LoadSelectedConfigIntoGrid();
+        NotifyKeymapMutateCommands();
+    }
+
+    private void NotifyKeymapMutateCommands()
+    {
+        SaveKeymapConfigCommand.NotifyCanExecuteChanged();
+        RenameKeymapConfigCommand.NotifyCanExecuteChanged();
+        DeleteKeymapConfigCommand.NotifyCanExecuteChanged();
+    }
+
     public ProductHomeViewModel(
         IDeviceService deviceService,
         IPencilStateService pencilStateService,
         IKeymapService keymapService,
+        IKeymapConfigStore keymapConfigStore,
         IPenBindingService penBindingService,
         IDongleCommandClient dongle,
         ISerialTransport serialTransport,
@@ -199,6 +233,7 @@ public partial class ProductHomeViewModel : ObservableObject
         _deviceService = deviceService;
         _pencilStateService = pencilStateService;
         _keymapService = keymapService;
+        _keymapConfigStore = keymapConfigStore;
         _penBindingService = penBindingService;
         _dongle = dongle;
         _serialTransport = serialTransport;
@@ -211,8 +246,24 @@ public partial class ProductHomeViewModel : ObservableObject
         _deviceService.DeviceInfoChanged += OnDeviceInfoChanged;
         _pencilStateService.StateUpdated += OnPencilStateUpdated;
 
-        // 启动时加载本地缓存（掉电不丢失）
-        _ = LoadCacheAsync();
+        // 命名 Keymap 配置（pc-issues/04 提案 A/B）：确保目录/出厂默认在位 + 旧缓存迁移，载入当前配置。
+        // 失败不阻塞启动（表空可后续手动操作）。
+        try
+        {
+            _keymapConfigStore.Initialize();
+            RefreshKeymapConfigNames();
+            SelectedKeymapConfig = _keymapConfigStore.GetCurrentName();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Keymap 配置存储初始化失败");
+        }
+
+        // S1 档位切换表：出厂真值只读显示（与配置无关，全配置共用；待固件 0xA0 扩展后才可改）
+        SwitchRows = new ObservableCollection<KeymapSwitchRowViewModel>(
+            KeymapFactoryDefault.SwitchEntries
+                .Select(e => new KeymapSwitchRowViewModel(e))
+                .OrderBy(r => r.Mode));
 
         // 启动时加载本地已知笔端目录（显示"上次使用/使用过/出现过"历史）
         _ = LoadKnownPensAsync();
@@ -608,8 +659,7 @@ public partial class ProductHomeViewModel : ObservableObject
             StartPenPushLoop();
             // 实时读取笔端状态
             await _pencilStateService.GetPencilStateAsync();
-            // 实时读取 Keymap（不是预制）
-            await ReadKeymapAsync();
+            // Keymap：本地配置已于启动载入（pc-issues/04 提案 A/B）；设备读写守卫"暂未开通"，不发帧
             // 启动轮询
             StartPolling();
         }
@@ -960,107 +1010,140 @@ public partial class ProductHomeViewModel : ObservableObject
     // ============ Keymap 命令 ============
 
     [RelayCommand]
-    private async Task ReadKeymapAsync()
+    private void ReadKeymap()
     {
-        if (!IsConnected)
-        {
-            StatusMessage = "未连接，显示本地缓存";
-            await LoadCacheAsync();
+        // 守卫（pc-issues/04）：新固件只有出厂默认表，上位机读写协议（0xA0 Sub-CMD，"阶段 6"）
+        // 未实现——老协议 PcSubCommand 帧发过去只会石沉大海。按钮可按，按下即明示、不发任何帧。
+        StatusMessage = "Keymap 读取：暂未开通（固件读写协议未实现，方案见 pc-issues/04）；已重载当前配置";
+        LoadSelectedConfigIntoGrid();
+    }
+
+    // ---- 命名配置（pc-issues/04 提案 B；出厂默认只读） ----
+
+    private bool CanMutateKeymapConfig() => !IsFactoryConfigSelected;
+
+    [RelayCommand]
+    private void SaveKeymapConfigAs()
+    {
+        var name = PromptDialog.Show(Application.Current.MainWindow, "另存配置",
+            "配置名（保存到 configs\\keymap\\，可与出厂默认相同内容后修改）：");
+        if (string.IsNullOrWhiteSpace(name))
             return;
-        }
 
         try
         {
-            StatusMessage = "正在读取 Keymap...";
-            var info = await _keymapService.GetKeymapInfoAsync();
-            var entries = await _keymapService.ReadKeymapAsync();
-
-            MainThreadHelper.EnsureOnMainThread(() =>
-            {
-                KeymapInfo = info;
-                KeymapRows = new ObservableCollection<KeymapRowViewModel>(
-                    entries.Select((e, i) => new KeymapRowViewModel((byte)i, e)));
-                IsKeymapDirty = false;
-                StatusMessage = $"已读取 {entries.Count} 条 Keymap";
-            });
-
-            // 读取后缓存到本地（掉电不丢失）
-            await _keymapService.SaveCacheAsync(entries);
+            _keymapConfigStore.Save(name, KeymapRows.Select(r => r.ToEntry()));
+            RefreshKeymapConfigNames();
+            SelectedKeymapConfig = name;
+            IsKeymapDirty = false;
+            StatusMessage = $"已另存为配置「{name}」（{KeymapRows.Count} 条）";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"读取 Keymap 失败: {ex.Message}";
+            StatusMessage = $"另存失败：{ex.Message}";
         }
     }
 
-    [RelayCommand]
-    private async Task LoadCacheAsync()
+    [RelayCommand(CanExecute = nameof(CanMutateKeymapConfig))]
+    private void SaveKeymapConfig()
     {
         try
         {
-            await _keymapService.LoadCacheAsync();
-            var cached = _keymapService.CachedKeymap;
-
-            MainThreadHelper.EnsureOnMainThread(() =>
-            {
-                KeymapRows = new ObservableCollection<KeymapRowViewModel>(
-                    cached.Select((e, i) => new KeymapRowViewModel((byte)i, e)));
-                StatusMessage = cached.Count > 0
-                    ? $"已从本地缓存加载 {cached.Count} 条 Keymap"
-                    : "本地无 Keymap 缓存";
-            });
+            _keymapConfigStore.Save(SelectedKeymapConfig!, KeymapRows.Select(r => r.ToEntry()));
+            IsKeymapDirty = false;
+            StatusMessage = $"已保存到配置「{SelectedKeymapConfig}」（{KeymapRows.Count} 条）";
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to load keymap cache");
+            StatusMessage = $"保存失败：{ex.Message}";
         }
     }
 
-    [RelayCommand]
-    private async Task ApplyKeymapAsync()
+    [RelayCommand(CanExecute = nameof(CanMutateKeymapConfig))]
+    private void RenameKeymapConfig()
     {
-        if (!IsConnected)
-        {
-            StatusMessage = "请先连接接收器";
+        var name = PromptDialog.Show(Application.Current.MainWindow, "重命名配置",
+            $"把「{SelectedKeymapConfig}」改名为：", SelectedKeymapConfig);
+        if (string.IsNullOrWhiteSpace(name) || string.Equals(name, SelectedKeymapConfig, StringComparison.Ordinal))
             return;
-        }
 
         try
         {
-            StatusMessage = "正在应用 Keymap 修改...";
-
-            foreach (var row in KeymapRows)
-            {
-                await _keymapService.SetKeyEntryAsync(row.Index, row.ToEntry());
-            }
-
-            var ok = await _keymapService.CommitAsync();
-            StatusMessage = ok ? "Keymap 已提交并写入 NVDS" : "Keymap 提交失败";
-            IsKeymapDirty = !ok;
-
-            if (ok)
-                await ReadKeymapAsync();
+            _keymapConfigStore.Rename(SelectedKeymapConfig!, name);
+            RefreshKeymapConfigNames();
+            SelectedKeymapConfig = name;
+            StatusMessage = $"已改名为「{name}」";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"应用 Keymap 失败: {ex.Message}";
+            StatusMessage = $"改名失败：{ex.Message}";
         }
     }
 
-    [RelayCommand]
-    private async Task ResetKeymapAsync()
+    [RelayCommand(CanExecute = nameof(CanMutateKeymapConfig))]
+    private void DeleteKeymapConfig()
     {
-        if (!IsConnected)
-        {
-            StatusMessage = "请先连接接收器";
+        var name = SelectedKeymapConfig!;
+        if (MessageBox.Show(Application.Current.MainWindow, $"确定删除配置「{name}」？", "删除配置",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
+
+        try
+        {
+            _keymapConfigStore.Delete(name);
+            RefreshKeymapConfigNames();
+            SelectedKeymapConfig = _keymapConfigStore.GetCurrentName();
+            StatusMessage = $"已删除配置「{name}」";
         }
+        catch (Exception ex)
+        {
+            StatusMessage = $"删除失败：{ex.Message}";
+        }
+    }
 
-        var ok = await _keymapService.ResetKeymapAsync();
-        StatusMessage = ok ? "已恢复出厂默认" : "恢复默认失败";
+    /// <summary>刷新配置下拉；保持原选中，失效则回落当前记录（或出厂默认）。</summary>
+    private void RefreshKeymapConfigNames()
+    {
+        var current = SelectedKeymapConfig;
+        KeymapConfigNames = new ObservableCollection<string>(_keymapConfigStore.ListNames());
+        SelectedKeymapConfig = current != null && KeymapConfigNames.Contains(current)
+            ? current
+            : _keymapConfigStore.GetCurrentName();
+    }
 
-        if (ok)
-            await ReadKeymapAsync();
+    /// <summary>把当前选中配置载入表格（出厂默认带"只读"标注）。</summary>
+    private void LoadSelectedConfigIntoGrid()
+    {
+        var name = SelectedKeymapConfig;
+        var doc = string.IsNullOrEmpty(name) ? null : _keymapConfigStore.Load(name);
+        var entries = doc?.Entries ?? [];
+        var count = entries.Count;
+
+        MainThreadHelper.EnsureOnMainThread(() =>
+        {
+            KeymapRows = new ObservableCollection<KeymapRowViewModel>(
+                entries.Select((e, i) => new KeymapRowViewModel((byte)i, e)));
+            if (doc == null)
+                StatusMessage = string.IsNullOrEmpty(name) ? "未选择配置" : $"配置「{name}」不可读";
+            else if (IsFactoryConfigSelected)
+                StatusMessage = $"出厂默认（{count} 条，只读——字节级照抄固件 s_keymap_default）";
+            else
+                StatusMessage = $"已加载配置「{name}」（{count} 条）";
+        });
+    }
+
+    [RelayCommand]
+    private void ApplyKeymap()
+    {
+        // 守卫（pc-issues/04）：固件 0xA0 读写协议未实现，Set/Commit 无对端。
+        StatusMessage = "Keymap 应用：暂未开通（固件读写协议未实现，方案见 pc-issues/04）";
+    }
+
+    [RelayCommand]
+    private void ResetKeymap()
+    {
+        // 守卫（pc-issues/04）：固件 0xA0 读写协议未实现，Reset 无对端。
+        StatusMessage = "Keymap 恢复默认：暂未开通（固件读写协议未实现，方案见 pc-issues/04）";
     }
 
     [RelayCommand]

@@ -9,6 +9,7 @@ using Serilog;
 using Serilog.Events;
 using PencilBox.Cli.Commands;
 using PencilBox.Cli.Output;
+using PencilBox.Core.Models;
 using PencilBox.Core.Services;
 using PencilBox.Infrastructure.Audio;
 using PencilBox.Infrastructure.DependencyInjection;
@@ -82,6 +83,7 @@ public class Program
         services.AddSingleton<DspCommands>();
         services.AddSingleton<ConfigCommands>();
         services.AddSingleton<CompanyCommands>();
+        services.AddSingleton<KeymapCommands>();
 
         var sp = services.BuildServiceProvider();
 
@@ -99,6 +101,7 @@ public class Program
                 "dsp" => await DispatchDspAsync(sp, args.Skip(1).ToArray()),
                 "config" or "cfg" => await DispatchConfigAsync(sp, args.Skip(1).ToArray()),
                 "company" or "cmp" => await DispatchCompanyAsync(sp, args.Skip(1).ToArray()),
+                "keymap" or "km" => DispatchKeymap(sp, args.Skip(1).ToArray()),
                 "help" or "--help" or "-h" => PrintHelp(),
                 "version" or "--version" => PrintVersion(),
                 _ => UnknownCommand(area)
@@ -111,6 +114,52 @@ public class Program
                 Console.WriteLine(ex.StackTrace);
             return 1;
         }
+    }
+
+    // === Keymap ===
+    private static int DispatchKeymap(IServiceProvider sp, string[] args)
+    {
+        var cmd = sp.GetRequiredService<KeymapCommands>();
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
+        var rest = args.Skip(1).ToArray();
+
+        return action switch
+        {
+            "list" or "ls" => cmd.List(),
+
+            // show [配置名]：缺省 = 当前配置
+            "show" or "cat" => cmd.Show(GetPositional(rest, 0)),
+
+            "new" or "copy" => cmd.New(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少新配置名：keymap new <名> [--from <配置>]"),
+                GetOption(rest, "--from")),
+
+            "set" => cmd.Set(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap set <名> --index N [字段...]"),
+                GetOptionInt(rest, "--index", -1),
+                GetOption(rest, "--key") is { } key ? KeymapTextParser.ParseKeyId(key) : null,
+                GetOption(rest, "--event") is { } ev ? KeymapTextParser.ParseEvent(ev) : null,
+                GetOption(rest, "--action") is { } act ? KeymapTextParser.ParseAction(act) : null,
+                GetOption(rest, "--code") is { } code ? KeymapTextParser.ParseByte(code) : null,
+                GetOption(rest, "--code-hi") is { } hi ? KeymapTextParser.ParseByte(hi) : null,
+                GetOption(rest, "--mod") is { } mod ? KeymapTextParser.ParseModifier(mod) : null),
+
+            "remove" or "rm" => cmd.Remove(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap remove <名> --index N"),
+                GetOptionInt(rest, "--index", -1)),
+
+            "rename" or "mv" => cmd.Rename(
+                GetPositional(rest, 0) ?? throw new ArgumentException("用法：keymap rename <旧名> <新名>"),
+                GetPositional(rest, 1) ?? throw new ArgumentException("用法：keymap rename <旧名> <新名>")),
+
+            "delete" or "del" => cmd.Delete(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap delete <名>")),
+
+            "use" => cmd.Use(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap use <名>")),
+
+            _ => UnknownCommand($"keymap {action}")
+        };
     }
 
     // === Device ===
@@ -577,6 +626,14 @@ public class Program
             dsp      DSP signal processing (check, scripts, run, analyze)
             config   Configuration management (get, set, path)
             company  公司 V0.9 协议（0xFF02 命令通道；OTA 在此：company ota）
+            keymap   快捷键映射配置（本地 configs/keymap/；设备读写待固件 0xA0）
+                     list / show [配置]                            配置清单 / 表格内容（缺省当前配置）
+                     new <名> [--from <配置>]                      复制创建（缺省复制出厂默认）并设为当前
+                     set <名> --index N [--key K3] [--event click]
+                         [--action keyboard] [--code 0x4B] [--code-hi 0] [--mod alt]
+                                                                   改/追加条目（存储按 K1→K6 规范排序，索引会变）
+                     remove <名> --index N                         删除条目
+                     rename <旧> <新> / delete <名> / use <名>     改名 / 删除 / 设为当前
                     identify | pair read/write/enter/factory/clear | ota | raw | status
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）
                     status [--monitor N]     0x53 状态快照（电量/设备状态，仅 USB 轨）+ 监听推送
@@ -703,6 +760,25 @@ public class Program
                 continue;
             }
             return args[i];
+        }
+        return null;
+    }
+
+    /// <summary>取第 <paramref name="ordinal"/> 个（0-based）位置参数（"选项取值"不算位置参数）。</summary>
+    private static string? GetPositional(string[] args, int ordinal)
+    {
+        int seen = 0;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i].StartsWith("--"))
+            {
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                    i++;
+                continue;
+            }
+            if (seen == ordinal)
+                return args[i];
+            seen++;
         }
         return null;
     }

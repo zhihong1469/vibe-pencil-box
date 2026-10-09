@@ -22,6 +22,7 @@ public static class KeymapFormatter
         0x03 => "K3 前翻",
         0x04 => "K4 后翻",
         0x05 => "K5 功能",
+        0x06 => "K6",               // 固件出厂表后来加的音量−键（srv_keymap.c 注释就叫 K6；产品描述名未定，勿自造）
         >= 0xF0 => $"组合键 0x{keyId:X2}",
         _ => $"键 0x{keyId:X2}"
     };
@@ -36,6 +37,20 @@ public static class KeymapFormatter
         KeyEventType.LongSpecial => "长按特殊",
         _ => $"0x{(byte)eventType:X2}"
     };
+
+    /// <summary>
+    /// 事件显示名（按键感知）：K2 的 0x03/0x04 真实语义是"语音会话开始/结束边界"
+    /// （笔端两种启动方式归一上报，方式1 下由单击触发），按作用描述而非按键力学（pc-issues/04 §2A）。
+    /// </summary>
+    public static string GetEventDisplay(byte keyId, KeyEventType eventType) =>
+        KeymapRules.IsK2(keyId)
+            ? eventType switch
+            {
+                KeyEventType.LongPress => "会话开始",
+                KeyEventType.LongRelease => "会话结束",
+                _ => GetEventTypeName(eventType),
+            }
+            : GetEventTypeName(eventType);
 
     /// <summary>动作类型名</summary>
     public static string GetActionTypeName(KeyActionType actionType) => actionType switch
@@ -71,6 +86,10 @@ public static class KeymapFormatter
         0x4E => "PageDown",
         0x3B => "F2",
         0x3E => "F5",
+        0x42 => "F9",
+        0x43 => "F10",
+        0x44 => "F11",
+        0x45 => "F12",
         0x28 => "Enter",
         0x29 => "Escape",
         0x2A => "Backspace",
@@ -115,5 +134,14 @@ public static class KeymapFormatter
         0x04 => "Alt",
         0x08 => "Win",
         _ => $"0x{modifier:X2}"
+    };
+
+    /// <summary>S1 档位名（byte2 mode 语义，对齐固件 vp_protocol.h 注释与产品定名：待机/识别/扩音）</summary>
+    public static string GetModeName(byte mode) => mode switch
+    {
+        0x00 => "待机",
+        0x01 => "识别",
+        0x02 => "扩音",
+        _ => $"0x{mode:X2}"
     };
 }

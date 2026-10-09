@@ -20,6 +20,9 @@ public partial class KeymapRowViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(KeyName))]
+    [NotifyPropertyChangedFor(nameof(EventTypeName))]
+    [NotifyPropertyChangedFor(nameof(CanEditEvent))]
+    [NotifyPropertyChangedFor(nameof(EventLockTip))]
     private byte _keyId;
 
     [ObservableProperty]
@@ -60,10 +63,14 @@ public partial class KeymapRowViewModel : ObservableObject
 
     // 友好显示名（只读）
     public string KeyName => KeymapFormatter.GetKeyName(KeyId);
-    public string EventTypeName => KeymapFormatter.GetEventTypeName(EventType);
+    public string EventTypeName => KeymapFormatter.GetEventDisplay(KeyId, EventType);
     public string ActionTypeName => KeymapFormatter.GetActionTypeName(ActionType);
     public string ModifierName => KeymapFormatter.GetModifierName(Modifier);
     public string CodeName => KeymapFormatter.GetCodeName(ActionType, CodeLo, CodeHi);
+
+    /// <summary>K2 行事件列锁定（语音会话边界契约，pc-issues/04 §2A）——UI 按键列本就只读，K2 行保持 K2</summary>
+    public bool CanEditEvent => !KeymapRules.IsK2(KeyId);
+    public string? EventLockTip => KeymapRules.IsK2(KeyId) ? KeymapRules.K2EventLockReason : null;
 
     /// <summary>转回协议模型</summary>
     public KeymapEntry ToEntry() => new()
