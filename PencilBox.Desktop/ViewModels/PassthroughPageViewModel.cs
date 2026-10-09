@@ -53,12 +53,26 @@ public partial class PassthroughPageViewModel : ObservableObject
     partial void OnAecEnabledChanged(bool value)
     {
         if (IsRunning) _passthrough.SetAecEnabled(value);
+        OnPropertyChanged(nameof(ChainWarning));
+        OnPropertyChanged(nameof(ChainWarningVisibility));
     }
 
     partial void OnAnsEnabledChanged(bool value)
     {
         if (IsRunning) _passthrough.SetAnsEnabled(value);
+        OnPropertyChanged(nameof(ChainWarning));
+        OnPropertyChanged(nameof(ChainWarningVisibility));
     }
+
+    /// <summary>处理链风险预警（板载回环台架实测：box/07 附录B）——AEC/ANS 关闭会显著缩小啸叫裕度</summary>
+    public string? ChainWarning => !AecEnabled
+        ? "实测：AEC 关闭后裸环约 4x 音量即起啸（AEC 开稳定到 16x），高音量场景请保持 AEC 开"
+        : !AnsEnabled
+            ? "实测：关 ANS 会连带关闭残余回声抑制，啸叫裕度约减半（8x 即可能起啸）；非排查问题建议保持 ANS 开"
+            : null;
+
+    public System.Windows.Visibility ChainWarningVisibility =>
+        string.IsNullOrEmpty(ChainWarning) ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
 
     partial void OnAfcEnabledChanged(bool value)
     {

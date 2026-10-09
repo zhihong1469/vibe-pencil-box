@@ -90,6 +90,9 @@ public interface IEchoProcessor : IDisposable
     /// <summary>降噪强度（正值 dB，内部取负传给底层）</summary>
     void SetNoiseSuppress(int db);
 
+    /// <summary>ANS 总开关（底层预处理 DENOISE 位；关闭会连带关闭残余回声抑制）</summary>
+    void SetDenoiseEnabled(bool enabled);
+
     /// <summary>重置自适应状态（延迟对齐大改/链路重连时）</summary>
     void Reset();
 }

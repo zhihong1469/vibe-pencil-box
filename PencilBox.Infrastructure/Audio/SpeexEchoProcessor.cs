@@ -56,6 +56,13 @@ public sealed class SpeexEchoProcessor : IEchoProcessor, IDisposable
         _prep.Ctl(PreprocessorCtl.SPEEX_PREPROCESS_SET_NOISE_SUPPRESS, ref noise);
     }
 
+    /// <summary>ANS 开关的真实落点：speex 预处理的 DENOISE 位（注意关掉它同时关掉残余回声抑制）</summary>
+    public void SetDenoiseEnabled(bool enabled)
+    {
+        var flag = enabled ? 1 : 0;
+        _prep.Ctl(PreprocessorCtl.SPEEX_PREPROCESS_SET_DENOISE, ref flag);
+    }
+
     public void Reset()
     {
         _echo.Reset();

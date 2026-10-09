@@ -100,7 +100,7 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
     private readonly Stopwatch _dspClock = new();
 
     private const int ChainFrameSamples = 160;   // 10ms @16k
-    private const int ChainSearchSamples = 160;  // 对齐搜索半径 10ms
+    private const int ChainSearchSamples = 320;  // 对齐搜索半径 20ms（板载回环实测 ±10ms 会被稳态噪声钉死在边界）
     private const int ChainTailSamples = 1600;   // AEC 自适应滤波器尾长 100ms
 
     private readonly Stopwatch _statsThrottle = Stopwatch.StartNew();
@@ -269,7 +269,7 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         _micStitcher = new FrameStitcher(320);
         // 参考环容量需覆盖 最大渲染缓冲(200ms) + 余量(20ms) + 搜索(20ms) + 帧(10ms) ≈ 4000 样本
         _refRing = new ShortDelayRing(8192);
-        _estimator = new EchoDelayEstimator(ChainFrameSamples, 16000, searchMs: 10, updateEveryFrames: 100);
+        _estimator = new EchoDelayEstimator(ChainFrameSamples, 16000, searchMs: 20, updateEveryFrames: 100);
         _shifter = new FreqShifter(16000, 5.0);
         _refLagNominal = _renderLatencyMs * 16L + 320;   // 渲染缓冲 + DAC/空气传播/ADC/周期余量(20ms)
         Interlocked.Exchange(ref _dspMaxNs, 0);
@@ -384,7 +384,13 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         }
     }
 
-    public void SetAnsEnabled(bool enabled) => Interlocked.Exchange(ref _ansOn, enabled ? 1 : 0);
+    public void SetAnsEnabled(bool enabled)
+    {
+        Interlocked.Exchange(ref _ansOn, enabled ? 1 : 0);
+        // AEC 主路径的 NS 在 Process 内部无条件跑，开关必须落到预处理的 DENOISE 位才生效
+        try { _echo?.SetDenoiseEnabled(enabled); }
+        catch (Exception ex) { _logger.LogWarning(ex, "切换 DENOISE 失败"); }
+    }
 
     public void SetAfcEnabled(bool enabled)
     {
@@ -423,6 +429,7 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             var suppress = _aecAuto ? 40 : Math.Clamp(_aecSuppressDb, 10, 60);
             var active = _aecAuto ? 15 : Math.Clamp(_aecSuppressActiveDb, 3, 40);
             var noise = _ansAuto ? 15 : Math.Clamp(_ansNoiseSuppressDb, 0, 35);
+            _echo.SetDenoiseEnabled(Volatile.Read(ref _ansOn) != 0);
             _echo.SetEchoSuppress(suppress, active);
             _echo.SetNoiseSuppress(noise);
         }

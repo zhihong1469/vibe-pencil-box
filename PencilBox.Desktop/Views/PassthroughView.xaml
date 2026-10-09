@@ -78,6 +78,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -127,6 +128,10 @@
                           IsChecked="{Binding AfcEnabled}" VerticalAlignment="Center" Margin="2,3"/>
                 <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
                            Text="峰值限制器常开（防破音保护，不占开关）" FontSize="11" Foreground="Gray" Margin="2,4,0,0"/>
+                <TextBlock Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
+                           Text="{Binding ChainWarning}" TextWrapping="Wrap" FontSize="11"
+                           Foreground="DarkOrange" Margin="2,3,0,0"
+                           Visibility="{Binding ChainWarningVisibility}"/>
             </Grid>
         </GroupBox>
 
