@@ -140,10 +140,26 @@
             <TextBlock Text="{Binding StatsSummary}" Margin="6" TextWrapping="Wrap"/>
         </GroupBox>
 
-        <!-- 延迟测试（规划中占位，勿删：布局已预留） -->
-        <GroupBox Grid.Row="5" Header="延迟测试（规划中）" Margin="4" Padding="4">
-            <TextBlock Foreground="Gray" TextWrapping="Wrap" Margin="4"
-                       Text="端到端延迟标定（笔→Dongle→上位机→扬声器）尚未实现。方案见 _share/issues/0-待处理/实时语音/box/03 文档：脉冲注入 + 双路录音 + 互相关计算，结果与运行统计共用此窗口展示。" />
+        <!-- 延迟快测（box/07 §2.1：扫频脉冲串 → 格点跟踪互相关；CLI audio latency-probe 同源同口径） -->
+        <GroupBox Grid.Row="5" Header="延迟快测（扬声器发声 → 录音设备收回，闭环延迟）" Margin="4" Padding="4">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="4,2">
+                    <Button Content="开始测量" Command="{Binding RunLatencyProbeCommand}"
+                            IsEnabled="{Binding IsIdleOrStopped}"
+                            Style="{StaticResource ActionButton}" MinWidth="110" Margin="4"
+                            ToolTip="播一串扫频脉冲并用所选录音设备收回，格点跟踪互相关定位逐个延迟后取统计。测量期间保持安静、别挪麦克风。"/>
+                    <TextBlock Text="脉冲数:" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    <ComboBox ItemsSource="{Binding ProbePulseChoices}" SelectedItem="{Binding ProbePulses}"
+                              MinWidth="60" Margin="4,0" VerticalAlignment="Center"
+                              ToolTip="脉冲越多统计越稳，但测量窗口越长；CLI 对应 --pulses。"/>
+                    <TextBlock Text="{Binding ProbeEstimatedWindow, StringFormat=预计 {0}（保持安静）}"
+                               VerticalAlignment="Center" Margin="4,0" FontSize="11" Foreground="Gray"/>
+                    <TextBlock Text="测距离影响：一次测一个位置，测完挪麦再测下一轮；别在测量中途走动。"
+                               VerticalAlignment="Center" Margin="16,0,0,0" FontSize="11"
+                               Foreground="Gray" TextWrapping="Wrap"/>
+                </StackPanel>
+                <TextBlock Text="{Binding ProbeResult}" Margin="8,4" FontWeight="SemiBold" TextWrapping="Wrap"/>
+            </StackPanel>
         </GroupBox>
     </Grid>
     </ScrollViewer>

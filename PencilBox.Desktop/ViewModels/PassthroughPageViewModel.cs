@@ -9,16 +9,17 @@ using CommunityToolkit.Mvvm.Input;
 using PencilBox.Core.Models;
 using PencilBox.Core.Services;
 using PencilBox.Desktop.Helpers;
+using PencilBox.Infrastructure.Audio;
 
 namespace PencilBox.Desktop.ViewModels;
 
 /// <summary>
-/// 扩音（PA/喊话）页：采集设备 → 扬声器实时直通 + 引擎附加延迟观测。
-/// 延迟测试（端到端标定）为规划中功能，窗口布局已预留位置（见 _share/issues/.../box/03 文档）。
+/// 扩音（PA/喊话）页：采集设备 → 扬声器实时直通 + 引擎附加延迟观测 + 延迟快测（box/07 §2.1）。
 /// </summary>
 public partial class PassthroughPageViewModel : ObservableObject
 {
     private readonly IAudioPassthrough _passthrough;
+    private readonly LatencyProbeEngine _probe;
 
     [ObservableProperty]
     private AudioPassthroughState _state = AudioPassthroughState.Idle;
@@ -133,9 +134,10 @@ public partial class PassthroughPageViewModel : ObservableObject
     public bool IsIdleOrStopped => State is AudioPassthroughState.Idle or AudioPassthroughState.Stopped;
     public bool IsRunning => State is AudioPassthroughState.Running or AudioPassthroughState.Starting;
 
-    public PassthroughPageViewModel(IAudioPassthrough passthrough)
+    public PassthroughPageViewModel(IAudioPassthrough passthrough, LatencyProbeEngine probe)
     {
         _passthrough = passthrough;
+        _probe = probe;
         _passthrough.StateChanged += OnStateChanged;
         _passthrough.StatsUpdated += OnStatsUpdated;
 
@@ -215,6 +217,75 @@ public partial class PassthroughPageViewModel : ObservableObject
 
     [RelayCommand]
     private async Task RefreshDevicesAsync() => await LoadDevicesAsync();
+
+    // === 延迟快测（box/07 §2.1，CLI audio latency-probe 同源） ===
+
+    [ObservableProperty]
+    private bool _probeRunning;
+
+    [ObservableProperty]
+    private string _probeResult = "尚未测量";
+
+    /// <summary>脉冲数可调（CLI --pulses 同参数）；间隔/单脉冲时长与 CLI 默认一致。</summary>
+    [ObservableProperty]
+    private int _probePulses = 12;
+
+    public ObservableCollection<int> ProbePulseChoices { get; } = new(new[] { 4, 8, 12, 20, 30 });
+
+    private const int ProbeIntervalMs = 500;
+    private const int ProbePulseMs = 15;
+
+    /// <summary>预计测量时长（音频串 + 采集前后的余量），提示用户保持安静的窗口。</summary>
+    public string ProbeEstimatedWindow => $"约 {ProbePulses * ProbeIntervalMs / 1000.0 + 1.5:F0} 秒";
+
+    partial void OnProbePulsesChanged(int value) => OnPropertyChanged(nameof(ProbeEstimatedWindow));
+
+    [RelayCommand]
+    private async Task RunLatencyProbeAsync(CancellationToken ct)
+    {
+        if (ProbeRunning) return;
+        if (IsRunning)
+        {
+            ProbeResult = "先停止扩音再测（麦克风/扬声器被直通占用）";
+            return;
+        }
+        if (SelectedCaptureDevice is null)
+        {
+            ProbeResult = "先选择采集设备";
+            return;
+        }
+
+        ProbeRunning = true;
+        try
+        {
+            var pulses = ProbePulses;
+            var result = await _probe.RunAsync(
+                SelectedCaptureDevice.DeviceId, SelectedRenderDevice?.DeviceId,
+                pulses, ProbeIntervalMs, ProbePulseMs,
+                amplitude: 0.8f, renderLatencyMs: RenderLatencyMs,
+                progress: m => MainThreadHelper.EnsureOnMainThread(() => StatusMessage = $"测延迟：{m}"), ct: ct);
+            var stats = LatencyProbeEngine.Analyze(result, pulses, ProbeIntervalMs, ProbePulseMs);
+            if (stats.Located == 0)
+            {
+                ProbeResult = "未检测到脉冲：确认采集设备能听到扬声器（摆放/音量/静音）";
+            }
+            else
+            {
+                ProbeResult = $"闭环延迟 p50 {stats.P50:F1}ms | p95 {stats.P95:F1}ms | 抖动 {stats.Jitter:F1}ms | " +
+                              $"测量时长 {stats.CapturedSeconds:F1}s" +
+                              $"（{stats.Located}/{stats.Expected} 脉冲，已扣渲染缓冲 {stats.RenderLatencySubtractedMs}ms）";
+                StatusMessage = $"逐脉冲: {string.Join(", ", stats.PerPulseMs.Select(d => d.ToString("F1")))}";
+            }
+        }
+        catch (Exception ex)
+        {
+            ProbeResult = $"测量失败: {ex.Message}";
+        }
+        finally
+        {
+            ProbeRunning = false;
+        }
+    }
 
     private void OnStateChanged(object? sender, AudioPassthroughState state)
     {

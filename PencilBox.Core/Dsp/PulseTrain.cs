@@ -48,23 +48,26 @@ public static class PulseTrain
 
     /// <summary>
     /// 把单脉冲铺成脉冲串（等间隔、其余置零）。
-    /// 返回整段信号与每个脉冲在信号中的起始样本位置。
+    /// leadInMs：脉冲 #1 前的静音引导——WASAPI 渲染启动瞬态（prime+线程起转）会吞掉开头几十毫秒，
+    /// 不留引导则脉冲 #1 根本不出声，互相关整体错位一个间隔（2026-09-24 实测：11/12 定位且全部 +500ms）。
+    /// 返回整段信号与每个脉冲在信号中的起始样本位置（已含引导偏移）。
     /// </summary>
     public static (short[] Signal, int[] PulsePositions) Build(
-        short[] pulse, int sampleRate, int pulseCount, int intervalMs)
+        short[] pulse, int sampleRate, int pulseCount, int intervalMs, int leadInMs = 250)
     {
         if (pulse.Length < 1) throw new ArgumentOutOfRangeException(nameof(pulse));
         if (pulseCount < 1) throw new ArgumentOutOfRangeException(nameof(pulseCount));
         var intervalSamples = sampleRate * intervalMs / 1000;
+        var leadInSamples = sampleRate * leadInMs / 1000;
         if (intervalSamples <= pulse.Length)
             throw new ArgumentException($"间隔({intervalMs}ms)必须大于脉冲时长({pulse.Length * 1000.0 / sampleRate:F1}ms)+保护带");
 
-        var total = (pulseCount - 1) * intervalSamples + pulse.Length;
+        var total = leadInSamples + (pulseCount - 1) * intervalSamples + pulse.Length;
         var signal = new short[total];
         var positions = new int[pulseCount];
         for (var k = 0; k < pulseCount; k++)
         {
-            positions[k] = k * intervalSamples;
+            positions[k] = leadInSamples + k * intervalSamples;
             Array.Copy(pulse, 0, signal, positions[k], pulse.Length);
         }
         return (signal, positions);

@@ -42,6 +42,10 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
     private string _renderName = string.Empty;
     private int _renderLatencyMs;
     private float _volume = 1.0f;
+    // 启动淡入：AEC 参考历史填满前走旁路（裸环），若开局环增益已过临界（如上一场啸叫泵高了
+    // 麦 AGC），旁路窗口内即起啸且饱和后 AEC 难以再收敛；开局 300ms 线性淡入把窗口堵死。
+    private int _fadeInLeft;
+    private float _fadeInTotal = 1f;
     private SoftLimiter? _limiter;
     private float[] _limitScratch = Array.Empty<float>();
     private Stopwatch? _clock;
@@ -180,6 +184,10 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         if (!IsFloatFormat(outFormat) && outFormat.BitsPerSample != 16)
             throw new NotSupportedException($"渲染端点混音格式不受支持（仅 float32/PCM16）: {outFormat}");
         _outFormat = outFormat;
+
+        // 启动淡入窗口（300ms，按输出率折算样本）
+        _fadeInTotal = MathF.Max(1f, outFormat.SampleRate * 0.3f);
+        _fadeInLeft = (int)_fadeInTotal;
 
         // 3. 采集：级联尝试（请求格式 → 采集端混音格式 × 事件同步 → 睡眠同步）。
         // 实机坑：USB Audio 1.0 + 事件同步 + 非混音格式 → AudioClient.Initialize 阻塞 ~30s 后
@@ -588,11 +596,18 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         var limiter = _limiter;
         if (dest.Length > 0 && limiter != null)
         {
+            var vol = _volume;
+            if (_fadeInLeft > 0)
+            {
+                var bytesPerFrame = _outFormat!.BitsPerSample / 8 * _outFormat.Channels;
+                vol *= 1f - _fadeInLeft / _fadeInTotal;
+                _fadeInLeft = Math.Max(0, _fadeInLeft - dest.Length / bytesPerFrame);
+            }
             if (IsFloatFormat(_outFormat!))
             {
                 var f = MemoryMarshal.Cast<byte, float>(dest);
-                if (_volume != 1.0f)
-                    foreach (ref var s in f) s *= _volume;
+                if (vol != 1.0f)
+                    foreach (ref var s in f) s *= vol;
                 limiter.Process(f);
             }
             else
@@ -602,7 +617,7 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
                     _limitScratch = new float[BitOperations.RoundUpToPowerOf2((uint)n)];
                 var shorts = MemoryMarshal.Cast<byte, short>(dest);
                 for (var i = 0; i < n; i++)
-                    _limitScratch[i] = shorts[i] / 32768f * _volume;
+                    _limitScratch[i] = shorts[i] / 32768f * vol;
                 limiter.Process(_limitScratch.AsSpan(0, n));
                 for (var i = 0; i < n; i++)
                     shorts[i] = (short)MathF.Round(Math.Clamp(_limitScratch[i], -1f, 1f) * 32767f);

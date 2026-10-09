@@ -10,6 +10,7 @@ using Serilog;
 using Serilog.Events;
 using PencilBox.Desktop.Helpers;
 using PencilBox.Desktop.ViewModels;
+using PencilBox.Infrastructure.Audio;
 using PencilBox.Infrastructure.DependencyInjection;
 
 namespace PencilBox.Desktop;
@@ -57,6 +58,10 @@ public partial class App : Application
 
         // Register all shared infrastructure services (HID, Serial, Audio, DSP, Config, Services)
         services.AddPencilBoxInfrastructure();
+
+        // 延迟快测底座（box/07 §2.1，与 CLI 同源）；引擎主 ctor 吃非泛型 ILogger
+        services.AddSingleton<Microsoft.Extensions.Logging.ILogger>(sp => sp.GetRequiredService<ILogger<LatencyProbeEngine>>());
+        services.AddSingleton<LatencyProbeEngine>();
 
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<DevicePageViewModel>();

@@ -67,14 +67,66 @@ public class MeasurementToolingTests
     {
         const int rate = 16000;
         var template = PulseTrain.GenerateChirp(rate, 15);
-        var (signal, _) = PulseTrain.Build(template, rate, 4, 500);
+        var (signal, positions) = PulseTrain.Build(template, rate, 4, 500);
 
-        // 抹掉第 3 个脉冲 → 只应找到 3 个
+        // 抹掉第 3 个脉冲 → 只应找到 3 个（位置取 Build 返回值，自动含前导静音偏移）
         var interval = rate * 500 / 1000;
-        Array.Clear(signal, 2 * interval, template.Length);
+        Array.Clear(signal, positions[2], template.Length);
 
         var hits = PulseLocator.Locate(signal, template, 4, interval * 3 / 4);
         Assert.Equal(3, hits.Count);
+    }
+
+    [Fact]
+    public void PulseLocator_Tracked_ResistsReflections()
+    {
+        const int rate = 16000;
+        var template = PulseTrain.GenerateChirp(rate, 15);
+        const int pulses = 6;
+        var (signal, positions) = PulseTrain.Build(template, rate, pulses, 500);
+
+        // 每个脉冲 +35ms 处叠加 0.9 倍反射副本（远场场景）；信号尾部扩容给反射留空间
+        var echoDelay = rate * 35 / 1000;
+        var ext = new short[signal.Length + echoDelay + template.Length];
+        Array.Copy(signal, ext, signal.Length);
+        for (var k = 0; k < pulses; k++)
+            for (var i = 0; i < template.Length; i++)
+                ext[positions[k] + echoDelay + i] =
+                    (short)Math.Clamp(ext[positions[k] + echoDelay + i] + template[i] * 0.9,
+                        short.MinValue, short.MaxValue);
+
+        var interval = rate * 500 / 1000;
+        var window = rate * 20 / 1000;                      // ±20ms 跟踪窗：反射 +35ms 在窗外
+        var slots = PulseLocator.LocateTracked(ext, template, pulses, interval, window);
+
+        Assert.Equal(pulses, slots.Count);
+        Assert.All(slots, s => Assert.NotNull(s));
+        for (var k = 0; k < pulses; k++)
+            Assert.True(Math.Abs(slots[k]!.PositionSamples - positions[k]) <= 2,
+                $"脉冲 {k} 锁到反射峰：{slots[k]!.PositionSamples} vs 直达 {positions[k]}");
+    }
+
+    [Fact]
+    public void PulseLocator_Tracked_IgnoresTransientBeforeTrain()
+    {
+        const int rate = 16000;
+        var template = PulseTrain.GenerateChirp(rate, 15);
+        const int pulses = 4;
+        var (signal, positions) = PulseTrain.Build(template, rate, pulses, 500);
+
+        // 脉冲 0 直达前 150ms 放 0.5 倍模板副本（模拟采集端起动瞬态/AGC 咳嗽）——它过阈但不该当格点原点
+        var transient = rate * 150 / 1000;
+        for (var i = 0; i < template.Length; i++)
+            signal[positions[0] - transient + i] = (short)Math.Clamp(template[i] * 0.5, short.MinValue, short.MaxValue);
+
+        var interval = rate * 500 / 1000;
+        var slots = PulseLocator.LocateTracked(signal, template, pulses, interval, rate * 20 / 1000);
+
+        Assert.Equal(pulses, slots.Count);
+        Assert.All(slots, s => Assert.NotNull(s));
+        for (var k = 0; k < pulses; k++)
+            Assert.True(Math.Abs(slots[k]!.PositionSamples - positions[k]) <= 2,
+                $"脉冲 {k} 锁错：{slots[k]!.PositionSamples} vs 直达 {positions[k]}");
     }
 
     // ================= EnvelopeAnalyzer =================

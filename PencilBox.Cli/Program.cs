@@ -73,6 +73,7 @@ public class Program
         services.AddPencilBoxInfrastructure();
 
         // Register CLI command handlers
+        services.AddSingleton<Microsoft.Extensions.Logging.ILogger>(sp => sp.GetRequiredService<ILogger<LatencyProbeEngine>>());  // LatencyProbeEngine 主 ctor 吃非泛型 ILogger
         services.AddSingleton<LatencyProbeEngine>();
         services.AddSingleton<DeviceCommands>();
         services.AddSingleton<BleCommands>();
@@ -312,6 +313,20 @@ public class Program
 
             // 扩音渲染端：列播放设备
             "renders" or "outs" => await cmd.RendersAsync(),
+
+            // 精确投放：把 WAV 播到指定扬声器（绕开系统默认路由）
+            "play" => await cmd.PlayAsync(
+                GetOption(args, "--file"),
+                GetOption(args, "--out"),
+                float.TryParse(GetOption(args, "--volume"), out var pv) ? Math.Clamp(pv, 0f, 1f) : 1f,
+                GetOptionInt(args, "--seconds", 0)),
+
+            // 回声相似度评分（AEC 客观评测）
+            "echoscore" or "echo" => await cmd.EchoScoreAsync(
+                GetOption(args, "--file"),
+                GetOption(args, "--ref"),
+                double.TryParse(GetOption(args, "--window"), out var w) ? w : 1.0,
+                double.TryParse(GetOption(args, "--search"), out var s) ? s : 0.5),
             "volume" or "vol" => await cmd.VolumeAsync(
                 GetOption(args, "--out"),
                 GetOption(args, "--in"),
@@ -334,7 +349,8 @@ public class Program
                 GetOptionInt(args, "--afc", 0) != 0,
                 GetOptionInt(args, "--aec-suppress", 0),   // 0 = 自动档
                 GetOptionInt(args, "--ans-suppress", 0),   // 0 = 自动档
-                HasFlag(args, "--aec-gate")),              // AEC 条件触发（默认关）
+                HasFlag(args, "--aec-gate"),               // AEC 条件触发（默认关）
+                GetOption(args, "--record-out")),          // 输出环回录制（AEC 客观评测）
 
             // 延迟测量底座（box/07 §2）：脉冲互相关闭环延迟
             "latency-probe" or "probe" => await cmd.LatencyProbeAsync(

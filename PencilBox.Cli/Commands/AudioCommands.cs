@@ -19,12 +19,15 @@ public class AudioCommands
     private readonly IAudioService _audioService;
     private readonly IAudioPassthrough _passthrough;
     private readonly LatencyProbeEngine _probe;
+    private readonly Microsoft.Extensions.Logging.ILogger<AudioCommands> _logger;
 
-    public AudioCommands(IAudioService audioService, IAudioPassthrough passthrough, LatencyProbeEngine probe)
+    public AudioCommands(IAudioService audioService, IAudioPassthrough passthrough, LatencyProbeEngine probe,
+        Microsoft.Extensions.Logging.ILogger<AudioCommands> logger)
     {
         _audioService = audioService;
         _passthrough = passthrough;
         _probe = probe;
+        _logger = logger;
     }
 
     public async Task<int> DevicesAsync()
@@ -122,42 +125,28 @@ public class AudioCommands
             ConsoleFormatter.Info($"采集流已存：{saveCapture}");
         }
 
-        // 检测模板须与播放同形（不同采样率各自生成）
-        var template = PulseTrain.GenerateChirp(result.CaptureRate, pulseMs, PulseTrain.DefaultF0Hz, PulseTrain.DefaultF1Hz, amplitude);
-        var intervalSamples = result.CaptureRate * intervalMs / 1000;
-        var hits = PulseLocator.Locate(result.CapturedMono, template, pulses, intervalSamples * 3 / 4);
+        // 互相关定位与统计走引擎共享口径（CLI/Desktop 同一实现，防漂移）；归一化相关对幅度不敏感，模板默认幅度即可
+        var stats = LatencyProbeEngine.Analyze(result, pulses, intervalMs, pulseMs, raw);
 
-        var qpf = (double)Stopwatch.Frequency;
-        // 闭环 = 渲染缓冲(常量) + 声路 + 采集缓冲(常量)；默认扣掉渲染缓冲已知量，--raw 看原始闭环
-        var baseOffsetMs = (result.CaptureQpc - result.PlayQpc) / qpf * 1000.0 - (raw ? 0 : result.RenderLatencyMs);
-        var delays = new List<double>();
-        for (var k = 0; k < Math.Min(hits.Count, result.PulsePositionsRender.Length); k++)
-        {
-            var arrivalMs = baseOffsetMs + hits[k].PositionSamples * 1000.0 / result.CaptureRate;
-            var emittedMs = result.PulsePositionsRender[k] * 1000.0 / result.RenderRate;
-            delays.Add(arrivalMs - emittedMs);
-        }
-
-        if (delays.Count == 0)
+        if (stats.Located == 0)
         {
             ConsoleFormatter.Error("未检测到任何脉冲：确认采集端点能听到扬声器（音量/端点选择/静音），" +
                                    "或用 --save-capture 落盘排查。");
             return 2;
         }
-        if (hits.Count < pulses)
-            ConsoleFormatter.Error($"仅定位到 {hits.Count}/{pulses} 个脉冲（弱信号/没对准的样本已丢弃）；统计基于有效样本。");
+        if (stats.Located < pulses)
+            ConsoleFormatter.Error($"仅定位到 {stats.Located}/{pulses} 个脉冲（弱信号/没对准的样本已丢弃）；统计基于有效样本。");
 
-        var sorted = delays.Order().ToArray();
-        double P(double q) => sorted[(int)Math.Clamp(q * (sorted.Length - 1), 0, sorted.Length - 1)];
-        ConsoleFormatter.Success($"闭环延迟（n={delays.Count}）：p50 {P(0.5):F1}ms | p95 {P(0.95):F1}ms | " +
-                                 $"min {sorted[0]:F1}ms | max {sorted[^1]:F1}ms（抖动 p95−p50 = {P(0.95) - P(0.5):F1}ms）");
+        ConsoleFormatter.Success($"闭环延迟（n={stats.Located}）：p50 {stats.P50:F1}ms | p95 {stats.P95:F1}ms | " +
+                                 $"min {stats.Min:F1}ms | max {stats.Max:F1}ms（抖动 p95−p50 = {stats.Jitter:F1}ms）");
         ConsoleFormatter.PrintObject(new
         {
-            Capture = $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
-            Render = $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch",
-            RenderLatencySubtracted = raw ? 0 : result.RenderLatencyMs,
-            Pulses = $"{hits.Count}/{pulses} 定位",
-            PerPulseMs = string.Join(", ", delays.Select(d => d.ToString("F1")))
+            Capture = stats.CaptureDesc,
+            Render = stats.RenderDesc,
+            RenderLatencySubtracted = stats.RenderLatencySubtractedMs,
+            Pulses = $"{stats.Located}/{pulses} 定位",
+            DurationS = $"{stats.CapturedSeconds:F1}s（测量期间需保持安静）",
+            PerPulseMs = string.Join(", ", stats.PerPulseMs.Select(d => d.ToString("F1")))
         });
 
         if (reportOut is { Length: > 0 })
@@ -171,13 +160,13 @@ public class AudioCommands
                 captureRate = result.CaptureRate,
                 renderRate = result.RenderRate,
                 renderLatencyMs = raw ? 0 : result.RenderLatencyMs,
-                pulsesLocated = hits.Count,
+                pulsesLocated = stats.Located,
                 pulsesSent = pulses,
-                p50Ms = Math.Round(P(0.5), 2),
-                p95Ms = Math.Round(P(0.95), 2),
-                minMs = Math.Round(sorted[0], 2),
-                maxMs = Math.Round(sorted[^1], 2),
-                delaysMs = delays.Select(d => Math.Round(d, 2)).ToArray()
+                p50Ms = Math.Round(stats.P50, 2),
+                p95Ms = Math.Round(stats.P95, 2),
+                minMs = Math.Round(stats.Min, 2),
+                maxMs = Math.Round(stats.Max, 2),
+                delaysMs = stats.PerPulseMs.Select(d => Math.Round(d, 2)).ToArray()
             };
             await File.WriteAllTextAsync(reportOut, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
             ConsoleFormatter.Info($"报告已写：{reportOut}");
@@ -300,12 +289,46 @@ public class AudioCommands
     public async Task<int> RendersAsync()
     {
         var devices = await _passthrough.GetRenderDevicesAsync();
-        ConsoleFormatter.Info($"Found {devices.Count} audio render device(s)");
+        // 默认端点标记：直接问 WASAPI（避免"跑了没声"类路由黑洞）
+        string? defaultName = null;
+        await Task.Run(() =>
+        {
+            try
+            {
+                using var e = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+                using var d = e.GetDefaultAudioEndpoint(NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia);
+                defaultName = d.FriendlyName;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "枚举默认渲染端点失败"); }
+        });
+        ConsoleFormatter.Info($"Found {devices.Count} audio render device(s)（默认={defaultName ?? "?"}）");
 
         ConsoleFormatter.PrintTable(devices,
             ("USB", d => d.IsUsbDevice ? "*" : ""),
             ("Name", d => d.FriendlyName),
             ("ID", d => Truncate(d.DeviceId)));
+        return 0;
+    }
+
+    /// <summary>
+    /// 把 WAV 经 WASAPI 精确播到指定扬声器（绕开系统默认路由）；
+    /// 服务 AEC 评测等自动化测试的标准激励投放。
+    /// </summary>
+    public async Task<int> PlayAsync(string? file, string? outSelector, float volume, int seconds = 0)
+    {
+        if (string.IsNullOrWhiteSpace(file))
+        {
+            ConsoleFormatter.Error("请给 --file <路径.wav>");
+            return 1;
+        }
+        var renderDevices = await _passthrough.GetRenderDevicesAsync();
+        var render = ResolveDevice(renderDevices, outSelector, "播放");
+        ConsoleFormatter.Info($"播放 {file} → [{render?.FriendlyName ?? "系统默认播放"}]（音量 {volume:F2}）");
+        using var cts = new CancellationTokenSource();
+        if (seconds > 0) cts.CancelAfter(TimeSpan.FromSeconds(seconds));
+        try { await AudioFilePlayer.PlayAsync(file, render?.DeviceId, volume, cts.Token); }
+        catch (OperationCanceledException) { ConsoleFormatter.Info("到达时长上限，停止播放"); }
+        ConsoleFormatter.Success("播放完成");
         return 0;
     }
 
@@ -338,13 +361,22 @@ public class AudioCommands
     /// </summary>
     public async Task<int> PassthroughAsync(string? inDevice, string? outDevice,
         int rate, int latencyMs, float volume, int duration, bool aec = true, bool ans = true, bool afc = false,
-        int aecSuppress = 0, int ansSuppress = 0, bool aecGate = false)
+        int aecSuppress = 0, int ansSuppress = 0, bool aecGate = false, string? recordOut = null)
     {
         var captureDevices = await _passthrough.GetCaptureDevicesAsync();
         var renderDevices = await _passthrough.GetRenderDevicesAsync();
         var capture = ResolveDevice(captureDevices, inDevice, "录音");
         var render = ResolveDevice(renderDevices, outDevice, "播放");
         AudioPassthroughStats? liveStats = null;
+
+        // 输出环回录制（AEC 客观评测：残余回声能量直接可测）
+        OutputLoopRecorder? loop = null;
+        if (!string.IsNullOrWhiteSpace(recordOut))
+        {
+            loop = new OutputLoopRecorder(_logger);
+            loop.Start(render?.DeviceId);
+            ConsoleFormatter.Info($"输出环回录制 → {recordOut}");
+        }
 
         ConsoleFormatter.Info($"扩音：[{capture?.FriendlyName ?? "系统默认录音"}] → [{render?.FriendlyName ?? "系统默认播放"}]");
         ConsoleFormatter.Info($"{rate}Hz/16bit/1ch，渲染缓冲 {latencyMs}ms，音量 {volume:F2}x（>1 时限制器自动防破音）；" +
@@ -404,6 +436,12 @@ public class AudioCommands
         {
             _passthrough.StatsUpdated -= OnStats;
             await _passthrough.StopAsync();
+            if (loop != null)
+            {
+                try { await loop.StopAndSaveAsync(recordOut!); }
+                catch (Exception ex) { ConsoleFormatter.Error($"环回录制落盘失败: {ex.Message}"); }
+                await loop.DisposeAsync();
+            }
         }
 
         Console.WriteLine();
@@ -425,6 +463,35 @@ public class AudioCommands
             stats.RenderPulls
         });
         return 0;
+    }
+
+    /// <summary>
+    /// 回声相似度评分（AEC 客观评测）：环回录音 vs 参考激励的逐窗归一化互相关。
+    /// ActiveCorr 越低 = 直通输出里激励残余越少 = AEC 效果越好；与到达时间无关。
+    /// </summary>
+    public Task<int> EchoScoreAsync(string? file, string? reference, double windowSec, double searchSec)
+    {
+        if (string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(reference))
+        {
+            ConsoleFormatter.Error("请给 --file <环回录音.wav> --ref <激励.wav>");
+            return Task.FromResult(1);
+        }
+        var loop = WavFile.ReadMono(file);
+        var refWav = WavFile.ReadMono(reference);
+        var report = EchoScorer.Analyze(loop.Mono, loop.SampleRate, refWav.Mono, refWav.SampleRate, windowSec, searchSec);
+
+        foreach (var w in report.Windows)
+            Console.WriteLine($"  {w.TimeSec,6:F1}s  corr {w.PeakCorr,5:F3}  delay {w.DelayMs,7:F1}ms{(w.PeakCorr > 0.2 ? "  <-- 回声" : "")}");
+        Console.WriteLine($"  （全局对齐偏移 {report.GlobalOffsetMs,7:F1}ms）");
+        ConsoleFormatter.PrintObject(new
+        {
+            Windows = report.Windows.Count,
+            MeanCorr = Math.Round(report.MeanCorr, 4),
+            ActiveCorr = Math.Round(report.ActiveCorr, 4),
+            GlobalOffsetMs = Math.Round(report.GlobalOffsetMs, 1),
+            Note = "ActiveCorr=有效窗平均相关，越低 AEC 越干净"
+        });
+        return Task.FromResult(0);
     }
 
     private static AudioDeviceInfo? ResolveDevice(IReadOnlyList<AudioDeviceInfo> devices, string? selector, string label)

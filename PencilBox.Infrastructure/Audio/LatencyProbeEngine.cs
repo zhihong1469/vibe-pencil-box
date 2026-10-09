@@ -25,6 +25,24 @@ public sealed record LatencyProbeResult(
     int[] PulsePositionsRender,
     double RenderLatencyMs);
 
+/// <summary>脉冲互相关的统计结论（CLI 与 Desktop 共用同一口径）</summary>
+public sealed record LatencyProbeStats(
+    int Expected,
+    int Located,
+    IReadOnlyList<double> PerPulseMs,
+    double P50,
+    double P95,
+    double Min,
+    double Max,
+    double CapturedSeconds,
+    string CaptureDesc,
+    string RenderDesc,
+    int RenderLatencySubtractedMs)
+{
+    /// <summary>抖动 = p95 − p50</summary>
+    public double Jitter => P95 - P50;
+}
+
 /// <summary>
 /// 端到端延迟探测引擎（box/03 方案 C 的落地底座，box/07 §2.1）：
 /// 扬声器播预生成的扫频脉冲串 → 采集端（麦克风/UAC 流）同录 → 两侧 QPC 锚点 + 互相关定位
@@ -170,6 +188,48 @@ public sealed class LatencyProbeEngine(ILogger logger)
             }
             output?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// 对探测原始产物做互相关定位与统计（CLI 与 Desktop 共用，防两处口径漂移）：
+    /// 模板与播放同形（按采集率再生成）→ 归一化互相关贪心取峰 → 逐脉冲"到达−发出"。
+    /// 默认扣掉渲染缓冲已知常量，<paramref name="raw"/> 看原始闭环。
+    /// </summary>
+    public static LatencyProbeStats Analyze(
+        LatencyProbeResult result, int expectedPulses, int intervalMs, int pulseMs, bool raw = false)
+    {
+        var template = PulseTrain.GenerateChirp(result.CaptureRate, pulseMs);
+        var intervalSamples = result.CaptureRate * intervalMs / 1000;
+        // ±20ms 跟踪窗：覆盖运行内格点漂移（钟差 ppm 级），排除 +35ms 量级的房间反射
+        var windowSamples = Math.Min(result.CaptureRate * 20 / 1000, intervalSamples / 4);
+        var slots = PulseLocator.LocateTracked(result.CapturedMono, template, expectedPulses, intervalSamples, windowSamples);
+
+        var qpf = (double)Stopwatch.Frequency;
+        var baseOffsetMs = (result.CaptureQpc - result.PlayQpc) / qpf * 1000.0 - (raw ? 0 : result.RenderLatencyMs);
+        var delays = new List<double>();
+        for (var k = 0; k < Math.Min(slots.Count, result.PulsePositionsRender.Length); k++)
+        {
+            if (slots[k] is not { } hit) continue;          // 该槽质量不足/越界，跳过
+            var arrivalMs = baseOffsetMs + hit.PositionSamples * 1000.0 / result.CaptureRate;
+            var emittedMs = result.PulsePositionsRender[k] * 1000.0 / result.RenderRate;
+            delays.Add(arrivalMs - emittedMs);
+        }
+
+        var capturedSeconds = result.CapturedMono.Length / (double)result.CaptureRate;
+        if (delays.Count == 0)
+            return new LatencyProbeStats(expectedPulses, 0, [], 0, 0, 0, 0, capturedSeconds,
+                $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
+                $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch",
+                raw ? 0 : (int)result.RenderLatencyMs);
+
+        var sorted = delays.Order().ToArray();
+        double P(double q) => sorted[(int)Math.Clamp(q * (sorted.Length - 1), 0, sorted.Length - 1)];
+        return new LatencyProbeStats(
+            expectedPulses, delays.Count, delays,
+            P(0.5), P(0.95), sorted[0], sorted[^1], capturedSeconds,
+            $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
+            $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch",
+            raw ? 0 : (int)result.RenderLatencyMs);
     }
 
     private static byte[] Encode(short[] mono, WaveFormat format, bool isFloat)
