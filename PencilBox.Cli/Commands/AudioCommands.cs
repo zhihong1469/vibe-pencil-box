@@ -143,7 +143,7 @@ public class AudioCommands
         {
             Capture = stats.CaptureDesc,
             Render = stats.RenderDesc,
-            RenderLatencySubtracted = stats.RenderLatencySubtractedMs,
+            RenderLatencySubtracted = $"{stats.RenderLatencySubtractedMs}（固定测量口径；渲染缓冲设置只影响扩音，不影响本测试）",
             Pulses = $"{stats.Located}/{pulses} 定位",
             DurationS = $"{stats.CapturedSeconds:F1}s（测量期间需保持安静）",
             PerPulseMs = string.Join(", ", stats.PerPulseMs.Select(d => d.ToString("F1")))

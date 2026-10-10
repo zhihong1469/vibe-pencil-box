@@ -193,8 +193,12 @@ public sealed class LatencyProbeEngine(ILogger logger)
     /// <summary>
     /// 对探测原始产物做互相关定位与统计（CLI 与 Desktop 共用，防两处口径漂移）：
     /// 模板与播放同形（按采集率再生成）→ 归一化互相关贪心取峰 → 逐脉冲"到达−发出"。
-    /// 默认扣掉渲染缓冲已知常量，<paramref name="raw"/> 看原始闭环。
+    /// 默认扣掉固定测量口径 <see cref="MeasurementConventionMs"/>（脉冲是空缓冲启动后的一次性
+    /// 突发，出声时刻取决于流内位置而非缓冲深度，故渲染缓冲设置不参与扣减——2026-10-10 实测定案），
+    /// <paramref name="raw"/> 看原始闭环。
     /// </summary>
+    public const int MeasurementConventionMs = 40;
+
     public static LatencyProbeStats Analyze(
         LatencyProbeResult result, int expectedPulses, int intervalMs, int pulseMs, bool raw = false)
     {
@@ -205,7 +209,7 @@ public sealed class LatencyProbeEngine(ILogger logger)
         var slots = PulseLocator.LocateTracked(result.CapturedMono, template, expectedPulses, intervalSamples, windowSamples);
 
         var qpf = (double)Stopwatch.Frequency;
-        var baseOffsetMs = (result.CaptureQpc - result.PlayQpc) / qpf * 1000.0 - (raw ? 0 : result.RenderLatencyMs);
+        var baseOffsetMs = (result.CaptureQpc - result.PlayQpc) / qpf * 1000.0 - (raw ? 0 : MeasurementConventionMs);
         var delays = new List<double>();
         for (var k = 0; k < Math.Min(slots.Count, result.PulsePositionsRender.Length); k++)
         {
@@ -219,8 +223,8 @@ public sealed class LatencyProbeEngine(ILogger logger)
         if (delays.Count == 0)
             return new LatencyProbeStats(expectedPulses, 0, [], 0, 0, 0, 0, capturedSeconds,
                 $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
-                $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch",
-                raw ? 0 : (int)result.RenderLatencyMs);
+                $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms",
+                raw ? 0 : MeasurementConventionMs);
 
         var sorted = delays.Order().ToArray();
         double P(double q) => sorted[(int)Math.Clamp(q * (sorted.Length - 1), 0, sorted.Length - 1)];
@@ -228,8 +232,8 @@ public sealed class LatencyProbeEngine(ILogger logger)
             expectedPulses, delays.Count, delays,
             P(0.5), P(0.95), sorted[0], sorted[^1], capturedSeconds,
             $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
-            $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch",
-            raw ? 0 : (int)result.RenderLatencyMs);
+            $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms",
+            raw ? 0 : MeasurementConventionMs);
     }
 
     private static byte[] Encode(short[] mono, WaveFormat format, bool isFloat)
