@@ -360,8 +360,7 @@ public class Program
                 GetOptionInt(args, "--interval", 500),
                 GetOptionInt(args, "--pulse-ms", 15),
                 float.TryParse(GetOption(args, "--amplitude"), out var amp) ? Math.Clamp(amp, 0.05f, 1f) : 0.8f,
-                GetOptionInt(args, "--render-latency-ms", 40),
-                HasFlag(args, "--raw"),                    // 不扣固定口径，看原始闭环
+                GetOptionInt(args, "--render-latency-ms", 40),   // 仅定测试缓冲大小，不参与数值
                 GetOption(args, "--save-capture"),
                 GetOption(args, "--report-out")),
 
@@ -626,7 +625,7 @@ public class Program
                                [--duration 0(=Ctrl+C 停)]
                      probe   延迟探测：播扫频脉冲串→采集同录→互相关闭环延迟（自校准：--in/--out 同本机）
                                [--pulses 20] [--interval 500] [--pulse-ms 15] [--render-latency-ms 40 仅定测试缓冲大小，不参与扣减]
-                               [--raw] [--save-capture out.wav] [--report-out report.json]  扣减固定口径 40ms
+                               [--save-capture out.wav] [--report-out report.json]  数值=物理闭环原值（不扣减）
                      envelope  WAV 包络分析：整体电平/逐块信封/首声时刻/尾音（--file x.wav [--csv]）
                      tickstats P2 tick 统计：--file ticks.csv → 漂移扣除/p50/p95/重传率（[--json]）
             serial   串口：设备日志 + F5 协议帧 → 统一时间轴

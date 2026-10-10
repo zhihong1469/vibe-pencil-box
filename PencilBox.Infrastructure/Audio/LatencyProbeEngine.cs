@@ -25,7 +25,9 @@ public sealed record LatencyProbeResult(
     int[] PulsePositionsRender,
     double RenderLatencyMs);
 
-/// <summary>脉冲互相关的统计结论（CLI 与 Desktop 共用同一口径）</summary>
+/// <summary>脉冲互相关的统计结论（CLI 与 Desktop 共用同一口径）。
+/// 数值 = 物理闭环原值，不做任何扣减；测试缓冲/端点固有延迟的影响天然很小（脉冲包小且断续，
+/// 出声时刻取决于流内位置而非缓冲深度，实测缓冲 40→200ms 原始闭环不变）。</summary>
 public sealed record LatencyProbeStats(
     int Expected,
     int Located,
@@ -36,8 +38,7 @@ public sealed record LatencyProbeStats(
     double Max,
     double CapturedSeconds,
     string CaptureDesc,
-    string RenderDesc,
-    int RenderLatencySubtractedMs)
+    string RenderDesc)
 {
     /// <summary>抖动 = p95 − p50</summary>
     public double Jitter => P95 - P50;
@@ -193,14 +194,12 @@ public sealed class LatencyProbeEngine(ILogger logger)
     /// <summary>
     /// 对探测原始产物做互相关定位与统计（CLI 与 Desktop 共用，防两处口径漂移）：
     /// 模板与播放同形（按采集率再生成）→ 归一化互相关贪心取峰 → 逐脉冲"到达−发出"。
-    /// 默认扣掉固定测量口径 <see cref="MeasurementConventionMs"/>（脉冲是空缓冲启动后的一次性
-    /// 突发，出声时刻取决于流内位置而非缓冲深度，故渲染缓冲设置不参与扣减——2026-10-10 实测定案），
-    /// <paramref name="raw"/> 看原始闭环。
+    /// 不做任何扣减，直接报物理闭环原值（2026-10-10 用户定案：曾试过扣固定口径/跟随缓冲设置，
+    /// 但脉冲是空缓冲启动后的一次性突发，出声时刻取决于流内位置而非缓冲深度——缓冲 40→200ms
+    /// 实测原始闭环不变，任何扣减都是非物理常数，极端设置下还会出现负数）。
     /// </summary>
-    public const int MeasurementConventionMs = 40;
-
     public static LatencyProbeStats Analyze(
-        LatencyProbeResult result, int expectedPulses, int intervalMs, int pulseMs, bool raw = false)
+        LatencyProbeResult result, int expectedPulses, int intervalMs, int pulseMs)
     {
         var template = PulseTrain.GenerateChirp(result.CaptureRate, pulseMs);
         var intervalSamples = result.CaptureRate * intervalMs / 1000;
@@ -209,7 +208,7 @@ public sealed class LatencyProbeEngine(ILogger logger)
         var slots = PulseLocator.LocateTracked(result.CapturedMono, template, expectedPulses, intervalSamples, windowSamples);
 
         var qpf = (double)Stopwatch.Frequency;
-        var baseOffsetMs = (result.CaptureQpc - result.PlayQpc) / qpf * 1000.0 - (raw ? 0 : MeasurementConventionMs);
+        var baseOffsetMs = (result.CaptureQpc - result.PlayQpc) / qpf * 1000.0;
         var delays = new List<double>();
         for (var k = 0; k < Math.Min(slots.Count, result.PulsePositionsRender.Length); k++)
         {
@@ -223,8 +222,7 @@ public sealed class LatencyProbeEngine(ILogger logger)
         if (delays.Count == 0)
             return new LatencyProbeStats(expectedPulses, 0, [], 0, 0, 0, 0, capturedSeconds,
                 $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
-                $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms",
-                raw ? 0 : MeasurementConventionMs);
+                $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms");
 
         var sorted = delays.Order().ToArray();
         double P(double q) => sorted[(int)Math.Clamp(q * (sorted.Length - 1), 0, sorted.Length - 1)];
@@ -232,8 +230,7 @@ public sealed class LatencyProbeEngine(ILogger logger)
             expectedPulses, delays.Count, delays,
             P(0.5), P(0.95), sorted[0], sorted[^1], capturedSeconds,
             $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
-            $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms",
-            raw ? 0 : MeasurementConventionMs);
+            $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms");
     }
 
     private static byte[] Encode(short[] mono, WaveFormat format, bool isFloat)

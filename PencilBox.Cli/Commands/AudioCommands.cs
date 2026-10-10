@@ -114,7 +114,7 @@ public class AudioCommands
     /// </summary>
     public async Task<int> LatencyProbeAsync(string? inSelector, string? outSelector,
         int pulses, int intervalMs, int pulseMs, float amplitude,
-        int renderLatencyMs, bool raw, string? saveCapture, string? reportOut)
+        int renderLatencyMs, string? saveCapture, string? reportOut)
     {
         var result = await _probe.RunAsync(inSelector, outSelector, pulses, intervalMs, pulseMs,
             amplitude, renderLatencyMs, progress: m => ConsoleFormatter.Info(m));
@@ -126,7 +126,7 @@ public class AudioCommands
         }
 
         // 互相关定位与统计走引擎共享口径（CLI/Desktop 同一实现，防漂移）；归一化相关对幅度不敏感，模板默认幅度即可
-        var stats = LatencyProbeEngine.Analyze(result, pulses, intervalMs, pulseMs, raw);
+        var stats = LatencyProbeEngine.Analyze(result, pulses, intervalMs, pulseMs);
 
         if (stats.Located == 0)
         {
@@ -143,7 +143,7 @@ public class AudioCommands
         {
             Capture = stats.CaptureDesc,
             Render = stats.RenderDesc,
-            RenderLatencySubtracted = $"{stats.RenderLatencySubtractedMs}（固定测量口径；渲染缓冲设置只影响扩音，不影响本测试）",
+            Note = "数值为物理闭环原值，未扣任何常数；测试缓冲/端点固有延迟影响很小（脉冲包小且断续，实测缓冲 40→200ms 结果不变），渲染缓冲设置只影响扩音",
             Pulses = $"{stats.Located}/{pulses} 定位",
             DurationS = $"{stats.CapturedSeconds:F1}s（测量期间需保持安静）",
             PerPulseMs = string.Join(", ", stats.PerPulseMs.Select(d => d.ToString("F1")))
@@ -159,7 +159,7 @@ public class AudioCommands
                 render = result.RenderDevice,
                 captureRate = result.CaptureRate,
                 renderRate = result.RenderRate,
-                renderLatencyMs = raw ? 0 : result.RenderLatencyMs,
+                testBufferMs = result.RenderLatencyMs,
                 pulsesLocated = stats.Located,
                 pulsesSent = pulses,
                 p50Ms = Math.Round(stats.P50, 2),

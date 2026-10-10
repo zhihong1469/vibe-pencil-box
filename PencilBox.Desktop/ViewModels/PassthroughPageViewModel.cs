@@ -287,7 +287,7 @@ public partial class PassthroughPageViewModel : ObservableObject
             {
                 ProbeResult = $"闭环延迟 p50 {stats.P50:F1}ms | p95 {stats.P95:F1}ms | 抖动 {stats.Jitter:F1}ms | " +
                               $"测量时长 {stats.CapturedSeconds:F1}s" +
-                              $"（{stats.Located}/{stats.Expected} 脉冲，已扣固定测量口径 {stats.RenderLatencySubtractedMs}ms；渲染缓冲设置只影响扩音，不影响本测试）";
+                              $"（{stats.Located}/{stats.Expected} 脉冲；数值为物理闭环原值不扣减，测试缓冲影响很小——脉冲包小且断续，渲染缓冲设置只影响扩音）";
                 StatusMessage = $"逐脉冲: {string.Join(", ", stats.PerPulseMs.Select(d => d.ToString("F1")))}";
             }
         }
