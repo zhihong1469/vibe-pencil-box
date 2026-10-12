@@ -237,6 +237,7 @@ public class CompanyOtaTests
         var result = await fsm.RunAsync(image, Downtype.BaseStation, 0x01, 1, 0, 0);
 
         Assert.Equal(OtaOutcome.Succeeded, result.Outcome);
+        Assert.False(result.TerminalLost);                  // 终态帧正常到达（非 R2 推定成功）
         Assert.Equal(2, result.TotalBlocks);
         Assert.Equal(2, result.BlocksDone);
         Assert.Equal(OtaFsmState.Done, fsm.State);
@@ -462,5 +463,237 @@ public class CompanyOtaTests
         Assert.Equal(OtaOutcome.Failed, result.Outcome);
         Assert.Equal(OtaFsmState.Failed, fsm.State);
         Assert.Equal(1 + 3, device.Sent.Count);             // 首发 + OtaMaxRetry(3) 重发，不悬挂
+    }
+
+    // ================= issues-pencil/14 方案乙：等终态窗 + R2 确认成功（终态丢失） =================
+
+    /// <summary>
+    /// V3（14号 §6）：满块后**终态帧丢失**（设备收齐末块后静默——复刻 0x20 复位竞态）→
+    /// 等终态窗（5000ms）超时 → R2 重发开始帧 → 新固件答同版本 skip ⇒ 判**成功（终态丢失）**，
+    /// 不再误标 Skipped（14号 §3.2 实锤的误标路径）。
+    /// </summary>
+    [Fact]
+    public async Task Ota_TerminalFrameLost_R2SkipConfirm_JudgesSuccess()
+    {
+        var device = new TerminalLostDevice(TerminalLostDevice.LostBehavior.SkipOnRestart);
+        var clock = new StepClock();
+        var transitions = new List<string>();
+        var warnings = new List<string>();
+        var fsm = new CompanyOtaFsm(new CompanyCodec(), device, clock, Cfg());
+        fsm.Transitioned += (_, t) => transitions.Add(t.Reason);
+        fsm.Warning += (_, w) => warnings.Add(w);
+
+        var result = await fsm.RunAsync(Image(1024), Downtype.BaseStation, 0x01, 1, 0, 0);
+
+        Assert.Equal(OtaOutcome.Succeeded, result.Outcome);
+        Assert.True(result.TerminalLost);                   // 成功但终态帧未达（R2 推定）
+        Assert.True(result.IsTerminalSuccess);
+        Assert.Contains("终态丢失", result.Message);
+        Assert.Equal(OtaFsmState.Done, fsm.State);
+        Assert.Contains(transitions, r => r.Contains("等终态窗"));          // 满块后挂 5s 终态窗
+        Assert.Contains(5000, clock.Delays);                // 终态窗时长进等待节拍
+        Assert.Contains(warnings, w => w.Contains("R2 重发开始帧确认"));
+        var startFrames = device.Sent.Where(f => f[7] == 0x01 && f[9] == OtaDcmd.Start);
+        Assert.Equal(2, startFrames.Count());               // 首发 + R2 确认（终态窗超时不续等，直接 R2）
+    }
+
+    /// <summary>R2 确认帧若答 **ALLOW（DCMD=01）** = 设备真缺固件、会话重启 → 终态丢失推断作废，
+    /// 重传后正常收终态 → 普通成功（非终态丢失）。</summary>
+    [Fact]
+    public async Task Ota_TerminalLost_R2AnswersAllow_RestartsClean()
+    {
+        var device = new TerminalLostDevice(TerminalLostDevice.LostBehavior.AllowOnRestart);
+        var fsm = new CompanyOtaFsm(new CompanyCodec(), device, new StepClock(), Cfg());
+
+        var result = await fsm.RunAsync(Image(1024), Downtype.BaseStation, 0x01, 1, 0, 0);
+
+        Assert.Equal(OtaOutcome.Succeeded, result.Outcome);
+        Assert.False(result.TerminalLost);
+        Assert.StartsWith("完成", result.Message);
+        var chunks = device.Sent.Count(f => f[7] == 0x07);
+        Assert.Equal(22 * 2, chunks);                       // 会话重启 → 整块重发
+    }
+
+    /// <summary>R2 已在块级卡死时用掉（一次性），满块后终态再丢 → 无确认手段 → Failed（不悬挂）。</summary>
+    [Fact]
+    public async Task Ota_TerminalLost_AfterR2AlreadyUsed_Fails()
+    {
+        var device = new StallThenTerminalLostDevice();
+        var transitions = new List<string>();
+        var warnings = new List<string>();
+        var fsm = new CompanyOtaFsm(new CompanyCodec(), device, new StepClock(), Cfg());
+        fsm.Transitioned += (_, t) => transitions.Add(t.Reason);
+        fsm.Warning += (_, w) => warnings.Add(w);
+
+        var result = await fsm.RunAsync(Image(2048), Downtype.BaseStation, 0x01, 1, 0, 0);
+
+        Assert.Equal(OtaOutcome.Failed, result.Outcome);
+        Assert.Equal(OtaFsmState.Failed, fsm.State);
+        Assert.Contains(transitions, r => r.Contains("R2 已用"));
+        Assert.Contains(warnings, w => w.Contains("最后手段"));   // 块级卡死消耗的一次性 R2
+        var startFrames = device.Sent.Where(f => f[7] == 0x01 && f[9] == OtaDcmd.Start);
+        Assert.Equal(2, startFrames.Count());               // 不会第三次重发（防会话重启循环）
+    }
+
+    /// <summary>V5：真失败（CRC 错 → 0x20 DCMD=03 原因 04）→ Failed，原因码可读（失败路径与终态窗无关）。</summary>
+    [Fact]
+    public async Task Ota_DeviceReportsCrcFail_FailsWithReason()
+    {
+        var device = new CrcFailDevice();
+        var transitions = new List<string>();
+        var fsm = new CompanyOtaFsm(new CompanyCodec(), device, new StepClock(), Cfg());
+        fsm.Transitioned += (_, t) => transitions.Add(t.Reason);
+
+        var result = await fsm.RunAsync(Image(1024), Downtype.BaseStation, 0x01, 1, 0, 0);
+
+        Assert.Equal(OtaOutcome.Failed, result.Outcome);
+        Assert.Contains(transitions, r => r.Contains("CRC 校验失败"));
+    }
+
+    /// <summary>
+    /// 满块后丢终态的设备：首发 START → ALLOW + 拉块 0，末片收齐后**静默**（终态帧复位竞态丢失）；
+    /// R2 重发 START 按剧本答 skip（新固件同版本）或 ALLOW（真缺固件，会话重启）。
+    /// </summary>
+    private sealed class TerminalLostDevice : ICommandChannel
+    {
+        public enum LostBehavior { SkipOnRestart, AllowOnRestart }
+
+        private readonly LostBehavior _behavior;
+        private int _blockCompletions;
+
+        public TerminalLostDevice(LostBehavior behavior) => _behavior = behavior;
+
+        public ChannelKind Kind => ChannelKind.Hid;
+        public bool IsOpen { get; set; } = true;
+        public string Describe => "TerminalLostDevice";
+        public List<byte[]> Sent { get; } = new();
+        public event EventHandler<byte[]>? FrameReceived;
+
+        public Task SendAsync(ReadOnlySpan<byte> f, CancellationToken ct = default)
+        {
+            var frame = f.ToArray();
+            Sent.Add(frame);
+            if (frame.Length < 12 || frame[6] != CompanyCmd.Ota)
+                return Task.CompletedTask;
+
+            switch (frame[7])
+            {
+                case 0x01 when frame[9] == OtaDcmd.Start:
+                    if (Sent.Count(s => s[7] == 0x01 && s[9] == OtaDcmd.Start) == 1)
+                    {
+                        Reply(new byte[] { 0x01, 0x00, OtaDcmd.Start });
+                        Reply(new byte[] { 0x0A, 0x00, 0x00, 0x00, 0x00 });
+                    }
+                    else if (_behavior == LostBehavior.SkipOnRestart)
+                    {
+                        Reply(new byte[] { 0x01, 0x00, OtaDcmd.Skip });   // 新固件答同版本 skip
+                    }
+                    else
+                    {
+                        Reply(new byte[] { 0x01, 0x00, OtaDcmd.Start });  // 真缺固件 → 重启会话
+                        Reply(new byte[] { 0x0A, 0x00, 0x00, 0x00, 0x00 });
+                    }
+                    break;
+
+                case 0x07 when frame[11] == 0x15:
+                    _blockCompletions++;
+                    if (_blockCompletions >= 2)
+                        Reply(new byte[] { 0x20, 0x00, 0x02, 0x00 });     // 重启会话后正常回终态
+                    // 首次满块：静默（终态帧丢失）
+                    break;
+            }
+            return Task.CompletedTask;
+        }
+
+        private void Reply(byte[] data) => FrameReceived?.Invoke(this,
+            CompanyFrame.Build(CompanyFrame.BaseCmdResponse, CompanyCmd.Ota, data));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>块 0 发完即卡死（消耗一次性 R2）→ R2 后重传并满块 → 末块终态再丢（R2 已用）。</summary>
+    private sealed class StallThenTerminalLostDevice : ICommandChannel
+    {
+        private int _block0Completions;
+        public ChannelKind Kind => ChannelKind.Hid;
+        public bool IsOpen { get; set; } = true;
+        public string Describe => "StallThenTerminalLostDevice";
+        public List<byte[]> Sent { get; } = new();
+        public event EventHandler<byte[]>? FrameReceived;
+
+        public Task SendAsync(ReadOnlySpan<byte> f, CancellationToken ct = default)
+        {
+            var frame = f.ToArray();
+            Sent.Add(frame);
+            if (frame.Length < 12 || frame[6] != CompanyCmd.Ota)
+                return Task.CompletedTask;
+
+            switch (frame[7])
+            {
+                case 0x01 when frame[9] == OtaDcmd.Start:
+                    if (Sent.Count(s => s[7] == 0x01 && s[9] == OtaDcmd.Start) == 1)
+                    {
+                        Reply(new byte[] { 0x01, 0x00, OtaDcmd.Start });
+                        Reply(new byte[] { 0x0A, 0x00, 0x00, 0x00, 0x00 });
+                    }
+                    else
+                    {
+                        Reply(new byte[] { 0x01, 0x00, OtaDcmd.Start });  // R2（最后手段）→ 会话重启
+                        Reply(new byte[] { 0x0A, 0x00, 0x00, 0x00, 0x00 });
+                    }
+                    break;
+
+                case 0x07 when frame[11] == 0x15:
+                    if (frame[10] == 0)
+                    {
+                        _block0Completions++;
+                        if (_block0Completions >= 2)
+                            Reply(new byte[] { 0x0A, 0x00, 0x00, 0x01, 0x00 });   // 重启后继续拉块 1
+                        // 首次块 0 完成：静默（块级卡死）
+                    }
+                    // 块 1 完成后：静默（终态帧丢失，且 R2 已用）
+                    break;
+            }
+            return Task.CompletedTask;
+        }
+
+        private void Reply(byte[] data) => FrameReceived?.Invoke(this,
+            CompanyFrame.Build(CompanyFrame.BaseCmdResponse, CompanyCmd.Ota, data));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>真失败设备：末片收齐 → `0x20 DCMD=03` 原因 04（CRC 校验失败）。</summary>
+    private sealed class CrcFailDevice : ICommandChannel
+    {
+        public ChannelKind Kind => ChannelKind.Hid;
+        public bool IsOpen { get; set; } = true;
+        public string Describe => "CrcFailDevice";
+        public List<byte[]> Sent { get; } = new();
+        public event EventHandler<byte[]>? FrameReceived;
+
+        public Task SendAsync(ReadOnlySpan<byte> f, CancellationToken ct = default)
+        {
+            var frame = f.ToArray();
+            Sent.Add(frame);
+            if (frame.Length < 12 || frame[6] != CompanyCmd.Ota)
+                return Task.CompletedTask;
+
+            if (frame[7] == 0x01 && frame[9] == OtaDcmd.Start)
+            {
+                FrameReceived?.Invoke(this, CompanyFrame.Build(CompanyFrame.BaseCmdResponse, CompanyCmd.Ota,
+                    new byte[] { 0x01, 0x00, OtaDcmd.Start }));
+                FrameReceived?.Invoke(this, CompanyFrame.Build(CompanyFrame.BaseCmdResponse, CompanyCmd.Ota,
+                    new byte[] { 0x0A, 0x00, 0x00, 0x00, 0x00 }));
+            }
+            else if (frame[7] == 0x07 && frame[11] == 0x15)
+            {
+                FrameReceived?.Invoke(this, CompanyFrame.Build(CompanyFrame.BaseCmdResponse, CompanyCmd.Ota,
+                    new byte[] { 0x20, 0x00, 0x03, 0x04 }));
+            }
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

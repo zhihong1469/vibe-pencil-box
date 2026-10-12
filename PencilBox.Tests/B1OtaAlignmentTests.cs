@@ -52,6 +52,8 @@ public class B1OtaAlignmentTests
     /// 设备：首发开始帧 → ALLOW + 拉块 0，此后**静默**（块 0 收到也不推进）；
     /// 最后手段重发开始帧 → 回 DCMD=02（同版本跳过）。
     /// 预期：先续等 OtaMaxRetry 轮（告警"继续等待"、不重发开始帧）→ 耗尽后一次性最后手段 → 设备 SKIP → Done。
+    /// 镜像取 **2 块**（卡在块 0，自算未满块）——若 1 块镜像则发完即满块，走 issues-pencil/14 等终态窗路径
+    /// （见 <c>CompanyOtaTests</c> 终态丢失族），不再经过"续等 3 轮"。
     /// </summary>
     [Fact]
     public async Task Ota_BlockTimeout_WaitsBeforeLastResort()
@@ -61,7 +63,7 @@ public class B1OtaAlignmentTests
         var fsm = new CompanyOtaFsm(new CompanyCodec(), device, new StepClock(), Cfg());
         fsm.Warning += (_, w) => warnings.Add(w);
 
-        var result = await fsm.RunAsync(Image(1024), Downtype.BaseStation, 0x01, 1, 0, 0);
+        var result = await fsm.RunAsync(Image(2048), Downtype.BaseStation, 0x01, 1, 0, 0);
 
         Assert.Equal(OtaOutcome.Skipped, result.Outcome);
         // 0x01 帧恰 2 帧：首发 + 最后手段（续等期间**不**重发开始帧）
@@ -298,7 +300,10 @@ public class B1OtaAlignmentTests
         // 锚点生效的直接证据：块发送耗时（21×5ms=105）从窗口扣除 ⇒ 发完块后等待剩余 = 500−105 = 395；
         // 若锚点错成"末片发完"，块后等待将是全额 500（395 不会出现）
         Assert.Contains(395, clock.Delays);
-        Assert.Equal(2, clock.Delays.Count(d => d == 395));   // 两块各扣一次（末块后直接终态，无等待）
+        // 块 0 后等下一块请求 = 395；末块后不再按块级节奏（issues-pencil/14 终态窗），
+        // 改挂 5000ms 等终态窗（终态帧在片间已入队 → 立即收敛，5000 仅出现在等待节拍中）
+        Assert.Equal(1, clock.Delays.Count(d => d == 395));
+        Assert.Contains(5000, clock.Delays);
     }
 
     /// <summary>

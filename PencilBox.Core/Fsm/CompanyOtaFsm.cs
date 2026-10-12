@@ -19,6 +19,11 @@ namespace PencilBox.Core.Fsm;
 ///   → **首选继续等待**；"重发开始帧"降为**最后手段**（一次性，会重启会话）→ 仍无 → `Failed`（不悬挂）；
 /// - **R4** 退出后等回显超时 → `Failed`（不悬挂）；
 /// - **R5** 越界 `PACKH` → 忽略 + 告警（禁止补零糊弄）；
+/// - **终态窗**（issues-pencil/14 方案乙）：满块（自算 100%）后末块改入**等终态窗**
+///   （`OtaTerminalWaitMs` ≥5s，覆盖设备 VERIFY+activate+复位）；窗内收 `0x20 DCMD=02/03` → Done/Failed
+///   （既有路径，不受状态门控）；窗超时 → **R2 重发开始帧确认**：满块 + 同版本 skip ⇒
+///   **成功（终态丢失）**（协议语义等价终态 02——设备只会在已跑新固件时答同版本）；R2 答 ALLOW
+///   则视为会话重启续走（终态丢失推断作废）；R2 已用或非 skip → `Failed`（不悬挂）；
 /// - **PC-4**（issues/05 §1-G）：同块重查超阈值**仅告警**（保险计数，不作协议失败信号——
 ///   块级失败的**唯一权威** = 设备终态 `0x20 DCMD=02/03`）；
 /// - **PC-6**（issues/05 §2.3-3）：`0x0A` 可能与开始应答 `0x01(DCMD=01)` 几乎同时到达 →
@@ -50,6 +55,8 @@ public sealed class CompanyOtaFsm
     private int _exitAttempts;
     private bool _aborted;                      // 用户/上位机主动取消
     private OtaOutcome _outcome = OtaOutcome.None;
+    private bool _terminalLostCandidate;        // 14号 方案乙：满块后终态窗超时 → R2 确认在途
+    private bool _terminalLostConfirmed;        // R2 答 同版本 skip → 判"成功（终态丢失）"
 
     // ===== B1 冻结口径（issues/08 PC-2/3/4）=====
     private DateTime _blockDeadline = DateTime.MaxValue;   // PC-2：块等待锚点 = 本块首片发出 + BlockTimeoutMs
@@ -95,6 +102,8 @@ public sealed class CompanyOtaFsm
         _lastResortSent = false;
         _lastRequestedPackH = 0xFF;
         _sameBlockRequests = 0;
+        _terminalLostCandidate = false;
+        _terminalLostConfirmed = false;
         int gap = chunkGapMs >= 0 ? chunkGapMs : _config.ChunkGapMs;
 
         _channel.FrameReceived += OnFrameReceived;
@@ -197,12 +206,25 @@ public sealed class CompanyOtaFsm
         switch (dcmd)
         {
             case OtaDcmd.Start:
+                // 14号 方案乙：设备答 ALLOW（而非同版本 skip）= 真重启会话 → 终态丢失推断作废
+                _terminalLostCandidate = false;
                 MoveTo(OtaFsmState.AwaitingRequest, "设备允许传输（DCMD=01）");
                 return null;
 
             case OtaDcmd.Skip:
-                _outcome = OtaOutcome.Skipped;
-                MoveTo(OtaFsmState.Done, "已有相同固件（DCMD=02，跳过）");
+                if (_terminalLostCandidate)
+                {
+                    // 14号 方案乙 §5：满块 + R2 同版本 skip ⇒ 等价终态 DCMD=02
+                    //（设备只会在已跑新固件时答同版本 skip），不引入误报成功新可能
+                    _terminalLostConfirmed = true;
+                    _outcome = OtaOutcome.Succeeded;
+                    MoveTo(OtaFsmState.Done, "同版本 skip（DCMD=02）+ 满块 ⇒ 成功（终态丢失，R2 确认）");
+                }
+                else
+                {
+                    _outcome = OtaOutcome.Skipped;
+                    MoveTo(OtaFsmState.Done, "已有相同固件（DCMD=02，跳过）");
+                }
                 return BuildResult();
 
             default:
@@ -281,8 +303,20 @@ public sealed class CompanyOtaFsm
             await SendChunkAsync(packH, packL, gap, ct).ConfigureAwait(false);
         }
 
-        MoveTo(OtaFsmState.AwaitingRequest, $"块 PACKH=0x{packH:X2} 22 片发完");
         _blocksDone = Math.Max(_blocksDone, packH + 1);
+
+        // 14号 方案乙-1：满块（自算 100%）→ 末块后改入"等终态窗"（≥5s，覆盖设备 VERIFY+activate+复位；
+        // 设备侧烧写对我不可见，等的是 0x20 终态而非下一块请求），不再按块级 1.5s 节奏
+        if (_blocksDone >= _totalBlocks)
+        {
+            MoveTo(OtaFsmState.AwaitingRequest,
+                $"全部 {_totalBlocks} 块发完 → 等终态窗 {_config.OtaTerminalWaitMs}ms（0x20 DCMD=02/03）");
+            _blockDeadline = _clock.UtcNow.AddMilliseconds(_config.OtaTerminalWaitMs);
+        }
+        else
+        {
+            MoveTo(OtaFsmState.AwaitingRequest, $"块 PACKH=0x{packH:X2} 22 片发完");
+        }
         RaiseProgress();
 
         if (_aborted || (abortAfterBlock >= 0 && _blocksDone >= abortAfterBlock))
@@ -301,10 +335,15 @@ public sealed class CompanyOtaFsm
         {
             case 0x01:
                 _devicePercent = packH;
-                // 0x20(01) 进度 = 设备存活证据（B1 下"先 0x20 后 0x0A"顺序固定）→ 顺延块等待 deadline，
-                // 避免设备正忙着发下一块请求时被锚点判超时
+                // 0x20(01) 进度 = 设备存活证据（B1 下"先 0x20 后 0x0A"顺序固定）→ 顺延等待 deadline，
+                // 避免设备正忙着发下一块请求时被锚点判超时；
+                // 只顺延不回缩（满块后等终态窗 5s > 块级 1.5s，进度帧不得压缩终态窗，issues-pencil/14）
                 if (State == OtaFsmState.AwaitingRequest)
-                    _blockDeadline = _clock.UtcNow.AddMilliseconds(_config.BlockTimeoutMs);
+                {
+                    var extended = _clock.UtcNow.AddMilliseconds(_config.BlockTimeoutMs);
+                    if (extended > _blockDeadline)
+                        _blockDeadline = extended;
+                }
                 RaiseProgress();
                 return null;
 
@@ -338,6 +377,31 @@ public sealed class CompanyOtaFsm
                 break;
 
             case OtaFsmState.AwaitingRequest:
+                // 14号 方案乙-2：满块后等终态窗超时 → 不直接 Failed，先 R2 重发开始帧确认——
+                // 设备已跑新固件才会答同版本 skip ⇒ 满块 + skip 等价终态 DCMD=02（成功（终态丢失））；
+                // R2 已用（无法再重启会话）或后续非 skip → Failed（不悬挂，红线 5）。
+                if (_blocksDone >= _totalBlocks)
+                {
+                    if (!_lastResortSent)
+                    {
+                        _lastResortSent = true;
+                        _terminalLostCandidate = true;
+                        Warning?.Invoke(this,
+                            $"等终态窗超时（{_config.OtaTerminalWaitMs}ms）未收 0x20 DCMD=02/03 " +
+                            $"（满块 {_blocksDone}/{_totalBlocks}）→ R2 重发开始帧确认：" +
+                            "同版本 skip ⇒ 成功（终态丢失）；其它 ⇒ 失败");
+                        _startRetry = 0;
+                        MoveTo(OtaFsmState.StartSent, "终态窗超时：R2 重发开始帧确认终态");
+                        await SendSessionAsync(OtaDcmd.Start, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        MoveTo(OtaFsmState.Failed,
+                            $"等终态窗超时且 R2 已用（满块 {_blocksDone}/{_totalBlocks}，终态帧丢失无法确认，issues-pencil/14）");
+                    }
+                    break;
+                }
+
                 // R2（B1 冻结口径，issues/05 §1-B / issues/08 PC-3）：超时**首选继续等待**——
                 // 设备可能仍在 ~800ms 重查窗内（1500ms 锚点 > 重查窗，本不应超时；超时多为链路慢）。
                 // "重发开始帧"会重启会话、与设备 FSM 分叉 ⇒ 降为**最后手段且只用一次**；
@@ -383,7 +447,8 @@ public sealed class CompanyOtaFsm
 
     /// <summary>
     /// PC-2（issues/08）：`AwaitingRequest` 的等待剩余时长 = 块锚点 deadline − now。
-    /// 尚未发过任何块（等设备首拉）时取全额 <see cref="CompanyConfig.BlockTimeoutMs"/>。
+    /// 尚未发过任何块（等设备首拉）时取全额 <see cref="CompanyConfig.BlockTimeoutMs"/>；
+    /// 满块后锚点改挂**等终态窗** <see cref="CompanyConfig.OtaTerminalWaitMs"/>（issues-pencil/14）。
     /// ⚠️ 恒 ≥1ms：主循环以 `timeout == 0` 区分"无限等待"（Sending1K 片间读事件）——
     /// deadline 已过时须以 1ms 走限时路径立即收敛到超时分支，不能落入无限阻塞。
     /// </summary>
@@ -476,8 +541,12 @@ public sealed class CompanyOtaFsm
 
     private OtaResult BuildResult() => _outcome switch
     {
-        OtaOutcome.Succeeded => new(OtaOutcome.Succeeded, 100, _blocksDone, _totalBlocks,
-            $"完成（{_blocksDone}/{_totalBlocks} 块）"),
+        OtaOutcome.Succeeded => _terminalLostConfirmed
+            ? new(OtaOutcome.Succeeded, 100, _blocksDone, _totalBlocks,
+                $"成功（终态丢失）：{_blocksDone}/{_totalBlocks} 块全发 + R2 同版本确认（终态帧未达）",
+                TerminalLost: true)
+            : new(OtaOutcome.Succeeded, 100, _blocksDone, _totalBlocks,
+                $"完成（{_blocksDone}/{_totalBlocks} 块）"),
         OtaOutcome.Skipped => new(OtaOutcome.Skipped, 0, _blocksDone, _totalBlocks,
             "跳过：已有相同固件（DCMD=02）"),
         OtaOutcome.Aborted => new(OtaOutcome.Aborted, _blocksDone * 100 / Math.Max(1, _totalBlocks),

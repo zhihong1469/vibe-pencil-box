@@ -440,10 +440,11 @@ public partial class OtaPageViewModel : ObservableObject
 
             if (result.IsTerminalSuccess)
             {
-                // ⚠️ 阶段③：设备侧写区/激活/复位仍为 STUB ⇒ DCMD=02 只代表"协议面成功"
                 var note = result.Outcome == OtaOutcome.Skipped
                     ? "（设备已同版本，未进入传输）"
-                    : "；协议面成功 —— 请点【读设备版本】核对（STUB 阶段设备不会复位、版本不变，属预期）";
+                    : result.TerminalLost
+                        ? "；终态帧未达，满块 + R2 同版本确认判定成功 —— 请点【读设备版本】核对"
+                        : "；请点【读设备版本】核对（设备已复位重启，版本应已更新）";
 
                 StatusMessage = $"{result.Message}（{result.Outcome}）{note}";
                 AddLog($"[DONE] {result.Message}{note}");

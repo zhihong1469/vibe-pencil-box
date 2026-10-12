@@ -69,6 +69,14 @@ public sealed class CompanyConfig
     /// <summary>OTA 超时重试上限（骨架 §5 建议 ≤3）</summary>
     public int OtaMaxRetry { get; init; } = 3;
 
+    /// <summary>
+    /// 末块发完（自算 100%）后的**等终态窗**（毫秒）＝ **`5000`（issues-pencil/14 方案乙 R2 定值，≥5s）**。
+    /// 覆盖设备侧 VERIFY + activate + 复位（终态帧在复位前发出，正常 ~50ms 即达；长窗防慢设备被块级节奏误伤）。
+    /// 窗内收 `0x20 DCMD=02 → Done` / `03 → Failed`（既有路径不变）；
+    /// 窗超时 → **R2 重发开始帧确认**：满块 + 同版本 skip ⇒ 成功（终态丢失）；否则 Failed（不悬挂）。
+    /// </summary>
+    public int OtaTerminalWaitMs { get; init; } = 5000;
+
     // ===== 0x54 统一TX 转发信封（issues-pencil/12 §2.5；pc-issues/03 P-3 备案值）=====
 
     /// <summary>

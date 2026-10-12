@@ -80,13 +80,17 @@ public enum OtaFsmState
     Aborted
 }
 
-/// <summary>一次升级会话结果</summary>
+/// <summary>
+/// 一次升级会话结果。<paramref name="TerminalLost"/> = 成功但终态帧未达
+/// （满块 + R2 同版本 skip 确认，issues-pencil/14 方案乙——协议语义上等价终态 `DCMD=02`）。
+/// </summary>
 public sealed record OtaResult(
     OtaOutcome Outcome,
     int Percent,
     int BlocksDone,
     int TotalBlocks,
-    string Message)
+    string Message,
+    bool TerminalLost = false)
 {
     public bool IsTerminalSuccess => Outcome is OtaOutcome.Succeeded or OtaOutcome.Skipped;
 }
