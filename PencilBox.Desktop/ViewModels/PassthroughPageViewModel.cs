@@ -30,6 +30,10 @@ public partial class PassthroughPageViewModel : ObservableObject
     [ObservableProperty]
     private AudioDeviceInfo? _selectedRenderDevice;
 
+    /// <summary>桥接副汇设备（虚拟声卡）：把后级降噪信号复投给其他软件当已降噪麦克风；空 = 关。启动时生效。</summary>
+    [ObservableProperty]
+    private AudioDeviceInfo? _selectedBridgeDevice;
+
     /// <summary>音量滑条位置 0~100（对数刻度）；实际增益 = <see cref="PassthroughStartOptions.MaxVolume"/>^(位置/100)。</summary>
     [ObservableProperty]
     private double _volumeSlider;
@@ -77,6 +81,36 @@ public partial class PassthroughPageViewModel : ObservableObject
     partial void OnAfcEnabledChanged(bool value)
     {
         if (IsRunning) _passthrough.SetAfcEnabled(value);
+    }
+
+    // 带通降噪（切机械抖动/低频传导与高频嘶声；信号顺序在 AEC 之前；滑条低于下限即该边关闭）
+
+    /// <summary>带通下边滑条 0~400Hz（步进 20）；&lt;40Hz 视为关闭。</summary>
+    [ObservableProperty]
+    private double _hpfSlider = 80;
+
+    /// <summary>带通上边滑条 0~7800Hz（步进 200）；&lt;2000Hz 视为关闭，默认关。</summary>
+    [ObservableProperty]
+    private double _lpfSlider;
+
+    public int HpfEffective => HpfSlider < 40 ? 0 : (int)HpfSlider;
+    public int LpfEffective => LpfSlider < 2000 ? 0 : (int)LpfSlider;
+
+    public string HpfDisplay => HpfEffective == 0 ? "关" : $"{HpfEffective}Hz";
+    public string LpfDisplay => LpfEffective == 0 ? "关" : $"{LpfEffective}Hz";
+
+    partial void OnHpfSliderChanged(double value)
+    {
+        OnPropertyChanged(nameof(HpfEffective));
+        OnPropertyChanged(nameof(HpfDisplay));
+        if (IsRunning) _passthrough.SetBandpass(HpfEffective, LpfEffective);
+    }
+
+    partial void OnLpfSliderChanged(double value)
+    {
+        OnPropertyChanged(nameof(LpfEffective));
+        OnPropertyChanged(nameof(LpfDisplay));
+        if (IsRunning) _passthrough.SetBandpass(HpfEffective, LpfEffective);
     }
 
     // 调参（自动档=内置推荐；手动档开放滑条，方便边调边听边学）
@@ -205,7 +239,10 @@ public partial class PassthroughPageViewModel : ObservableObject
                 AecSuppressActiveDb = (int)AecSuppressActiveDb,
                 AnsAuto = !AnsManual,
                 AnsNoiseSuppressDb = (int)AnsNoiseSuppressDb,
-                EnableAecGate = AecGateEnabled
+                EnableAecGate = AecGateEnabled,
+                HpfHz = HpfEffective,
+                LpfHz = LpfEffective,
+                BridgeDeviceId = SelectedBridgeDevice?.DeviceId
             });
             StatusMessage = "扩音中：采集 → 扬声器实时直通（耳机模式下无啸叫风险）";
         }
@@ -323,9 +360,10 @@ public partial class PassthroughPageViewModel : ObservableObject
             CurrentLevel = s.Level;
             var lim = s.LimiterGain < 0.995f ? $" | 限制器 {s.LimiterGain:F2}（已触顶）" : "";
             var gate = s.AecGateBypassMs > 0 ? $" | 门控旁路 {s.AecGateBypassMs:F0}ms" : "";
+            var bridge = s.BridgeDevice.Length == 0 ? "" : $" | 桥接 {s.BridgeDevice}（丢弃 {s.BridgeDroppedBytes}B）";
             StatsSummary = $"时长 {s.ElapsedSeconds,6:F1}s | 环形均值 {s.RingDepthAvgMs,6:F1}ms / 峰值 {s.RingDepthMaxMs,6:F1}ms | " +
                            $"欠载 {s.UnderrunEvents} | 丢弃 {s.DroppedBytes}B | {s.CaptureFormat} → {s.RenderFormat} | 缓冲 {s.RenderLatencyMs}ms | " +
-                           $"AEC偏移 {s.AecOffsetMs:F1}ms / DSP最大 {s.DspMaxMs:F2}ms{lim}{gate} | Box段延迟 ~{s.EstimatedLatencyMs:F0}ms";
+                           $"AEC偏移 {s.AecOffsetMs:F1}ms / DSP最大 {s.DspMaxMs:F2}ms{lim}{gate}{bridge} | Box段延迟 ~{s.EstimatedLatencyMs:F0}ms";
         });
     }
 }

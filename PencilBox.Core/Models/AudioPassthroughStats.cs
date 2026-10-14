@@ -75,6 +75,19 @@ public sealed class PassthroughStartOptions
     /// 参考一响立即恢复。判据取参考信号（非麦克风，原因见 AecSilenceGate）。
     /// </summary>
     public bool EnableAecGate { get; set; }
+
+    /// <summary>带通降噪下边：高通截止（Hz，0=关）。切机械抖动/低频传导；默认 80。</summary>
+    public int HpfHz { get; set; } = 80;
+
+    /// <summary>带通降噪上边：低通截止（Hz，0=关）。16k 处理时 8k 以上已被采样率天然滤除，默认关。</summary>
+    public int LpfHz { get; set; }
+
+    /// <summary>桥接副汇渲染设备 ID（null/空=关）。处理链后级信号复投一份给虚拟声卡/第二设备，
+    /// 供其他软件当"已降噪麦克风"用；写满即丢最旧，绝不反压主链（主延迟不受影响）。</summary>
+    public string? BridgeDeviceId { get; set; }
+
+    /// <summary>桥接副汇渲染缓冲（ms；非实时消费，默认放宽 150）</summary>
+    public int BridgeLatencyMs { get; set; } = 150;
 }
 
 /// <summary>
@@ -96,6 +109,12 @@ public sealed class AudioPassthroughStats
 
     /// <summary>渲染格式描述（渲染端点混音格式）</summary>
     public string RenderFormat { get; set; } = string.Empty;
+
+    /// <summary>桥接副汇设备名（空=未启用）</summary>
+    public string BridgeDevice { get; set; } = string.Empty;
+
+    /// <summary>桥接副汇累计丢弃字节（消费不及时丢最旧的量）</summary>
+    public long BridgeDroppedBytes { get; set; }
 
     /// <summary>本次会话时长（秒）</summary>
     public double ElapsedSeconds { get; set; }

@@ -84,6 +84,7 @@ public class Program
         services.AddSingleton<DspCommands>();
         services.AddSingleton<ConfigCommands>();
         services.AddSingleton<CompanyCommands>();
+        services.AddSingleton<CompanyParamCommands>();
         services.AddSingleton<KeymapCommands>();
 
         var sp = services.BuildServiceProvider();
@@ -350,7 +351,12 @@ public class Program
                 GetOptionInt(args, "--aec-suppress", 0),   // 0 = 自动档
                 GetOptionInt(args, "--ans-suppress", 0),   // 0 = 自动档
                 HasFlag(args, "--aec-gate"),               // AEC 条件触发（默认关）
-                GetOption(args, "--record-out")),          // 输出环回录制（AEC 客观评测）
+                GetOption(args, "--record-out"),
+                GetOptionInt(args, "--hpf", 80),           // 带通下边 Hz（0=关）
+                GetOptionInt(args, "--lpf", 0),            // 带通上边 Hz（0=关）
+                GetOption(args, "--bridge"),               // 桥接副汇（供其他软件当已降噪麦克风）
+                GetOptionInt(args, "--bridge-latency", 150),
+                HasFlag(args, "--record-bridge")),          // 输出环回录制（AEC 客观评测）
 
             // 延迟测量底座（box/07 §2）：脉冲互相关闭环延迟
             "latency-probe" or "probe" => await cmd.LatencyProbeAsync(
@@ -548,6 +554,10 @@ public class Program
 
             "raw" => await cmd.RawAsync(port, GetOptionRequired(rest, "--hex"), GetOptionInt(rest, "--wait", 600)),
 
+            // 0x61 内部调参（issues-pencil/01/02/03；仅串口轨笔端直连）：
+            // list 全表 / get 单参 / set 单参写 / reset 恢复出厂 / export 导出宏片段 / snapshot 方案快照 A/B
+            "param" => await DispatchCompanyParamAsync(sp, rest),
+
             // 0x53 状态上行（基站把统一TX 状态槽原样搬运上行；仅 USB 轨）：
             // 拉取快照一次，--monitor N 继续监听基站主动推送 N 秒（电量/休眠等实时变化）
             "status" => await cmd.StatusAsync(port, GetOptionInt(rest, "--monitor", 0)),
@@ -562,6 +572,68 @@ public class Program
 
             _ => UnknownCommand($"company {action}")
         };
+    }
+
+    private static async Task<int> DispatchCompanyParamAsync(IServiceProvider sp, string[] args)
+    {
+        var cmd = sp.GetRequiredService<CompanyParamCommands>();
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
+        var rest = args.Skip(1).ToArray();
+        var port = GetOption(rest, "--port");
+        var raw = HasFlag(rest, "--raw");
+
+        return action switch
+        {
+            "list" or "ls" => await cmd.ListAsync(port, raw),
+
+            // --id 接受十进制（2）或 0x 十六进制（0x02）
+            "get" => await cmd.GetAsync(port, (byte)ParseHex(GetOptionRequired(rest, "--id")), raw),
+
+            "set" => await cmd.SetAsync(
+                port,
+                (byte)ParseHex(GetOptionRequired(rest, "--id")),
+                float.Parse(GetOptionRequired(rest, "--value"), System.Globalization.CultureInfo.InvariantCulture),
+                raw),
+
+            // 恢复出厂（03 卷 §6）：6 参写回出厂宏值；--only 1,3,5 子集（ID 同 --id 口径）
+            "reset" => await cmd.ResetAsync(port, ParseIdList(GetOption(rest, "--only")), raw),
+
+            // 导出宏片段（03 卷 §6 核心交付）：实读 6 参 + 0x03 版本 → #define 片段（--out 存文件）
+            "export" => await cmd.ExportAsync(port, GetOption(rest, "--note"), GetOption(rest, "--out")),
+
+            // 方案快照 A/B（03 卷 §6）：仅本地 configs/airmouse/*.json，不下笔端
+            "snapshot" or "snap" => await DispatchCompanyParamSnapshotAsync(cmd, rest, port),
+
+            _ => UnknownCommand($"company param {action}")
+        };
+    }
+
+    private static async Task<int> DispatchCompanyParamSnapshotAsync(
+        CompanyParamCommands cmd, string[] args, string? port)
+    {
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
+        var rest = args.Skip(1).ToArray();
+        var name = GetFirstPositional(rest);
+
+        return action switch
+        {
+            "save" => await cmd.SnapshotSaveAsync(port, name ?? "", GetOption(rest, "--note")),
+            "list" or "ls" => await cmd.SnapshotListAsync(),
+            "show" => await cmd.SnapshotShowAsync(name ?? GetOptionRequired(rest, "--name")),
+            "use" => await cmd.SnapshotUseAsync(port, name ?? GetOptionRequired(rest, "--name"), HasFlag(rest, "--raw")),
+            "delete" or "del" => await cmd.SnapshotDeleteAsync(name ?? GetOptionRequired(rest, "--name")),
+            _ => UnknownCommand($"company param snapshot {action}")
+        };
+    }
+
+    /// <summary>`--only 1,3,5`（或 0x 十六进制、空格分隔）→ ID 列表；缺省 null=全部</summary>
+    private static List<byte>? ParseIdList(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        return text.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(t => (byte)ParseHex(t))
+            .ToList();
     }
 
     private static async Task<int> DispatchCompanyPairAsync(CompanyCommands cmd, string[] args, string? port, byte no)
@@ -622,6 +694,8 @@ public class Program
                                [--aec 1] [--ans 1] [--afc 0]  处理链开关（信号顺序：AEC→ANS→AFC）
                                [--aec-suppress N] [--ans-suppress N]  手动调参 dB（0/缺省=自动档）
                                [--aec-gate]  AEC 条件触发：参考静音满 500ms 旁路 AEC（实验，默认关）
+                               [--hpf 80] [--lpf 0]  带通降噪 Hz（0=关；HPF 切机械抖动/低频传导）
+                               [--bridge <设备>] [--bridge-latency 150]  桥接副汇：后级信号复投第二设备（虚拟声卡）
                                [--duration 0(=Ctrl+C 停)]
                      probe   延迟探测：播扫频脉冲串→采集同录→互相关闭环延迟（自校准：--in/--out 同本机）
                                [--pulses 20] [--interval 500] [--pulse-ms 15] [--render-latency-ms 40 仅定测试缓冲大小，不参与扣减]
@@ -654,6 +728,13 @@ public class Program
                     status [--monitor N]     0x53 状态快照（电量/设备状态，仅 USB 轨）+ 监听推送
                     pencmd   统一TX 信封 0x54（无 --port = BLE 中转经基站；--port = 串口直连）：
                              set-k2 <1|2> | query-k2 | send --hex
+                    param    0x61 内部调参（issues-pencil/01/02/03，仅串口轨 --port COMx 笔端直连）：
+                             list | get --id N | set --id N --value F     [--raw 显 VALUE4 hex]
+                             reset [--only 1,3,5]                         6 参写回出厂宏值（逐参回显校验）
+                             export [--note ".."] [--out 文件]             实读 6 参+版本 → #define 回填片段
+                             snapshot save <名> [--note ".."] | list | show <名> | use <名> | delete <名>
+                                                                          方案快照 A/B（本地 configs/airmouse/，不下笔端）
+                             参数 RAM-only：立即生效、掉电回出厂宏值；越界/未知 ID 由笔端裁决
 
         GLOBAL OPTIONS:
             --verbose / -v    Verbose logging
@@ -678,6 +759,12 @@ public class Program
             pencilbox company raw --hex "F5 AA AA 04 61 01 03 00" [--port COM3] [--wait 600]
             pencilbox company status [--monitor 60]                  (0x53 电量/设备状态快照+推送，USB 轨)
             pencilbox company pair clear --port COM20                (0x51/03 清绑定，笔端进配对视窗 60s)
+            pencilbox company param list --port COM23                (0x61 全表读：ID/名称/当前值/范围/单位)
+            pencilbox company param set --port COM23 --id 1 --value 0.35   (调参→立即生效试手感)
+            pencilbox company param get --port COM23 --id 2 --raw    (单参读+VALUE4 hex 对拍)
+            pencilbox company param reset --port COM23               (6 参回出厂宏值，不重启即复位)
+            pencilbox company param export --port COM23 --note "手感定稿 v3" --out macros.c  (宏回填片段)
+            pencilbox company param snapshot save A --port COM23     (快照 A → use B → use A 互切对比)
             pencilbox company pencmd set-k2 1                       (BLE 中转：USB 信封 → 基站 → 当前笔，0x21 方式1)
             pencilbox company pencmd query-k2                       (BLE 中转查询 0x42；笔未连接回 STATUS=02)
             pencilbox company pencmd --port COM20 set-k2 1          (串口直连形态，笔端本地终结)

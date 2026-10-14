@@ -361,12 +361,14 @@ public class AudioCommands
     /// </summary>
     public async Task<int> PassthroughAsync(string? inDevice, string? outDevice,
         int rate, int latencyMs, float volume, int duration, bool aec = true, bool ans = true, bool afc = false,
-        int aecSuppress = 0, int ansSuppress = 0, bool aecGate = false, string? recordOut = null)
+        int aecSuppress = 0, int ansSuppress = 0, bool aecGate = false, string? recordOut = null,
+        int hpfHz = 80, int lpfHz = 0, string? bridgeDevice = null, int bridgeLatencyMs = 150, bool recordBridge = false)
     {
         var captureDevices = await _passthrough.GetCaptureDevicesAsync();
         var renderDevices = await _passthrough.GetRenderDevicesAsync();
         var capture = ResolveDevice(captureDevices, inDevice, "录音");
         var render = ResolveDevice(renderDevices, outDevice, "播放");
+        var bridge = ResolveDevice(renderDevices, bridgeDevice, "桥接");
         AudioPassthroughStats? liveStats = null;
 
         // 输出环回录制（AEC 客观评测：残余回声能量直接可测）
@@ -374,16 +376,18 @@ public class AudioCommands
         if (!string.IsNullOrWhiteSpace(recordOut))
         {
             loop = new OutputLoopRecorder(_logger);
-            loop.Start(render?.DeviceId);
+            loop.Start(recordBridge ? bridge?.DeviceId : render?.DeviceId);
             ConsoleFormatter.Info($"输出环回录制 → {recordOut}");
         }
 
         ConsoleFormatter.Info($"扩音：[{capture?.FriendlyName ?? "系统默认录音"}] → [{render?.FriendlyName ?? "系统默认播放"}]");
         ConsoleFormatter.Info($"{rate}Hz/16bit/1ch，渲染缓冲 {latencyMs}ms，音量 {volume:F2}x（>1 时限制器自动防破音）；" +
+                              $"带通 HPF={(hpfHz > 0 ? $"{hpfHz}Hz" : "关")} LPF={(lpfHz > 0 ? $"{lpfHz}Hz" : "关")}；" +
                               $"处理链 AEC={(aec ? 1 : 0)} ANS={(ans ? 1 : 0)} AFC={(afc ? 1 : 0)}" +
                               (aecSuppress > 0 ? $"（手动 {aecSuppress}dB）" : "") +
                               (ansSuppress > 0 ? $"（手动 {ansSuppress}dB）" : "") +
                               (aecGate ? "；AEC条件触发开（参考静音旁路）" : "") +
+                              (bridge != null ? $"；桥接副汇 → [{bridge.FriendlyName}]（供其他软件当已降噪麦克风）" : "") +
                               $"；实时统计每 500ms 刷新，Ctrl+C 停止。");
         if (duration > 0)
             ConsoleFormatter.Info($"将在 {duration}s 后自动停止。");
@@ -415,7 +419,11 @@ public class AudioCommands
                 AecSuppressDb = aecSuppress > 0 ? aecSuppress : 40,
                 AnsAuto = ansSuppress <= 0,
                 AnsNoiseSuppressDb = ansSuppress > 0 ? ansSuppress : 15,
-                EnableAecGate = aecGate
+                EnableAecGate = aecGate,
+                HpfHz = hpfHz,
+                LpfHz = lpfHz,
+                BridgeDeviceId = bridge?.DeviceId,
+                BridgeLatencyMs = bridgeLatencyMs
             });
 
             try
@@ -459,6 +467,7 @@ public class AudioCommands
             Dsp = $"AEC偏移 {stats.AecOffsetMs:F1}ms / 单帧最大耗时 {stats.DspMaxMs:F2}ms / 超帧 {stats.DspOverruns}",
             Capture = $"{stats.CaptureDevice} ({stats.CaptureFormat})",
             Render = $"{stats.RenderDevice} ({stats.RenderFormat})",
+            Bridge = stats.BridgeDevice.Length == 0 ? "关" : $"{stats.BridgeDevice}（丢弃 {stats.BridgeDroppedBytes}B）",
             stats.CaptureCallbacks,
             stats.RenderPulls
         });

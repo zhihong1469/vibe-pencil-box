@@ -46,6 +46,15 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
     // 麦 AGC），旁路窗口内即起啸且饱和后 AEC 难以再收敛；开局 300ms 线性淡入把窗口堵死。
     private int _fadeInLeft;
     private float _fadeInTotal = 1f;
+
+    // 带通降噪（AEC 前级）：HPF/LPF 各两节级联 24dB/oct；数组整体替换保证运行中调频无撕裂
+    private volatile BiquadFilter[]? _bandpass;
+
+    // 桥接副汇：处理链后级信号复投第二渲染设备（虚拟声卡/第二扬声器），供其他软件当已降噪麦克风。
+    // 写满丢最旧、绝不反压主链——主扩音延迟不受它影响；消费端卡顿只体现为 BridgeDroppedBytes。
+    private PcmRingBuffer? _bridgeRing;
+    private WasapiOut? _bridgeOut;
+    private string _bridgeName = string.Empty;
     private SoftLimiter? _limiter;
     private float[] _limitScratch = Array.Empty<float>();
     private Stopwatch? _clock;
@@ -189,6 +198,9 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         _fadeInTotal = MathF.Max(1f, outFormat.SampleRate * 0.3f);
         _fadeInLeft = (int)_fadeInTotal;
 
+        // 带通降噪下/上边（0=关）
+        ApplyBandpass(options.HpfHz, options.LpfHz);
+
         // 3. 采集：级联尝试（请求格式 → 采集端混音格式 × 事件同步 → 睡眠同步）。
         // 实机坑：USB Audio 1.0 + 事件同步 + 非混音格式 → AudioClient.Initialize 阻塞 ~30s 后
         // E_UNEXPECTED(0x8000FFFF)；一旦出现该码，跳过剩余事件同步尝试，直落睡眠同步。
@@ -314,7 +326,45 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         output.Init(_source);
         _output = output;
         output.Play();
+
+        // 7. 桥接副汇（可选）：复用主链输出字节流；混音格式必须与主输出一致（共享模式端点几乎都是 48k/32f）
+        if (!string.IsNullOrWhiteSpace(options.BridgeDeviceId))
+        {
+            using var bridgeEnum = new MMDeviceEnumerator();
+            var bridgeDevice = ResolveDevice(bridgeEnum, DataFlow.Render, options.BridgeDeviceId, "桥接");
+            using (var bc = bridgeDevice.AudioClient)
+                if (!bc.MixFormat.Equals(outFormat))
+                    throw new NotSupportedException($"桥接端点混音格式与主输出不一致（{bc.MixFormat} ≠ {outFormat}），快线桥接暂不支持");
+            _bridgeRing = new PcmRingBuffer(Math.Max(1, (int)(outFormat.AverageBytesPerSecond * 0.5)));
+            _bridgeName = bridgeDevice.FriendlyName;
+            var bridgeLatency = Math.Clamp(options.BridgeLatencyMs, 50, 500);
+            _bridgeOut = new WasapiOut(bridgeDevice, AudioClientShareMode.Shared, useEventSync: true, bridgeLatency);
+            _bridgeOut.Init(new BridgeSource(this, outFormat));
+            _bridgeOut.Play();
+            _logger.LogInformation("桥接副汇已启动: {Device}, 缓冲 {Ms}ms", _bridgeName, bridgeLatency);
+        }
     }
+
+    /// <summary>构建带通级联（各两节 24dB/oct）；两边都关则返回 null</summary>
+    private void ApplyBandpass(int hpfHz, int lpfHz)
+    {
+        var rate = _outFormat?.SampleRate ?? 16000;
+        var list = new List<BiquadFilter>(4);
+        if (hpfHz > 0)
+        {
+            list.Add(new BiquadFilter(BiquadResponse.HighPass, hpfHz, rate));
+            list.Add(new BiquadFilter(BiquadResponse.HighPass, hpfHz, rate));
+        }
+        if (lpfHz > 0)
+        {
+            list.Add(new BiquadFilter(BiquadResponse.LowPass, lpfHz, rate));
+            list.Add(new BiquadFilter(BiquadResponse.LowPass, lpfHz, rate));
+        }
+        Volatile.Write(ref _bandpass, list.Count == 0 ? null : list.ToArray());
+    }
+
+    /// <summary>运行中调整带通（UI 滑条；数组整体替换，采集线程逐帧取引用）</summary>
+    public void SetBandpass(int hpfHz, int lpfHz) => ApplyBandpass(hpfHz, lpfHz);
 
     private void DetachAndDispose(WasapiCapture capture)
     {
@@ -365,6 +415,15 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
 
         capture?.Dispose();
         output?.Dispose();
+        WasapiOut? bridgeOut;
+        lock (_gate) { bridgeOut = _bridgeOut; _bridgeOut = null; }
+        if (bridgeOut != null)
+        {
+            try { bridgeOut.Stop(); } catch (Exception ex) { _logger.LogWarning(ex, "停止桥接渲染异常"); }
+            bridgeOut.Dispose();
+        }
+        _bridgeRing = null;
+        _bridgeName = string.Empty;
         _source = null;
         _ring = null;
         _converter = null;
@@ -507,6 +566,11 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             _dspClock.Restart();
             Buffer.BlockCopy(_micFrameBytes, 0, _micFrame, 0, _micFrameBytes.Length);
 
+            // 带通降噪（AEC 前级）：切机械抖动/低频传导与高频嘶声；参考同链已滤，路径一致性由自适应保证
+            var bp = _bandpass;
+            if (bp != null)
+                foreach (var section in bp) section.Process(_micFrame);
+
             // 参考对齐取数：标称延迟 + 估计器修正；参考历史不足（启动初期）时旁路 AEC。
             // 条件触发（可选）：参考帧 RMS 静音满保持窗 → 旁路 AEC（判据是参考而非麦克风，见 AecSilenceGate）。
             var lag = _refLagNominal + (_estimator?.OffsetSamples ?? 0);
@@ -531,7 +595,11 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
                 _estimator.Update(_micFrame, _refWide);
 
             var outBytes = _chainOut!.Convert(MemoryMarshal.AsBytes(_dspFrame.AsSpan()), _chainOutScratch.AsSpan());
-            if (outBytes > 0) ring.Write(_chainOutScratch.AsSpan(0, outBytes));
+            if (outBytes > 0)
+            {
+                ring.Write(_chainOutScratch.AsSpan(0, outBytes));
+                _bridgeRing?.Write(_chainOutScratch.AsSpan(0, outBytes));   // 满则丢最旧，不反压
+            }
 
             _dspClock.Stop();
             var ns = (long)(_dspClock.Elapsed.TotalMilliseconds * 1_000_000);
@@ -696,6 +764,8 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             AecOffsetMs = _estimator == null ? 0 : _estimator.OffsetSamples / 16.0,
             DspMaxMs = Interlocked.Read(ref _dspMaxNs) / 1_000_000.0,
             DspOverruns = Interlocked.Read(ref _dspOverruns),
+            BridgeDevice = _bridgeName,
+            BridgeDroppedBytes = _bridgeRing?.DroppedBytes ?? 0,
             EstimatedLatencyMs = EstimateBoxLatencyMs(),
             AecGateBypassMs = Interlocked.Read(ref _gateBypassFrames) * 10
         };
@@ -775,5 +845,26 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
 
         public int Read(byte[] buffer, int offset, int count)
             => _engine.RenderPull(buffer.AsSpan(offset, count));
+    }
+
+    /// <summary>桥接副汇拉取源：读桥接环，欠载补静音（非实时消费，宁缺毋滞）</summary>
+    private sealed class BridgeSource : IWaveProvider
+    {
+        private readonly WasapiPassthroughEngine _engine;
+
+        public WaveFormat WaveFormat { get; }
+
+        public BridgeSource(WasapiPassthroughEngine engine, WaveFormat format)
+        {
+            _engine = engine;
+            WaveFormat = format;
+        }
+
+        public int Read(byte[] buffer, int offset, int count)
+        {
+            var n = _engine._bridgeRing?.Read(buffer.AsSpan(offset, count)) ?? 0;
+            if (n < count) buffer.AsSpan(offset + n, count - n).Clear();
+            return count;
+        }
     }
 }

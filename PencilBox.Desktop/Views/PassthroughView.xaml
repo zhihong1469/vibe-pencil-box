@@ -23,6 +23,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -44,7 +45,15 @@
                 <TextBlock Grid.Row="1" Grid.Column="2" Text="空 = 系统默认扬声器" FontSize="11"
                            Foreground="Gray" VerticalAlignment="Center" Margin="4"/>
 
-                <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="4">
+                <TextBlock Text="桥接副汇:" Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="4"/>
+                <ComboBox Grid.Row="2" Grid.Column="1"
+                          ItemsSource="{Binding RenderDevices}"
+                          SelectedItem="{Binding SelectedBridgeDevice}" Margin="4"
+                          ToolTip="把降噪后的信号复投到第二设备（如虚拟声卡），其他软件可把它当已降噪麦克风用。副汇丢最旧保最新，绝不反压主链——不影响扩音延迟。空 = 关。"/>
+                <TextBlock Grid.Row="2" Grid.Column="2" Text="空 = 关（主链零影响）" FontSize="11"
+                           Foreground="Gray" VerticalAlignment="Center" Margin="4"/>
+
+                <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="4">
                     <TextBlock Text="音量:" VerticalAlignment="Center"/>
                     <Slider Minimum="0" Maximum="100" Value="{Binding VolumeSlider}" MinWidth="160" Margin="8,0"
                             VerticalAlignment="Center"
@@ -79,6 +88,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -86,12 +96,26 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <CheckBox Grid.Row="0" Grid.Column="0" Content="回声消除 AEC（扩音出声时开；戴耳机监听可关）"
+                <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="2,3">
+                    <TextBlock Text="带通降噪（切机械抖动/低频传导与高频嘶声；位于 AEC 之前）" VerticalAlignment="Center"/>
+                    <TextBlock Text="低切 HPF:" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                    <Slider Minimum="0" Maximum="400" TickFrequency="20" IsSnapToTickEnabled="True"
+                            Value="{Binding HpfSlider}" MinWidth="130" Margin="6,0" VerticalAlignment="Center"
+                            ToolTip="低于此频率全部滤除（两节 24dB/oct）。切机械抖动/腔体低频共振：默认 80Hz，机械振动明显可提到 120~150Hz；拉到 0（或 &lt;40）即关闭。运行中拖动即时生效。"/>
+                    <TextBlock Text="{Binding HpfDisplay, StringFormat={}{0}}" Width="46" VerticalAlignment="Center"/>
+                    <TextBlock Text="高切 LPF:" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                    <Slider Minimum="0" Maximum="7800" TickFrequency="200" IsSnapToTickEnabled="True"
+                            Value="{Binding LpfSlider}" MinWidth="130" Margin="6,0" VerticalAlignment="Center"
+                            ToolTip="高于此频率全部滤除（两节 24dB/oct）。切高频嘶声/超声残余；&lt;2000 视为关闭（默认关）。运行中拖动即时生效。"/>
+                    <TextBlock Text="{Binding LpfDisplay, StringFormat={}{0}}" Width="46" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <CheckBox Grid.Row="1" Grid.Column="0" Content="回声消除 AEC（扩音出声时开；戴耳机监听可关）"
                           IsChecked="{Binding AecEnabled}" VerticalAlignment="Center" Margin="2,3"/>
-                <CheckBox Grid.Row="0" Grid.Column="1" Content="手动调参" IsChecked="{Binding AecManual}"
+                <CheckBox Grid.Row="1" Grid.Column="1" Content="手动调参" IsChecked="{Binding AecManual}"
                           VerticalAlignment="Center" Margin="16,3,2,3"
                           ToolTip="缺省=自动档（教科书预设：残余抑制 40dB / 双讲 15dB）。勾选后开放滑条，边调边听边学。"/>
-                <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                             IsEnabled="{Binding AecManual}" Margin="4,0,0,0">
                     <TextBlock Text="残余抑制:" VerticalAlignment="Center"/>
                     <Slider Minimum="10" Maximum="60" Value="{Binding AecSuppressDb}" MinWidth="110" Margin="6,0"
@@ -105,17 +129,17 @@
                     <TextBlock Text="{Binding AecSuppressActiveDb, StringFormat={}{0:F0}dB}" Width="42" VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <CheckBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="24,1,2,3"
+                <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="24,1,2,3"
                           Content="条件触发（实验）：参考静音满 500ms 自动旁路 AEC，参考一响立即恢复"
                           IsChecked="{Binding AecGateEnabled}"
                           ToolTip="判据取参考信号（要播出的声音）而非麦克风——参考静音才不可能有新回声。效果需人工听感确认，默认关。"/>
 
-                <CheckBox Grid.Row="2" Grid.Column="0" Content="噪声抑制 ANS（含 AEC 残余处理；位于 AEC 之后）"
+                <CheckBox Grid.Row="3" Grid.Column="0" Content="噪声抑制 ANS（含 AEC 残余处理；位于 AEC 之后）"
                           IsChecked="{Binding AnsEnabled}" VerticalAlignment="Center" Margin="2,3"/>
-                <CheckBox Grid.Row="2" Grid.Column="1" Content="手动调参" IsChecked="{Binding AnsManual}"
+                <CheckBox Grid.Row="3" Grid.Column="1" Content="手动调参" IsChecked="{Binding AnsManual}"
                           VerticalAlignment="Center" Margin="16,3,2,3"
                           ToolTip="缺省=自动档（教科书预设 15dB）。勾选后开放滑条。"/>
-                <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                <StackPanel Grid.Row="3" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                             IsEnabled="{Binding AnsManual}" Margin="4,0,0,0">
                     <TextBlock Text="降噪强度:" VerticalAlignment="Center"/>
                     <Slider Minimum="0" Maximum="35" Value="{Binding AnsNoiseSuppressDb}" MinWidth="110" Margin="6,0"
@@ -124,11 +148,11 @@
                     <TextBlock Text="{Binding AnsNoiseSuppressDb, StringFormat={}{0:F0}dB}" Width="42" VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <CheckBox Grid.Row="3" Grid.Column="0" Content="啸叫移频 AFC（破坏啸叫相位相干；轻微音质代价，默认关）"
+                <CheckBox Grid.Row="4" Grid.Column="0" Content="啸叫移频 AFC（破坏啸叫相位相干；轻微音质代价，默认关）"
                           IsChecked="{Binding AfcEnabled}" VerticalAlignment="Center" Margin="2,3"/>
-                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
-                           Text="峰值限制器常开（防破音保护，不占开关）" FontSize="11" Foreground="Gray" Margin="2,4,0,0"/>
                 <TextBlock Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
+                           Text="峰值限制器常开（防破音保护，不占开关）" FontSize="11" Foreground="Gray" Margin="2,4,0,0"/>
+                <TextBlock Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="3"
                            Text="{Binding ChainWarning}" TextWrapping="Wrap" FontSize="11"
                            Foreground="DarkOrange" Margin="2,3,0,0"
                            Visibility="{Binding ChainWarningVisibility}"/>

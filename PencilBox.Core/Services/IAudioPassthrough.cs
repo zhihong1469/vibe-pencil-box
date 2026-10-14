@@ -64,6 +64,11 @@ public interface IAudioPassthrough : IDisposable
     /// 运行中即时切换。
     /// </summary>
     void SetAecGateEnabled(bool enabled);
+
+    /// <summary>
+    /// 带通降噪（切机械抖动/低频传导与高频嘶声；作用于 AEC 之前的麦克风帧）。0 = 该边关闭。运行中即时生效。
+    /// </summary>
+    void SetBandpass(int hpfHz, int lpfHz);
 }
 
 /// <summary>
