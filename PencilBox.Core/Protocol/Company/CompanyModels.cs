@@ -41,6 +41,14 @@ public static class CompanyCmd
     /// 的 `0x61` 重叠纯属 CMDTYPE 命名空间巧合，互不冲突。
     /// </summary>
     public const byte TuningParam = 0x61;
+
+    /// <summary>
+    /// 空鼠遥测流（笔端 06 卷：`0x62/01` START · `0x62/00` STOP · LEN=21 载荷=流帧）。
+    /// 与 <see cref="TuningParam"/> 同族——**仅串口轨**、`srv_f5_cmds` 就地应答不进 FSM、
+    /// 流帧无应答 PC 不回帧。数值与 <see cref="CompanyFrame.BaseCmdRequest"/> 的 `0x62` 重叠
+    /// 同属 CMDTYPE 命名空间巧合。
+    /// </summary>
+    public const byte StreamTelemetry = 0x62;
 }
 
 /// <summary>`PARAM`（`CMDTYPE` 之后的首字节）</summary>
@@ -277,3 +285,54 @@ public sealed record VersionInfo(byte Status, byte Model, byte SverMajor, byte S
 
 /// <summary>`0x61` 内部调参一条读值：参数 ID + float32 当前/生效值</summary>
 public sealed record TuningParamReading(byte Id, float Value);
+
+/// <summary>`0x62` 子命令 `CMDTYPE`（笔端 06 卷 §1：01=START / 00=STOP）</summary>
+public static class StreamCmd
+{
+    /// <summary>START：请求载荷 `[divider u8]`（1=每帧 50Hz、2=25Hz…）；应答 `[01][STATUS][echo divider]`</summary>
+    public const byte Start = 0x01;
+
+    /// <summary>STOP：请求空载荷；应答 `[00][STATUS]`；未开再停=00 幂等</summary>
+    public const byte Stop = 0x00;
+
+    /// <summary>流帧载荷定长（21B；帧 LEN 字节=0x18、帧总长 28B）</summary>
+    public const int FramePayloadLength = 21;
+
+    /// <summary>应答与流帧的判别口径：CMDTYPE `0x62` 载荷 ≤3B=START/STOP 应答（与请求配对消费），=21B=流帧</summary>
+    public static bool IsResponse(int payloadLength) => payloadLength is >= 2 and <= 3;
+}
+
+/// <summary>`0x62` 流帧 `flags` 位（笔端 06 卷 §2）</summary>
+public static class TelemetryFlags
+{
+    /// <summary>bit0：冻结期（含释放尾窗）</summary>
+    public const byte Frozen = 0x01;
+
+    /// <summary>bit1：意图门已转拖拽</summary>
+    public const byte DragIntent = 0x02;
+
+    /// <summary>bit2：零偏已标定</summary>
+    public const byte BiasCalibrated = 0x04;
+}
+
+/// <summary>
+/// `0x62` 流帧（定长 21B，大端，笔端 06 卷 §2）：raw 六轴为**寄存器 LSB 原码**（不换算不去偏，
+/// 换算系数落 <see cref="CompanyConfig"/> 单点）；rate 为滤波后 0.01dps 定点；out 为 HID 出口位移。
+/// </summary>
+public sealed record TelemetryFrame(
+    ushort Seq,
+    byte Flags,
+    short RawGx, short RawGy, short RawGz,
+    short RawAx, short RawAy, short RawAz,
+    short RateYaw, short RateRoll,
+    sbyte OutX, sbyte OutY)
+{
+    /// <summary>bit0：冻结期（含尾窗）</summary>
+    public bool IsFrozen => (Flags & TelemetryFlags.Frozen) != 0;
+
+    /// <summary>bit1：意图门已转拖拽</summary>
+    public bool IsDragIntent => (Flags & TelemetryFlags.DragIntent) != 0;
+
+    /// <summary>bit2：零偏已标定</summary>
+    public bool IsBiasCalibrated => (Flags & TelemetryFlags.BiasCalibrated) != 0;
+}

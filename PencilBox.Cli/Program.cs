@@ -85,6 +85,7 @@ public class Program
         services.AddSingleton<ConfigCommands>();
         services.AddSingleton<CompanyCommands>();
         services.AddSingleton<CompanyParamCommands>();
+        services.AddSingleton<CompanyStreamCommands>();
         services.AddSingleton<KeymapCommands>();
 
         var sp = services.BuildServiceProvider();
@@ -560,6 +561,14 @@ public class Program
             // list 全表 / get 单参 / set 单参写 / reset 恢复出厂 / export 导出宏片段 / snapshot 方案快照 A/B
             "param" => await DispatchCompanyParamAsync(sp, rest),
 
+            // 0x62 空鼠遥测流（笔端 06 卷；仅串口轨）：on/off 测帧率、record 录波落 CSV
+            "stream" => await DispatchCompanyStreamAsync(sp, rest),
+            "record" => await sp.GetRequiredService<CompanyStreamCommands>().RecordAsync(
+                GetOption(rest, "--port"),
+                GetOptionInt(rest, "--secs", 30),
+                (byte)Math.Clamp(GetOptionInt(rest, "--div", 1), 1, 255),
+                GetOption(rest, "--out")),
+
             // 0x53 状态上行（基站把统一TX 状态槽原样搬运上行；仅 USB 轨）：
             // 拉取快照一次，--monitor N 继续监听基站主动推送 N 秒（电量/休眠等实时变化）
             "status" => await cmd.StatusAsync(port, GetOptionInt(rest, "--monitor", 0)),
@@ -573,6 +582,25 @@ public class Program
                 GetOption(rest, "--hex")),
 
             _ => UnknownCommand($"company {action}")
+        };
+    }
+
+    /// <summary>`company stream on [--div N] [--secs N] [--keep] | off`（0x62 遥测流，笔端 06 卷）</summary>
+    private static async Task<int> DispatchCompanyStreamAsync(IServiceProvider sp, string[] args)
+    {
+        var cmd = sp.GetRequiredService<CompanyStreamCommands>();
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "";
+        var rest = args.Skip(1).ToArray();
+
+        return action switch
+        {
+            "on" => await cmd.StreamOnAsync(
+                GetOption(rest, "--port"),
+                (byte)Math.Clamp(GetOptionInt(rest, "--div", 1), 1, 255),
+                GetOptionInt(rest, "--secs", 5),
+                HasFlag(rest, "--keep")),
+            "off" => await cmd.StreamOffAsync(GetOption(rest, "--port")),
+            _ => UnknownCommand("company stream on|off")
         };
     }
 
@@ -597,10 +625,10 @@ public class Program
                 float.Parse(GetOptionRequired(rest, "--value"), System.Globalization.CultureInfo.InvariantCulture),
                 raw),
 
-            // 恢复出厂（03 卷 §6）：6 参写回出厂宏值；--only 1,3,5 子集（ID 同 --id 口径）
+            // 恢复出厂（03 卷 §6）：可写 8 参（0x01~0x08，01 卷 §5+§5.1）写回出厂宏值；--only 1,3,5 子集（ID 同 --id 口径）
             "reset" => await cmd.ResetAsync(port, ParseIdList(GetOption(rest, "--only")), raw),
 
-            // 导出宏片段（03 卷 §6 核心交付）：实读 6 参 + 0x03 版本 → #define 片段（--out 存文件）
+            // 导出宏片段（03 卷 §6 核心交付）：实读全表 + 0x03 版本 → #define 片段（零偏项不入宏只附注释；--out 存文件）
             "export" => await cmd.ExportAsync(port, GetOption(rest, "--note"), GetOption(rest, "--out")),
 
             // 方案快照 A/B（03 卷 §6）：仅本地 configs/airmouse/*.json，不下笔端
@@ -733,11 +761,18 @@ public class Program
                              set-k2 <1|2> | query-k2 | send --hex
                     param    0x61 内部调参（issues-pencil/01/02/03，仅串口轨 --port COMx 笔端直连）：
                              list | get --id N | set --id N --value F     [--raw 显 VALUE4 hex]
-                             reset [--only 1,3,5]                         6 参写回出厂宏值（逐参回显校验）
-                             export [--note ".."] [--out 文件]             实读 6 参+版本 → #define 回填片段
+                                                                          （11 参=01 卷 §5+§5.1；0x09/0x0A 只读、0x0B 写1=固化/写2=清除）
+                             reset [--only 1,3,5]                         可写 8 参（0x01~0x08）写回出厂宏值（逐参回显校验）
+                             export [--note ".."] [--out 文件]             实读全表+版本 → #define 回填片段（零偏项只附注释不入宏）
                              snapshot save <名> [--note ".."] | list | show <名> | use <名> | delete <名>
                                                                           方案快照 A/B（本地 configs/airmouse/，不下笔端）
                              参数 RAM-only：立即生效、掉电回出厂宏值；越界/未知 ID 由笔端裁决
+                    stream   0x62 遥测流开关（笔端 06 卷，仅串口轨）：
+                             on [--div N] [--secs 5] [--keep]     START→实测帧率→自动 STOP（--keep 保持推流）
+                             off [--port COMx]                    STOP（幂等；测完自拆不留后台流）
+                    record   [--secs 30] [--div 1] [--out f.csv] --port COMx
+                                                              START→收 N 秒→STOP→CSV 落盘（原码直出）+
+                                                              # meta: fps/dropped/div/fw 尾注；Ctrl+C 提前收束不丢数据
 
         GLOBAL OPTIONS:
             --verbose / -v    Verbose logging
@@ -765,9 +800,11 @@ public class Program
             pencilbox company param list --port COM23                (0x61 全表读：ID/名称/当前值/范围/单位)
             pencilbox company param set --port COM23 --id 1 --value 0.35   (调参→立即生效试手感)
             pencilbox company param get --port COM23 --id 2 --raw    (单参读+VALUE4 hex 对拍)
-            pencilbox company param reset --port COM23               (6 参回出厂宏值，不重启即复位)
+            pencilbox company param reset --port COM23               (可写 8 参回出厂宏值，不重启即复位)
             pencilbox company param export --port COM23 --note "手感定稿 v3" --out macros.c  (宏回填片段)
             pencilbox company param snapshot save A --port COM23     (快照 A → use B → use A 互切对比)
+            pencilbox company stream on --port COM23 --secs 5        (0x62 START→实测帧率→自动 STOP)
+            pencilbox company record --port COM23 --secs 30 --out r.csv   (录波→CSV+meta；配 tools/airmouse_metrics.py)
             pencilbox company pencmd set-k2 1                       (BLE 中转：USB 信封 → 基站 → 当前笔，0x21 方式1)
             pencilbox company pencmd query-k2                       (BLE 中转查询 0x42；笔未连接回 STATUS=02)
             pencilbox company pencmd --port COM20 set-k2 1          (串口直连形态，笔端本地终结)

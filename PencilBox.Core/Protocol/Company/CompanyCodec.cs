@@ -93,13 +93,14 @@ public interface ICompanyCodec
     byte[] EncodeTuningWrite(byte paramId, float value);
 
     /// <summary>
-    /// 解析 `0x61/01` 单参读应答：`[01][STATUS][PARAM_ID][VALUE4]`（`LEN=0x08`）。
+    /// 解析 `0x61/01` 单参读应答：`[01][STATUS][PARAM_ID][VALUE4]`（帧 LEN=`0x0A`——01 卷勘误 2：
+    /// 原载 0x08 系笔误；PC 按字段结构式解析，不受该勘误影响）。
     /// 结构合法即 true（业务成败由 <paramref name="status"/> 表达）。
     /// </summary>
     bool TryParseTuningReadResp(ReadOnlySpan<byte> data, out byte status, out byte paramId, out float value);
 
     /// <summary>
-    /// 解析 `0x61/01` 全表读应答：`[01][STATUS][FF][COUNT][ID+VALUE4]×N`（`LEN=0x07+5N`；6 参 → `0x25`）。
+    /// 解析 `0x61/01` 全表读应答：`[01][STATUS][FF][COUNT][ID+VALUE4]×N`（`LEN=0x07+5N`；6 参 → `0x25`，扩表 11 参 → `0x3E`）。
     /// `COUNT` 与载荷按 N×5 校验，尾部多余字节忽略（前向兼容）。
     /// </summary>
     bool TryParseTuningReadAllResp(ReadOnlySpan<byte> data, out byte status,
@@ -110,6 +111,26 @@ public interface ICompanyCodec
     /// `STATUS=00` 时 VALUE4=生效值；`=02`（越界拒收）时 VALUE4=**写前旧值**（笔端不夹取）。
     /// </summary>
     bool TryParseTuningWriteResp(ReadOnlySpan<byte> data, out byte status, out byte paramId, out float effective);
+
+    // ===== 0x62 空鼠遥测流（笔端 06 卷；仅串口轨，流帧无应答 PC 不回帧）=====
+
+    /// <summary>`0x62/01` START：`[01][divider u8]`（`LEN=0x04`；divider 1=每帧 50Hz、2=25Hz…）</summary>
+    byte[] EncodeStreamStart(byte divider);
+
+    /// <summary>`0x62/00` STOP：空载荷（`LEN=0x03`；未开再停=00 幂等）</summary>
+    byte[] EncodeStreamStop();
+
+    /// <summary>
+    /// 解析 START/STOP 应答：START=`[01][STATUS][echo divider]`、STOP=`[00][STATUS]`（载荷 ≤3B）。
+    /// 回显 `SUBCMD` 须等于 <paramref name="expectSubCmd"/>（与请求配对消费）。
+    /// </summary>
+    bool TryParseStreamResp(ReadOnlySpan<byte> data, byte expectSubCmd, out byte status, out byte divider);
+
+    /// <summary>
+    /// 解析 `0x62` 流帧载荷（定长 21B 大端，笔端 06 卷 §2）；
+    /// 长度不符（含 START/STOP 应答混入）返回 false。
+    /// </summary>
+    bool TryParseTelemetryFrame(ReadOnlySpan<byte> data, out TelemetryFrame frame);
 
     // ===== 0x16 固件升级（拉模式；字段序＝公司 §3.2 / 正文 上位机/03 §②）=====
 
@@ -498,6 +519,63 @@ public sealed class CompanyCodec : ICompanyCodec
         effective = ReadSingleBigEndian(data.Slice(3, 4));
         return true;
     }
+
+    // ================= 0x62 空鼠遥测流（笔端 06 卷） =================
+
+    public byte[] EncodeStreamStart(byte divider) =>
+        CompanyFrame.Build(CompanyFrame.BaseCmdRequest, CompanyCmd.StreamTelemetry,
+            new[] { StreamCmd.Start, divider });
+
+    public byte[] EncodeStreamStop() =>
+        CompanyFrame.Build(CompanyFrame.BaseCmdRequest, CompanyCmd.StreamTelemetry, new[] { StreamCmd.Stop });
+
+    public bool TryParseStreamResp(ReadOnlySpan<byte> data, byte expectSubCmd, out byte status, out byte divider)
+    {
+        status = 0;
+        divider = 0;
+
+        // START: [01][STATUS][divider]（3B） / STOP: [00][STATUS]（2B）——回显子命令配对
+        if (data.Length is < 2 or > 3 || data[0] != expectSubCmd)
+            return false;
+
+        status = data[1];
+        if (expectSubCmd == StreamCmd.Start)
+        {
+            if (data.Length < 3)
+                return false;
+            divider = data[2];
+        }
+
+        return true;
+    }
+
+    public bool TryParseTelemetryFrame(ReadOnlySpan<byte> data, out TelemetryFrame frame)
+    {
+        if (data.Length != StreamCmd.FramePayloadLength)
+        {
+            frame = new TelemetryFrame(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            return false;
+        }
+
+        frame = new TelemetryFrame(
+            (ushort)((data[0] << 8) | data[1]),
+            data[2],
+            ReadInt16BigEndian(data.Slice(3)),
+            ReadInt16BigEndian(data.Slice(5)),
+            ReadInt16BigEndian(data.Slice(7)),
+            ReadInt16BigEndian(data.Slice(9)),
+            ReadInt16BigEndian(data.Slice(11)),
+            ReadInt16BigEndian(data.Slice(13)),
+            ReadInt16BigEndian(data.Slice(15)),
+            ReadInt16BigEndian(data.Slice(17)),
+            (sbyte)data[19],
+            (sbyte)data[20]);
+        return true;
+    }
+
+    /// <summary>i16 大端原码（流帧六轴/rate；补码直取）</summary>
+    private static short ReadInt16BigEndian(ReadOnlySpan<byte> source) =>
+        (short)((source[0] << 8) | source[1]);
 
     /// <summary>float32 → 4B 大端（VALUE4；黄金向量口径：0.27f=3E 8A 3D 71）</summary>
     private static void WriteSingleBigEndian(float value, Span<byte> destination)

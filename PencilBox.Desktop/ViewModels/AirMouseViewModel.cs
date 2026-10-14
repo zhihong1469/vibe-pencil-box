@@ -25,8 +25,9 @@ namespace PencilBox.Desktop.ViewModels;
 /// <summary>
 /// `空鼠` 调参工作台（issues-pencil/03：基础页升级版）。
 ///
-/// 布局=连接栏 + 6 参数卡片（滑条/步进/折页文案/★偏离/防抖自动下发）+ 增益曲线实时图（0x02/03/04 联动）
-/// + 0x01×0x02 嵌套助手 + 会话面板（方案快照 A/B、恢复出厂、变更历史、导出宏片段、试手感清单）。
+/// 布局=连接栏 + 可写参数卡片（0x01~0x08：滑条/步进/折页文案/★偏离/防抖自动下发；0x09~0x0B 只读/控制型走 CLI）
+/// + 增益曲线实时图（0x02/03/04 联动）+ 0x01×0x02 嵌套助手 + 0x62 遥测流三视图（Telemetry，页内下方）
+/// + 会话面板（方案快照 A/B、恢复出厂、变更历史、导出宏片段、试手感清单）。
 /// 通信与 CLI 完全同源（同一 0x61/01 读、0x61/02 写帧；<see cref="ITuningService"/>）；
 /// 快照经 <see cref="IAirMouseSnapshotStore"/> 落 `configs/airmouse/`，与 CLI `param snapshot` 互通。
 /// </summary>
@@ -47,6 +48,9 @@ public partial class AirMouseViewModel : ObservableObject
     /// <summary>0x01×0x02 嵌套基准（小范围有效增益 0.08；03 卷 §5，设置化留后续）</summary>
     private const float BaselineEffectiveGain = 0.08f;
 
+    /// <summary>遥测流与录波子区（0x62，对齐卷 06；内嵌「空鼠」页下方，与调参共用同一串口连接）</summary>
+    public TelemetryViewModel Telemetry { get; }
+
     public AirMouseViewModel(ITuningService tuning, ISerialTransport serialTransport,
         SerialCommandChannel serialChannel, ICompanyCodec codec, IAirMouseSnapshotStore snapshots,
         IClock clock, CompanyConfig config)
@@ -58,8 +62,10 @@ public partial class AirMouseViewModel : ObservableObject
         _snapshots = snapshots;
         _requester = new CommandRequester(clock, config);
         _config = config;
+        Telemetry = new TelemetryViewModel(serialTransport, serialChannel, codec, clock, config);
 
-        foreach (var d in TuningParamTable.All)
+        // 只为可写参数（0x01~0x08）建卡：0x09/0x0A 只读、0x0B 固化控制走 CLI（01 卷 §5.1）
+        foreach (var d in TuningParamTable.Tunable)
         {
             var card = new AirMouseCardViewModel(d);
             card.CommitRequested += MarkPending;
@@ -239,11 +245,15 @@ public partial class AirMouseViewModel : ObservableObject
                                 : "");
             RefreshCurveAndLinkage();
         }
+        catch (TuningNoAnswerException)
+        {
+            // 无应答 ≠ 链路断：笔端未实现 0x61 阶段 100% 发生且属预期（串口本体未动，
+            // 链路判定只认传输层 ConnectionStateChanged——勿再按消息文本打 Lost）
+            StatusMessage = "读取无应答——笔端 0x61 未实现前属预期（链路未断，无需重连）；固件上线后此处即出数";
+        }
         catch (Exception ex)
         {
             StatusMessage = $"读取失败：{ex.Message}";
-            if (ex.Message.Contains("无应答"))
-                LinkState = AirMouseLinkState.Lost;
         }
         finally
         {
@@ -333,16 +343,16 @@ public partial class AirMouseViewModel : ObservableObject
                     return false;
             }
         }
+        catch (TuningNoAnswerException)
+        {
+            // 无应答 ≠ 链路断（笔端未实现 0x61 前属预期；链路判定只认传输层事件）
+            card.ErrorText = "无应答——笔端 0x61 未实现前属预期（链路未断，无需重连）";
+            StatusMessage = "写参数无应答（500ms×4）——笔端 0x61 未实现前属预期，非断连";
+            return false;
+        }
         catch (Exception ex)
         {
             card.ErrorText = ex.Message;
-            if (ex.Message.Contains("无应答"))
-            {
-                LinkState = AirMouseLinkState.Lost;
-                OnPropertyChanged(nameof(IsConnected));
-                OnPropertyChanged(nameof(IsNotConnected));
-                StatusMessage = "写参数无应答（500ms×3）——连接丢失？请重新连接（重连后自动全表读刷新）";
-            }
             return false;
         }
         finally
@@ -593,7 +603,7 @@ public partial class AirMouseViewModel : ObservableObject
         RefreshSnapshotNames();
     }
 
-    /// <summary>恢复出厂（03 §6）：6 参写回出厂宏值（=CLI `param reset` 同源语义）</summary>
+    /// <summary>恢复出厂（03 §6）：可写参数（0x01~0x08）写回出厂宏值（=CLI `param reset` 同源语义）</summary>
     [RelayCommand(CanExecute = nameof(IsConnected))]
     private async Task RestoreFactoryAsync()
     {
@@ -697,7 +707,7 @@ public partial class AirMouseCardViewModel : ObservableObject
     public string Unit => D.Unit;
     public string FactoryText => TuningParamDescriptor.Format(D.Factory);
     public string Guide => D.Guide;
-    public Visibility AdvancedVisibility => D.Id == 0x06 ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility AdvancedVisibility => D.Id is 0x06 or 0x07 or 0x08 ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>生效值显示文本（<see cref="EchoValue"/> 为 [ObservableProperty] 生成的笔端确认值）</summary>
     public string EchoText => TuningParamDescriptor.Format(EchoValue);

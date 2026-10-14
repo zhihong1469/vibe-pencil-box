@@ -165,9 +165,10 @@ public class CompanyTuningTests
     // ================= 工具端范围表（02 卷 §3：与 01 卷 §5 单一来源对拍） =================
 
     [Fact]
-    public void TuningParamTable_SixEntries_MatchesProtocolSpec()
+    public void TuningParamTable_ElevenEntries_MatchesProtocolSpec()
     {
-        Assert.Equal(6, TuningParamTable.All.Count);
+        // 01 卷 §5 首发 6 项 + §5.1 零偏机制 v2 扩表 5 项 = 11
+        Assert.Equal(11, TuningParamTable.All.Count);
 
         var expected = new (byte Id, float Factory, float Min, float Max)[]
         {
@@ -177,6 +178,11 @@ public class CompanyTuningTests
             (0x04, 8.0f, 1.0f, 50.0f),
             (0x05, 0.5f, 0.0f, 5.0f),
             (0x06, 250f, 0.0f, 1000f),
+            (0x07, 0f, -10f, 10f),
+            (0x08, 0f, -10f, 10f),
+            (0x09, 0f, 0f, 0f),
+            (0x0A, 0f, 0f, 0f),
+            (0x0B, 0f, 1f, 2f),
         };
 
         for (int i = 0; i < expected.Length; i++)
@@ -188,9 +194,37 @@ public class CompanyTuningTests
             Assert.Equal(expected[i].Max, d.Max, 5);
         }
 
-        Assert.NotNull(TuningParamTable.Find(0x06));
-        Assert.Null(TuningParamTable.Find(0x07));
+        // 访问权限分流（§5.1）：0x07/0x08 可调（无宏）、0x09/0x0A 只读、0x0B 控制型
+        Assert.Equal(8, TuningParamTable.All.Count(p => p.Access == TuningParamAccess.Tunable));
+        Assert.Equal(TuningParamAccess.ReadOnly, TuningParamTable.Find(0x09)!.Access);
+        Assert.Equal(TuningParamAccess.ReadOnly, TuningParamTable.Find(0x0A)!.Access);
+        Assert.Equal(TuningParamAccess.Control, TuningParamTable.Find(0x0B)!.Access);
+        Assert.All(BiasTableItems(), d => Assert.True(string.IsNullOrEmpty(d.MacroName)));
+        Assert.Equal("—（只读）", TuningParamTable.Find(0x09)!.RangeText);
+        Assert.Contains("固化", TuningParamTable.Find(0x0B)!.RangeText);
+
+        Assert.NotNull(TuningParamTable.Find(0x0B));
+        Assert.Null(TuningParamTable.Find(0x0C));
         Assert.Contains("0x01", TuningParamTable.IdListText);
+        Assert.Contains("0x0B", TuningParamTable.IdListText);
+    }
+
+    /// <summary>零偏 v2 五项（0x07~0x0B 均不回填宏）</summary>
+    private static IEnumerable<TuningParamDescriptor> BiasTableItems() =>
+        Enumerable.Range(0x07, 5).Select(id => TuningParamTable.Find((byte)id)!);
+
+    [Fact]
+    public void TryParseTuningReadAllResp_ElevenParams_Len3E()
+    {
+        // 扩表全表：data = 01 00 FF 0B + N×5（59B）→ 整帧 LEN = 3 + 59 = 0x3E（01 卷 §5.1）
+        var data = new List<byte> { 0x01, 0x00, 0xFF, 0x0B };
+        for (byte id = 0x01; id <= 0x0B; id++)
+            data.AddRange(new byte[] { id, 0x3F, 0x80, 0x00, 0x00 });   // 1.0f 占位
+
+        Assert.True(_codec.TryParseTuningReadAllResp(data.ToArray(), out var status, out var items));
+        Assert.Equal(TuningStatus.Ok, status);
+        Assert.Equal(11, items.Count);
+        Assert.Equal(0x0B, items[^1].Id);
     }
 
     /// <summary>取写帧的 VALUE4 段（帧尾 4B）</summary>

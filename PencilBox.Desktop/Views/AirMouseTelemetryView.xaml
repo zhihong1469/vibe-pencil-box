@@ -1,0 +1,71 @@
+<UserControl x:Class="PencilBox.Desktop.Views.AirMouseTelemetryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 0x62 遥测流与录波（对齐卷 06 §3）：三视图 + 叠图诊断（默认关）+ CSV 回放 -->
+    <GroupBox Header="遥测流与录波（0x62 · 仅串口轨——原始时域看噪声/零漂，输出时域看跳变/死区，输入-输出曲线看曲线形状实拍）">
+        <StackPanel>
+            <!-- 工具行 -->
+            <StackPanel Orientation="Horizontal" Margin="0,2,0,6">
+                <Button Command="{Binding TogglePreviewCommand}" Margin="0,0,6,0" Padding="10,3"
+                        Content="{Binding PreviewButtonText}" MinWidth="92"/>
+                <TextBlock Text="分频" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <ComboBox ItemsSource="{Binding DivOptions}" SelectedIndex="{Binding DivIndex}"
+                          Width="120" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <TextBlock Text="录波" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                <TextBox Text="{Binding RecordSecs}" Width="44" VerticalAlignment="Center" Margin="0,0,2,0"
+                         ToolTip="录波秒数（1~600）"/>
+                <TextBlock Text="s" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <Button Command="{Binding RecordCommand}" Content="录波并存 CSV" Margin="0,0,12,0" Padding="10,3" MinWidth="100"/>
+                <Button Command="{Binding OpenCsvCommand}" Content="打开录波（回放）" Margin="0,0,6,0" Padding="10,3" MinWidth="100"/>
+                <Button Command="{Binding ClearCommand}" Content="清空" Margin="0,0,12,0" Padding="8,3"/>
+                <CheckBox Content="输出图叠加 rate" IsChecked="{Binding ShowRateOverlay}" VerticalAlignment="Center" Margin="0,0,10,0"
+                          ToolTip="把滤波后 rate_yaw 折算叠加到输出图（仅形状参考，量纲不同）"/>
+                <CheckBox Content="叠图诊断模式" IsChecked="{Binding OverlayDiag}" VerticalAlignment="Center"
+                          ToolTip="原始归一化+输出同窗双轴——仅线性段诊断用（量纲打架，默认关）"/>
+            </StackPanel>
+
+            <TextBlock Text="{Binding StatusText}" Foreground="#2C3E50" Margin="0,0,0,2" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding StatsText}" Foreground="Gray" FontSize="11" Margin="0,0,0,6"/>
+
+            <!-- 三视图 -->
+            <WrapPanel>
+                <GroupBox Header="原始时域（raw_gx 蓝 / raw_gz 绿 → dps；手抖/零漂/噪声底）" Margin="0,0,8,8">
+                    <Canvas Width="320" Height="150" Background="#FAFAFA" HorizontalAlignment="Left">
+                        <Line X1="34" Y1="79" X2="312" Y2="79" Stroke="#DDD"/>
+                        <Polyline Points="{Binding RawGxPoints}" Stroke="#1F618D" StrokeThickness="1"/>
+                        <Polyline Points="{Binding RawGzPoints}" Stroke="#1E8449" StrokeThickness="1"/>
+                        <TextBlock Canvas.Left="2" Canvas.Top="4" FontSize="10" Foreground="Gray" Text="{Binding RawScaleText}"/>
+                        <TextBlock Canvas.Left="34" Canvas.Top="134" FontSize="10" Foreground="Gray" Text="0"/>
+                        <TextBlock Canvas.Left="286" Canvas.Top="134" FontSize="10" Foreground="Gray" Text="10s 窗"/>
+                    </Canvas>
+                </GroupBox>
+
+                <GroupBox Header="输出时域（out_x 蓝 / out_y 绿；光标跳变/死区是否合适）" Margin="0,0,8,8">
+                    <Canvas Width="320" Height="150" Background="#FAFAFA" HorizontalAlignment="Left">
+                        <Line X1="34" Y1="79" X2="312" Y2="79" Stroke="#DDD"/>
+                        <Polyline Points="{Binding DiagOverlayPoints}" Stroke="Gray" StrokeThickness="1"
+                                  StrokeDashArray="2 2" Visibility="{Binding OverlayDiag, Converter={StaticResource BoolToVis}}"/>
+                        <Polyline Points="{Binding RateOverlayPoints}" Stroke="#B7950B" StrokeThickness="1"
+                                  Visibility="{Binding ShowRateOverlay, Converter={StaticResource BoolToVis}}"/>
+                        <Polyline Points="{Binding OutXPoints}" Stroke="#2C3E50" StrokeThickness="1.5"/>
+                        <Polyline Points="{Binding OutYPoints}" Stroke="#943126" StrokeThickness="1"/>
+                        <TextBlock Canvas.Left="2" Canvas.Top="4" FontSize="10" Foreground="Gray" Text="out (HID 计数)"/>
+                        <TextBlock Canvas.Left="34" Canvas.Top="134" FontSize="10" Foreground="Gray" Text="0"/>
+                    </Canvas>
+                </GroupBox>
+
+                <GroupBox Header="{Binding IoScaleText}" Margin="0,0,8,8">
+                    <Canvas Width="320" Height="150" Background="#FAFAFA" HorizontalAlignment="Left">
+                        <Polyline Points="{Binding IoPoints}" Stroke="#6C3483" StrokeThickness="2"/>
+                        <TextBlock Canvas.Left="2" Canvas.Top="4" FontSize="10" Foreground="Gray" Text="|out_x| 均值"/>
+                        <TextBlock Canvas.Left="34" Canvas.Top="134" FontSize="10" Foreground="Gray" Text="0"/>
+                        <TextBlock Canvas.Left="280" Canvas.Top="134" FontSize="10" Foreground="Gray" Text="200dps"/>
+                    </Canvas>
+                </GroupBox>
+            </WrapPanel>
+
+            <TextBlock Foreground="Gray" FontSize="11" TextWrapping="Wrap"
+                       Text="录波四步配方（对齐卷 06）：静止 3s → 慢速画圆 → 快速甩停 → 点菜单目标；录完 python tools/airmouse_metrics.py &lt;csv&gt; 出五指标。指标/网格搜索属离线阶段③，见对齐卷。"/>
+        </StackPanel>
+    </GroupBox>
+</UserControl>

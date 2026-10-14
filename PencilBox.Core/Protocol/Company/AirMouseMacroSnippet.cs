@@ -39,10 +39,25 @@ public static class AirMouseMacroSnippet
 
         foreach (var d in TuningParamTable.All)
         {
-            if (byId.TryGetValue(d.Id, out var v))
-                sb.AppendLine($"#define {d.MacroName} {d.MacroValueText(v)}");
+            bool has = byId.TryGetValue(d.Id, out var v);
+            if (d.Access == TuningParamAccess.Tunable && !string.IsNullOrEmpty(d.MacroName))
+            {
+                // 可写且有固件宏：正常产出 #define（未读到时只注释，不产出半截 define 误导回填）
+                sb.AppendLine(has
+                    ? $"#define {d.MacroName} {d.MacroValueText(v)}"
+                    : $"// #define {d.MacroName} ……（0x{d.Id:X2} {d.Name} 未读到，跳过——请先全表读确认笔端在位）");
+            }
             else
-                sb.AppendLine($"// #define {d.MacroName} ……（0x{d.Id:X2} {d.Name} 未读到，跳过——请先全表读确认笔端在位）");
+            {
+                // 零偏机制 v2（01 卷 §5.1）：RAM 注入值/NVDS 只读镜像/固化控制都不回填宏，只附状态注释
+                string tag = d.Access switch
+                {
+                    TuningParamAccess.ReadOnly => "只读 NVDS 镜像，不入宏",
+                    TuningParamAccess.Control => "控制型（写1=固化/写2=清除），不入宏",
+                    _ => "RAM 运行时值，不入宏（持久化走 0x0B）",
+                };
+                sb.AppendLine($"// 0x{d.Id:X2} {d.Name} = {(has ? TuningParamDescriptor.Format(v) : "未读到")}（{tag}）");
+            }
         }
 
         var unknown = readings.Where(r => TuningParamTable.Find(r.Id) == null).ToList();

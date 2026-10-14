@@ -87,12 +87,12 @@ public class TuningService : ITuningService
         return new TuningWriteResult(status, echoId, effective);
     }
 
-    /// <summary>发送并等 `0x61` 应答；无应答抛串口排障口径（02 卷 §2-5：list/probe、占口先关）</summary>
+    /// <summary>发送并等 `0x61` 应答；无应答抛 <see cref="TuningNoAnswerException"/>（UI 按类型分流，勿以消息文本判链路）</summary>
     private async Task<byte[]> RequestAsync(string portName, byte[] request, CancellationToken ct)
     {
         var resp = await _requester.RequestAsync(_serialChannel, request, CompanyCmd.TuningParam, ct)
             .ConfigureAwait(false);
-        return resp ?? throw new InvalidOperationException(
+        return resp ?? throw new TuningNoAnswerException(
             $"0x61 无应答（{portName} 超时）：serial list / serial probe 确认端口在位；" +
             "占用串口的程序先关（PencilBox.Desktop / sscom 教训）；并确认笔端固件已含 0x61 支持");
     }

@@ -41,9 +41,15 @@ public class AirMouseWorkbenchTests : IDisposable
             (0x04, 1.0,  "CONFIG_AIRMOUSE_SLOW_WIDTH_DPS"),
             (0x05, 0.1,  "CONFIG_AIRMOUSE_DEADZONE_DPS"),
             (0x06, 25.0, "CONFIG_AIRMOUSE_FREEZE_RELEASE_MS"),
+            // 零偏 v2（01 卷 §5.1）：不入宏（MacroName 空），0x09/0x0A 只读步长 0、0x0B 步长 1
+            (0x07, 0.05, ""),
+            (0x08, 0.05, ""),
+            (0x09, 0.0,  ""),
+            (0x0A, 0.0,  ""),
+            (0x0B, 1.0,  ""),
         };
 
-        Assert.Equal(6, TuningParamTable.All.Count);
+        Assert.Equal(11, TuningParamTable.All.Count);
         for (int i = 0; i < expected.Length; i++)
         {
             var d = TuningParamTable.All[i];
@@ -94,6 +100,24 @@ public class AirMouseWorkbenchTests : IDisposable
         Assert.DoesNotContain(lines, l => l.StartsWith("#define CONFIG_AIRMOUSE_FREEZE_RELEASE_MS"));
         Assert.Contains(lines, l => l.StartsWith("// #define CONFIG_AIRMOUSE_FREEZE_RELEASE_MS"));
         Assert.Contains("未知（0x03 无应答）", text);   // 版本缺省口径（子串）
+    }
+
+    [Fact]
+    public void MacroSnippet_BiasV2Items_CommentNotDefine()
+    {
+        // 01 卷 §5.1：零偏 v2 项不产出 #define——0x07/0x08 RAM 值、0x09/0x0A 只读镜像、0x0B 控制型，一律注释行
+        var readings = new List<TuningParamReading>
+        {
+            new(0x07, -0.42f), new(0x08, 0.13f), new(0x09, -0.40f), new(0x0A, 0.10f), new(0x0B, 1f),
+        };
+
+        var lines = AirMouseMacroSnippet.Build(readings, "SVER=0.13.18", null)
+            .Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+
+        Assert.DoesNotContain(lines, l => l.StartsWith("#define", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("// 0x07 零偏注入 gx = -0.420") && l.Contains("RAM 运行时值"));
+        Assert.Contains(lines, l => l.StartsWith("// 0x09 NVDS 零偏 gx = -0.400") && l.Contains("只读 NVDS 镜像"));
+        Assert.Contains(lines, l => l.StartsWith("// 0x0B 零偏固化控制 = 1.000") && l.Contains("控制型"));
     }
 
     // ================= 快照存储（configs/airmouse/，A/B 互切底座） =================

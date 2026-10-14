@@ -6,23 +6,45 @@
 namespace PencilBox.Core.Protocol.Company;
 
 /// <summary>
-/// `0x61` 内部调参一条描述：ID / 名称 / 出厂值 / 允许范围 / 单位 / 步长 / 回填宏名 / 调法文案。
+/// `0x61` 参数访问权限（01 卷 §5.1 零偏机制 v2 引入只读/控制型；
+/// 决定 UI 卡片/恢复出厂/宏导出的参与度——裁决方仍是笔端，本枚举只做工具端分流）。
 /// </summary>
-/// <param name="Id">参数 ID（1 起连续）</param>
+public enum TuningParamAccess
+{
+    /// <summary>可写可调（滑条卡、恢复出厂、宏导出 `#define`）</summary>
+    Tunable,
+
+    /// <summary>只读镜像（0x09/0x0A NVDS 持久层；0x61/02 写它笔端回 STATUS=02，工具端仅 list/get 展示）</summary>
+    ReadOnly,
+
+    /// <summary>控制型（0x0B：写 1=固化 RAM bias→NVDS / 写 2=清除 NVDS 回冷启动；无出厂值概念，不入恢复出厂/宏导出）</summary>
+    Control,
+}
+
+/// <summary>
+/// `0x61` 内部调参一条描述：ID / 名称 / 出厂值 / 允许范围 / 单位 / 步长 / 回填宏名 / 调法文案 / 访问权限。
+/// </summary>
+/// <param name="Id">参数 ID</param>
 /// <param name="Name">展示名</param>
-/// <param name="Factory">出厂默认（= 固件宏值；协议 RAM-only，重启回此值）</param>
-/// <param name="Min">允许下界（闭区间；笔端越界拒收**不夹取**）</param>
-/// <param name="Max">允许上界（闭区间）</param>
+/// <param name="Factory">出厂默认（= 固件宏值；协议 RAM-only，重启回此值；只读/控制型无出厂概念，占位 0 不参与恢复出厂）</param>
+/// <param name="Min">允许下界（闭区间；笔端越界拒收**不夹取**；只读型占位 0）</param>
+/// <param name="Max">允许上界（闭区间；控制型=合法写入值域 1~2）</param>
 /// <param name="Unit">单位（灵敏度="dps→px/帧"）</param>
 /// <param name="Step">UI 滑条/[−][+] 步进步长（03 卷 §3）</param>
-/// <param name="MacroName">固件回填宏名（03 卷 §6 导出片段；与笔端 config 宏名一致）</param>
+/// <param name="MacroName">固件回填宏名（03 卷 §6 导出片段；与笔端 config 宏名一致；零偏 v2 项不入宏=空串）</param>
 /// <param name="Guide">内嵌调法文案（03 卷 §3 原文照抄，调参员不需要懂固件）</param>
+/// <param name="Access">访问权限（缺省 Tunable；01 卷 §5.1）</param>
 public sealed record TuningParamDescriptor(
     byte Id, string Name, float Factory, float Min, float Max, string Unit,
-    double Step, string MacroName, string Guide)
+    double Step, string MacroName, string Guide, TuningParamAccess Access = TuningParamAccess.Tunable)
 {
-    /// <summary>范围显示文本（`0.05~2.00`）</summary>
-    public string RangeText => $"{Format(Min)}~{Format(Max)}";
+    /// <summary>范围显示文本（`0.05~2.00`；只读/控制型给语义文案）</summary>
+    public string RangeText => Access switch
+    {
+        TuningParamAccess.Tunable => $"{Format(Min)}~{Format(Max)}",
+        TuningParamAccess.ReadOnly => "—（只读）",
+        _ => "写1=固化/写2=清除",
+    };
 
     /// <summary>数值显示（保留 3 位小数，去尾零交给调用方口径统一）</summary>
     public static string Format(float v) => v.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
@@ -34,14 +56,14 @@ public sealed record TuningParamDescriptor(
 }
 
 /// <summary>
-/// `0x61` 内部调参**工具端内置范围表**（issues-pencil/01 §5 参数表 + 03 卷 §3 步长/文案的 PC 侧镜像；
+/// `0x61` 内部调参**工具端内置范围表**（issues-pencil/01 §5 + §5.1 参数表：PC 侧镜像；
 /// 02 卷 §3 单一来源原则：ID/范围/单位/步长/宏名必须与协议表一致，协议表变更须同步本表并重发布）。
 /// 用于：`set` 越界提示 / `list` 补齐名称与单位 / `reset` 出厂值 / `export` 宏片段 /
 /// CLI JSON 结构化输出 / `空鼠` 工作台卡片（滑条步长、折页文案、★偏离标记）。
 /// </summary>
 public static class TuningParamTable
 {
-    /// <summary>首发 6 项（01 卷 §5；顺序即 ID 序；文案=03 卷 §3 原文）</summary>
+    /// <summary>全部 11 项（01 卷 §5 首发 6 项 + §5.1 二期扩表零偏机制 v2 5 项；顺序即 ID 序）</summary>
     public static readonly IReadOnlyList<TuningParamDescriptor> All = new[]
     {
         new TuningParamDescriptor(0x01, "全局灵敏度", 0.3f, 0.05f, 2.00f, "dps→px/帧", 0.05,
@@ -75,7 +97,29 @@ public static class TuningParamTable
             "调大：松开按键后光标多钉一会儿——双击更容易点在同一点，但松手后光标\"粘滞\"。\n" +
             "调小：松手即走、更利落，但快速双击的两次落点容易分开（系统不认双击）。\n" +
             "⚠️ 此参数与按键体验线共用，调整前请与固件负责人确认当前按键方案基线。（进阶：一般不动）"),
+        // —— 二期扩表：零偏机制 v2（01 卷 §5.1，2026-10-14 定稿；笔端已落码 test/mouse）——
+        new TuningParamDescriptor(0x07, "零偏注入 gx", 0f, -10f, 10f, "dps", 0.05, "",
+            "X 轴陀螺零偏（Kalman 估计值直读）。\n" +
+            "写=临时注入试验值，用于验证零偏对光标漂移的影响（静止期会被 Kalman 重新吸收）。\n" +
+            "持久化不走本参：固化写 0x0B=1（RAM→NVDS），清除写 0x0B=2。\n" +
+            "⚠️ 进阶诊断用：一般不动；试验完写 0 回中性。"),
+        new TuningParamDescriptor(0x08, "零偏注入 gz", 0f, -10f, 10f, "dps", 0.05, "",
+            "Z 轴陀螺零偏，语义同 0x07（Kalman 估计值直读；写=临时注入；固化/清除走 0x0B）。\n" +
+            "⚠️ 进阶诊断用：一般不动；试验完写 0 回中性。"),
+        new TuningParamDescriptor(0x09, "NVDS 零偏 gx", 0f, 0f, 0f, "dps", 0, "",
+            "只读：NVDS 持久层 X 轴零偏（boot 装载/固化后更新的 RAM 缓存镜像；无=0）。\n" +
+            "写它会被笔端拒（STATUS=02）；查询走 `company param get --id 9`。", TuningParamAccess.ReadOnly),
+        new TuningParamDescriptor(0x0A, "NVDS 零偏 gz", 0f, 0f, 0f, "dps", 0, "",
+            "只读：NVDS 持久层 Z 轴零偏，语义同 0x09。\n" +
+            "写它会被笔端拒（STATUS=02）；查询走 `company param get --id 10`。", TuningParamAccess.ReadOnly),
+        new TuningParamDescriptor(0x0B, "零偏固化控制", 0f, 1f, 2f, "—", 1, "",
+            "控制型：写 1=把当前 RAM 零偏固化进 NVDS（断电保持）；写 2=清除 NVDS 回冷启动；读=持久层在位状态（0 无/1 有）。\n" +
+            "无出厂值概念（不在恢复出厂范围）；写 1/2 之外的值笔端按越界拒（STATUS=02）。\n" +
+            "CLI：`company param set --id 11 --value 1`（固化）/ `--value 2`（清除）。", TuningParamAccess.Control),
     };
+
+    /// <summary>可写可调子集（0x01~0x08：滑条卡与恢复出厂的范围；0x09/0x0A 只读、0x0B 控制型不参与）</summary>
+    public static IReadOnlyList<TuningParamDescriptor> Tunable => All.Where(p => p.Access == TuningParamAccess.Tunable).ToList();
 
     /// <summary>按 ID 查描述（未知返回 null）</summary>
     public static TuningParamDescriptor? Find(byte id) => All.FirstOrDefault(p => p.Id == id);

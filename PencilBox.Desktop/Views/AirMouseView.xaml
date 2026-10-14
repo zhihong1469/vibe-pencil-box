@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:v="clr-namespace:PencilBox.Desktop.Views"
              mc:Ignorable="d"
              d:DesignHeight="720" d:DesignWidth="1060">
     <UserControl.Resources>
@@ -25,8 +26,9 @@
     </UserControl.Resources>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <Grid Margin="8">
+        <Grid Margin="8,6">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
@@ -60,7 +62,7 @@
                     <ColumnDefinition Width="285"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 左：6 参数卡片 + 增益曲线 -->
+                <!-- 左：可写参数卡片（0x01~0x08）+ 增益曲线 -->
                 <Grid Grid.Column="0" IsEnabled="{Binding IsConnected}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -212,14 +214,15 @@
                                       Width="120" VerticalAlignment="Center"/>
                             <Button Content="应用" Command="{Binding ApplySnapshotCommand}"
                                     Style="{StaticResource ActionButton}" MinWidth="48" Margin="6,0,0,0"
-                                    ToolTip="把快照 6 参依次写回笔端（A/B 一键互切）"/>
+                                    ToolTip="把快照可写参数依次写回笔端（A/B 一键互切；只读/控制型自动跳过）"/>
                             <Button Content="删除" Command="{Binding DeleteSnapshotCommand}"
                                     Style="{StaticResource ActionButton}" MinWidth="48" Margin="4,0,0,0"/>
                         </StackPanel>
 
                         <Separator Margin="0,10,0,4"/>
-                        <Button Content="恢复出厂（6 参写回固件宏值）" Command="{Binding RestoreFactoryCommand}"
-                                Style="{StaticResource ActionButton}" MinWidth="170" HorizontalAlignment="Left"/>
+                        <Button Content="恢复出厂（可写参数写回固件宏值）" Command="{Binding RestoreFactoryCommand}"
+                                Style="{StaticResource ActionButton}" MinWidth="170" HorizontalAlignment="Left"
+                                ToolTip="0x01~0x08 写回出厂值（0x09/0x0A 只读、0x0B 控制型不适用）；CLI 同源=param reset"/>
 
                         <Separator Margin="0,10,0,4"/>
                         <Grid>
@@ -268,6 +271,9 @@
                     </StackPanel>
                 </GroupBox>
             </Grid>
+
+            <!-- ============ 遥测流与录波（0x62，对齐卷 06）：与调参共用同一串口，页内下方 ============ -->
+            <v:AirMouseTelemetryView Grid.Row="2" DataContext="{Binding Telemetry}" Margin="4,2,4,4"/>
         </Grid>
     </ScrollViewer>
 </UserControl>

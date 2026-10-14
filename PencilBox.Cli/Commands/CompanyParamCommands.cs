@@ -88,21 +88,22 @@ public class CompanyParamCommands
 
         if (ConsoleFormatter.Format == OutputFormat.Json)
         {
-            // 结构化数值输出（脚本/工作台取数口径；字符串仅展示位）
-            var rows = TuningParamTable.All.Select(d => new
+            // 结构化数值输出（脚本/工作台取数口径；字符串仅展示位；access 标注只读/控制型）
+            var jsonRows = TuningParamTable.All.Select(d => new
             {
                 id = $"0x{d.Id:X2}",
                 idNum = (int)d.Id,
                 name = d.Name,
+                access = d.Access.ToString().ToLowerInvariant(),
                 value = byId.TryGetValue(d.Id, out var v) ? v : (float?)null,
-                min = d.Min,
-                max = d.Max,
-                step = d.Step,
-                factory = d.Factory,
+                min = d.Access == TuningParamAccess.Tunable ? d.Min : (float?)null,
+                max = d.Access == TuningParamAccess.Tunable ? d.Max : (float?)null,
+                step = d.Access == TuningParamAccess.Tunable ? d.Step : (double?)null,
+                factory = d.Access == TuningParamAccess.Tunable ? d.Factory : (float?)null,
                 unit = d.Unit,
                 macro = d.MacroName,
             }).ToList();
-            Console.WriteLine(JsonSerializer.Serialize(rows, JsonIndented));
+            Console.WriteLine(JsonSerializer.Serialize(jsonRows, JsonIndented));
             return 0;
         }
 
@@ -184,7 +185,8 @@ public class CompanyParamCommands
     // ============ reset：恢复出厂（03 卷 §6） ============
 
     /// <summary>
-    /// `param reset`：把 6 参全部（或 `--only` 子集）写回出厂宏值（出厂值随 <see cref="TuningParamTable"/> 内置）。
+    /// `param reset`：把**可写参数**（0x01~0x08，01 卷 §5+§5.1）全部（或 `--only` 子集）写回出厂宏值
+    /// （出厂值随 <see cref="TuningParamTable"/> 内置）。0x09/0x0A 只读、0x0B 控制型不在恢复出厂范围。
     /// 逐参写→回显生效值必须等于出厂值；任一失败 exit 1。串行化：一参应答完再发下一参。
     /// </summary>
     public async Task<int> ResetAsync(string? port, IReadOnlyList<byte>? onlyIds, bool raw)
@@ -192,12 +194,15 @@ public class CompanyParamCommands
         if (!await EnsureSerialAsync(port))
             return 1;
 
+        var writable = TuningParamTable.Tunable;
         var targets = onlyIds is { Count: > 0 }
-            ? TuningParamTable.All.Where(d => onlyIds.Contains(d.Id)).ToList()
-            : TuningParamTable.All.ToList();
+            ? writable.Where(d => onlyIds.Contains(d.Id)).ToList()
+            : writable.ToList();
         if (targets.Count == 0)
         {
-            ConsoleFormatter.Error($"--only 未命中任何合法参数 ID。合法：{TuningParamTable.IdListText}");
+            ConsoleFormatter.Error(
+                "--only 未命中任何可写调参（0x09/0x0A 只读、0x0B 控制型不在恢复出厂范围）。" +
+                $"可写：{string.Join(", ", writable.Select(t => $"0x{t.Id:X2}"))}");
             return 1;
         }
 
@@ -223,7 +228,7 @@ public class CompanyParamCommands
     // ============ export：导出宏片段（03 卷 §6 核心交付） ============
 
     /// <summary>
-    /// `param export`：实读 6 参 + `0x03` 读笔固件版本 → 生成 `#define` 回填片段（
+    /// `param export`：实读全表（11 参）+ `0x03` 读笔固件版本 → 生成 `#define` 回填片段（零偏项只附注释）（
     /// <see cref="AirMouseMacroSnippet"/> 单点；`--out` 存文件，缺省打 stdout）。固件版本读不到不阻塞（标"未知"）。
     /// </summary>
     public async Task<int> ExportAsync(string? port, string? note, string? outFile)
@@ -374,6 +379,13 @@ public class CompanyParamCommands
             if (d == null)
             {
                 ConsoleFormatter.Warn($"快照含未知 ID=0x{r.Id:X2}，跳过（前向兼容）");
+                continue;
+            }
+
+            if (d.Access != TuningParamAccess.Tunable)
+            {
+                // 新版快照会存下全表（含只读/控制型）——写回时跳过，避免笔端 STATUS=02 误报失败
+                ConsoleFormatter.Warn($"快照含 0x{r.Id:X2} {d.Name}（{d.RangeText}），跳过写回");
                 continue;
             }
 

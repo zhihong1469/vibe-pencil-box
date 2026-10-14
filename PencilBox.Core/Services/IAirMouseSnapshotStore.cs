@@ -8,7 +8,7 @@ using PencilBox.Core.Protocol.Company;
 namespace PencilBox.Core.Services;
 
 /// <summary>
-/// 空鼠调参**方案快照**一条：6 参值 + 存档元数据（03 卷 §6；仅本地 JSON，不下笔端）。
+/// 空鼠调参**方案快照**一条：全表参数值（旧固件 6 参 / 扩表 11 参，写回时只读/控制型跳过）+ 存档元数据（03 卷 §6；仅本地 JSON，不下笔端）。
 /// </summary>
 /// <param name="Name">快照名（建议 A/B 互切对比手感）</param>
 /// <param name="SavedAt">保存时间（本地）</param>
