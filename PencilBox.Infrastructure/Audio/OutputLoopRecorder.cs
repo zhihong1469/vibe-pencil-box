@@ -44,7 +44,9 @@ public sealed class OutputLoopRecorder : IAsyncDisposable
 
     private void OnData(object? sender, WaveInEventArgs e) => _buffer.Write(e.Buffer, 0, e.BytesRecorded);
 
-    /// <summary>停止并落盘为单声道 16-bit WAV（多声道混叠均分，采样率保持环回格式）</summary>
+    /// <summary>停止并落盘为 16kHz 单声道 16-bit WAV。环回混音格式（float/24bit/Extensible）不做手工辨析，
+    /// 统一交给 MediaFoundationResampler 重采样降混——手工 float/short 分支在 Extensible 格式上漏判过
+    /// （float 尾数被当 int16 读出 ±1 噪声与伪方波），MF 管线对编码类型不敏感。</summary>
     public async Task StopAndSaveAsync(string path, CancellationToken ct = default)
     {
         if (_capture == null) throw new InvalidOperationException("未启动");
@@ -55,31 +57,25 @@ public sealed class OutputLoopRecorder : IAsyncDisposable
         _capture = null;
 
         var fmt = _format!;
-        var bytes = _buffer.GetBuffer();
-        var frameBytes = fmt.Channels * (fmt.BitsPerSample / 8);
-        var frames = (int)(bytes.Length / frameBytes);
-        var mono = new short[frames];
-        var isFloat = fmt.Encoding == WaveFormatEncoding.IeeeFloat ||
-                      (fmt is WaveFormatExtensible ext && ext.SubFormat == new Guid("00000003-0000-0010-8000-00AA00389B71"));
-        var ch = fmt.Channels;
-        for (var f = 0; f < frames; f++)
+        var target = new WaveFormat(16000, 16, 1);
+        var monoList = new List<short>();
+        _buffer.Position = 0;
+        using (var src = new RawSourceWaveStream(_buffer, fmt))
+        using (var resampler = new MediaFoundationResampler(src, target) { ResamplerQuality = 60 })
         {
-            double acc = 0;
-            for (var c = 0; c < ch; c++)
+            var buf = new byte[16000 * 2];               // 目标格式下 0.5s 的字节数
+            int read;
+            while ((read = resampler.Read(buf, 0, buf.Length)) > 0)
             {
-                var idx = (f * ch + c) * (fmt.BitsPerSample / 8);
-                acc += isFloat
-                    ? BitConverter.ToSingle(bytes, idx)
-                    : BitConverter.ToInt16(bytes, idx) / 32768.0;
+                for (var i = 0; i + 1 < read; i += 2)
+                    monoList.Add(BitConverter.ToInt16(buf, i));
             }
-            var v = acc / ch;
-            mono[f] = (short)Math.Clamp(v * 32767, short.MinValue, short.MaxValue);
         }
 
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        WavFile.WriteMono16(path, mono, fmt.SampleRate);
-        _logger.LogInformation("环回录制已存: {Path} ({Seconds:F1}s @ {Rate}Hz)", path, frames / (double)fmt.SampleRate, fmt.SampleRate);
+        WavFile.WriteMono16(path, monoList.ToArray(), target.SampleRate);
+        _logger.LogInformation("环回录制已存: {Path} ({Seconds:F1}s @ {Rate}Hz)", path, monoList.Count / (double)target.SampleRate, target.SampleRate);
     }
 
     public async ValueTask DisposeAsync()
