@@ -201,6 +201,25 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         // 带通降噪下/上边（0=关）
         ApplyBandpass(options.HpfHz, options.LpfHz);
 
+        // 2.5 桥接副汇（可选）：必须在采集启动之前初始化——采集一开跑就持续进环，
+        // 桥的 WasapiOut 构造/Init 若插在采集与渲染之间，耗时会把主环垫高几十毫秒（直接吃进主链延迟）。
+        // 复用主链输出字节流；混音格式必须与主输出一致（共享模式端点几乎都是 48k/32f）
+        if (!string.IsNullOrWhiteSpace(options.BridgeDeviceId))
+        {
+            using var bridgeEnum = new MMDeviceEnumerator();
+            var bridgeDevice = ResolveDevice(bridgeEnum, DataFlow.Render, options.BridgeDeviceId, "桥接");
+            using (var bc = bridgeDevice.AudioClient)
+                if (!bc.MixFormat.Equals(outFormat))
+                    throw new NotSupportedException($"桥接端点混音格式与主输出不一致（{bc.MixFormat} ≠ {outFormat}），快线桥接暂不支持");
+            _bridgeRing = new PcmRingBuffer(Math.Max(1, (int)(outFormat.AverageBytesPerSecond * 0.5)));
+            _bridgeName = bridgeDevice.FriendlyName;
+            var bridgeLatency = Math.Clamp(options.BridgeLatencyMs, 50, 500);
+            _bridgeOut = new WasapiOut(bridgeDevice, AudioClientShareMode.Shared, useEventSync: true, bridgeLatency);
+            _bridgeOut.Init(new BridgeSource(this, outFormat));
+            _bridgeOut.Play();
+            _logger.LogInformation("桥接副汇已启动: {Device}, 缓冲 {Ms}ms", _bridgeName, bridgeLatency);
+        }
+
         // 3. 采集：级联尝试（请求格式 → 采集端混音格式 × 事件同步 → 睡眠同步）。
         // 实机坑：USB Audio 1.0 + 事件同步 + 非混音格式 → AudioClient.Initialize 阻塞 ~30s 后
         // E_UNEXPECTED(0x8000FFFF)；一旦出现该码，跳过剩余事件同步尝试，直落睡眠同步。
@@ -326,23 +345,6 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         output.Init(_source);
         _output = output;
         output.Play();
-
-        // 7. 桥接副汇（可选）：复用主链输出字节流；混音格式必须与主输出一致（共享模式端点几乎都是 48k/32f）
-        if (!string.IsNullOrWhiteSpace(options.BridgeDeviceId))
-        {
-            using var bridgeEnum = new MMDeviceEnumerator();
-            var bridgeDevice = ResolveDevice(bridgeEnum, DataFlow.Render, options.BridgeDeviceId, "桥接");
-            using (var bc = bridgeDevice.AudioClient)
-                if (!bc.MixFormat.Equals(outFormat))
-                    throw new NotSupportedException($"桥接端点混音格式与主输出不一致（{bc.MixFormat} ≠ {outFormat}），快线桥接暂不支持");
-            _bridgeRing = new PcmRingBuffer(Math.Max(1, (int)(outFormat.AverageBytesPerSecond * 0.5)));
-            _bridgeName = bridgeDevice.FriendlyName;
-            var bridgeLatency = Math.Clamp(options.BridgeLatencyMs, 50, 500);
-            _bridgeOut = new WasapiOut(bridgeDevice, AudioClientShareMode.Shared, useEventSync: true, bridgeLatency);
-            _bridgeOut.Init(new BridgeSource(this, outFormat));
-            _bridgeOut.Play();
-            _logger.LogInformation("桥接副汇已启动: {Device}, 缓冲 {Ms}ms", _bridgeName, bridgeLatency);
-        }
     }
 
     /// <summary>构建带通级联（各两节 24dB/oct）；两边都关则返回 null</summary>
