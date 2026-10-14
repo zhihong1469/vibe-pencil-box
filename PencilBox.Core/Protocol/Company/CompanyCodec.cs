@@ -81,6 +81,36 @@ public interface ICompanyCodec
     bool TryParsePenCmdResponse(ReadOnlySpan<byte> data, out byte status, out byte cmdId,
         out byte penStatus, out byte[] rspData);
 
+    // ===== 0x61 内部调参（issues-pencil/01；仅串口轨 PC↔笔端 UART1，基站零感知）=====
+
+    /// <summary>
+    /// `0x61/01` 读请求：`[01][PARAM_ID]`（`LEN=0x05`）；`PARAM_ID=0xFF`（
+    /// <see cref="TuningParamMode.ParamIdAll"/>）表全表读。
+    /// </summary>
+    byte[] EncodeTuningRead(byte paramId);
+
+    /// <summary>`0x61/02` 写请求：`[02][PARAM_ID][VALUE4]`（`LEN=0x09`；VALUE4=float32 大端）</summary>
+    byte[] EncodeTuningWrite(byte paramId, float value);
+
+    /// <summary>
+    /// 解析 `0x61/01` 单参读应答：`[01][STATUS][PARAM_ID][VALUE4]`（`LEN=0x08`）。
+    /// 结构合法即 true（业务成败由 <paramref name="status"/> 表达）。
+    /// </summary>
+    bool TryParseTuningReadResp(ReadOnlySpan<byte> data, out byte status, out byte paramId, out float value);
+
+    /// <summary>
+    /// 解析 `0x61/01` 全表读应答：`[01][STATUS][FF][COUNT][ID+VALUE4]×N`（`LEN=0x07+5N`；6 参 → `0x25`）。
+    /// `COUNT` 与载荷按 N×5 校验，尾部多余字节忽略（前向兼容）。
+    /// </summary>
+    bool TryParseTuningReadAllResp(ReadOnlySpan<byte> data, out byte status,
+        out IReadOnlyList<TuningParamReading> items);
+
+    /// <summary>
+    /// 解析 `0x61/02` 写应答：`[02][STATUS][PARAM_ID][VALUE4]`（`LEN=0x0A`）。
+    /// `STATUS=00` 时 VALUE4=生效值；`=02`（越界拒收）时 VALUE4=**写前旧值**（笔端不夹取）。
+    /// </summary>
+    bool TryParseTuningWriteResp(ReadOnlySpan<byte> data, out byte status, out byte paramId, out float effective);
+
     // ===== 0x16 固件升级（拉模式；字段序＝公司 §3.2 / 正文 上位机/03 §②）=====
 
     /// <summary>
@@ -394,6 +424,94 @@ public sealed class CompanyCodec : ICompanyCodec
         packH = data[3];
         return true;
     }
+
+    // ================= 0x61 内部调参（补充 01 卷） =================
+
+    public byte[] EncodeTuningRead(byte paramId) =>
+        CompanyFrame.Build(CompanyFrame.BaseCmdRequest, CompanyCmd.TuningParam,
+            new[] { TuningParamMode.Read, paramId });
+
+    public byte[] EncodeTuningWrite(byte paramId, float value)
+    {
+        var data = new byte[2 + 4];
+        data[0] = TuningParamMode.Write;
+        data[1] = paramId;
+        WriteSingleBigEndian(value, data.AsSpan(2, 4));
+
+        return CompanyFrame.Build(CompanyFrame.BaseCmdRequest, CompanyCmd.TuningParam, data);
+    }
+
+    public bool TryParseTuningReadResp(ReadOnlySpan<byte> data, out byte status, out byte paramId, out float value)
+    {
+        status = 0;
+        paramId = 0;
+        value = 0;
+
+        // MODE(01) STATUS PARAM_ID VALUE4
+        if (data.Length < 6 || data[0] != TuningParamMode.Read)
+            return false;
+
+        status = data[1];
+        paramId = data[2];
+        value = ReadSingleBigEndian(data.Slice(3, 4));
+        return true;
+    }
+
+    public bool TryParseTuningReadAllResp(ReadOnlySpan<byte> data, out byte status,
+        out IReadOnlyList<TuningParamReading> items)
+    {
+        status = 0;
+        items = Array.Empty<TuningParamReading>();
+
+        // MODE(01) STATUS 0xFF COUNT [ID VALUE4]×N —— COUNT 须与载荷 N×5 对齐
+        if (data.Length < 4 || data[0] != TuningParamMode.Read || data[2] != TuningParamMode.ParamIdAll)
+            return false;
+
+        status = data[1];
+        int count = data[3];
+        if (data.Length < 4 + count * 5)
+            return false;
+
+        var list = new List<TuningParamReading>(count);
+        for (int i = 0; i < count; i++)
+        {
+            int at = 4 + i * 5;
+            list.Add(new TuningParamReading(data[at], ReadSingleBigEndian(data.Slice(at + 1, 4))));
+        }
+
+        items = list;
+        return true;
+    }
+
+    public bool TryParseTuningWriteResp(ReadOnlySpan<byte> data, out byte status, out byte paramId, out float effective)
+    {
+        status = 0;
+        paramId = 0;
+        effective = 0;
+
+        // MODE(02) STATUS PARAM_ID VALUE4（生效值 / 越界=旧值）
+        if (data.Length < 6 || data[0] != TuningParamMode.Write)
+            return false;
+
+        status = data[1];
+        paramId = data[2];
+        effective = ReadSingleBigEndian(data.Slice(3, 4));
+        return true;
+    }
+
+    /// <summary>float32 → 4B 大端（VALUE4；黄金向量口径：0.27f=3E 8A 3D 71）</summary>
+    private static void WriteSingleBigEndian(float value, Span<byte> destination)
+    {
+        int bits = BitConverter.SingleToInt32Bits(value);
+        destination[0] = (byte)(bits >> 24);
+        destination[1] = (byte)(bits >> 16);
+        destination[2] = (byte)(bits >> 8);
+        destination[3] = (byte)bits;
+    }
+
+    /// <summary>4B 大端 → float32（VALUE4）</summary>
+    private static float ReadSingleBigEndian(ReadOnlySpan<byte> source) =>
+        BitConverter.Int32BitsToSingle((source[0] << 24) | (source[1] << 16) | (source[2] << 8) | source[3]);
 
     /// <summary>ASCII 写入定长字段：截断到定长、其余补 0（0 结束）</summary>
     private static void WriteAsciiFixed(string? text, Span<byte> destination)

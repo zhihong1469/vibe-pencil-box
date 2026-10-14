@@ -34,6 +34,13 @@ public static class CompanyCmd
     /// 成对定案：53 上行 / 54 下行）。语义单一来源 = 统一TX 规范 §7，本端只搬运字节不解释（12 号 E3）。
     /// </summary>
     public const byte PenCmd = 0x54;
+
+    /// <summary>
+    /// 内部调参（issues-pencil/01：`0x61/01` 读 · `0x61/02` 写，VALUE4=float32 大端）。
+    /// **仅串口轨 PC↔笔端 UART1 直连**（基站零感知不转发）；数值与 <see cref="CompanyFrame.BaseCmdRequest"/>
+    /// 的 `0x61` 重叠纯属 CMDTYPE 命名空间巧合，互不冲突。
+    /// </summary>
+    public const byte TuningParam = 0x61;
 }
 
 /// <summary>`PARAM`（`CMDTYPE` 之后的首字节）</summary>
@@ -53,6 +60,35 @@ public static class CompanyParam
 
     /// <summary>`0x53` 拉取快照（基站本地槽缓存即答，不打扰笔端——补充 05 §1）</summary>
     public const byte PenStatusPull = 0x01;
+}
+
+/// <summary>`0x61` 内部调参请求首字节 `MODE`（issues-pencil/01 §3）</summary>
+public static class TuningParamMode
+{
+    /// <summary>读：`[01][PARAM_ID]`；`PARAM_ID=0xFF` 表全表读</summary>
+    public const byte Read = 0x01;
+
+    /// <summary>写：`[02][PARAM_ID][VALUE4]`</summary>
+    public const byte Write = 0x02;
+
+    /// <summary>读全表的 `PARAM_ID` 通配值</summary>
+    public const byte ParamIdAll = 0xFF;
+}
+
+/// <summary>`0x61` 应答 `STATUS`（issues-pencil/01 §4）</summary>
+public static class TuningStatus
+{
+    /// <summary>成功（写应答 VALUE4=生效值）</summary>
+    public const byte Ok = 0x00;
+
+    /// <summary>未知参数 ID</summary>
+    public const byte UnknownId = 0x01;
+
+    /// <summary>越界拒绝（不夹取，回写前旧值）</summary>
+    public const byte OutOfRange = 0x02;
+
+    /// <summary>OTA 升级会话进行中（仅写被拒；读不受影响）</summary>
+    public const byte OtaBusy = 0x03;
 }
 
 /// <summary>`0x03` / `0x51` 应答的 `STATUS`（骨架 §6.1/§6.2）</summary>
@@ -238,3 +274,6 @@ public static class PenStatusText
 
 /// <summary>`0x03` 读型号与版本的应答字段</summary>
 public sealed record VersionInfo(byte Status, byte Model, byte SverMajor, byte SverMinor, byte SverPatch);
+
+/// <summary>`0x61` 内部调参一条读值：参数 ID + float32 当前/生效值</summary>
+public sealed record TuningParamReading(byte Id, float Value);

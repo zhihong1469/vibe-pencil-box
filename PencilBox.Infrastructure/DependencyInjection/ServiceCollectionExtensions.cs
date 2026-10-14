@@ -99,6 +99,11 @@ public static class ServiceCollectionExtensions
         // 笔端绑定服务（取 MAC + 目录 + 下发 门面）：两条来源（BLE 扫描 / 串口 0x51 读）汇入同一份目录
         services.AddSingleton<IPenBindingService, PenBindingService>();
 
+        // `0x61` 内部调参服务（issues-pencil/01）：仅串口轨 PC↔笔端直连（空鼠页用；CLI 走 codec 直调）
+        services.AddSingleton<ITuningService, TuningService>();
+        // 空鼠方案快照存储（03 卷 §6：configs/airmouse/ 一快照一 JSON，CLI 与空鼠工作台共用）
+        services.AddSingleton<IAirMouseSnapshotStore, AirMouseSnapshotStore>();
+
         // EP4 命令通道客户端（A1~A4 一问一答）：UI/CLI 经此读 Dongle 真实应答
         services.AddSingleton<IDongleCommandClient, DongleCommandClient>();
 

@@ -41,6 +41,7 @@ public partial class MainViewModel : ObservableObject
     public DspPageViewModel DspPage { get; }
     public OtaPageViewModel OtaPage { get; }
     public ProductHomeViewModel ProductHome { get; }
+    public AirMouseViewModel AirMouse { get; }
 
     public MainViewModel(
         IDeviceService deviceService,
@@ -53,7 +54,8 @@ public partial class MainViewModel : ObservableObject
         PassthroughPageViewModel passthrough,
         DspPageViewModel dspPage,
         OtaPageViewModel otaPage,
-        ProductHomeViewModel productHome)
+        ProductHomeViewModel productHome,
+        AirMouseViewModel airMouse)
     {
         _deviceService = deviceService;
         _macroService = macroService;
@@ -67,6 +69,7 @@ public partial class MainViewModel : ObservableObject
         DspPage = dspPage;
         OtaPage = otaPage;
         ProductHome = productHome;
+        AirMouse = airMouse;
 
         _deviceService.ConnectionStateChanged += OnConnectionStateChanged;
         _deviceService.DeviceInfoChanged += OnDeviceInfoChanged;

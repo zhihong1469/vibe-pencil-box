@@ -62,6 +62,9 @@
             <TabItem Header="扩音">
                 <v:PassthroughView DataContext="{Binding Passthrough}"/>
             </TabItem>
+            <TabItem Header="空鼠">
+                <v:AirMouseView DataContext="{Binding AirMouse}"/>
+            </TabItem>
         </TabControl>
 
         <!-- 调试工具（折叠收缩面板；仅研发版显示——由编译开关 DEBUG_TOOLS 控制，

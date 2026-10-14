@@ -72,6 +72,7 @@ public partial class App : Application
         services.AddSingleton<DspPageViewModel>();
         services.AddSingleton<OtaPageViewModel>();
         services.AddSingleton<ProductHomeViewModel>();
+        services.AddSingleton<AirMouseViewModel>();
 
         services.AddTransient<MainWindow>();
     }
