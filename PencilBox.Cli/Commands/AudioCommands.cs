@@ -362,13 +362,20 @@ public class AudioCommands
     public async Task<int> PassthroughAsync(string? inDevice, string? outDevice,
         int rate, int latencyMs, float volume, int duration, bool aec = true, bool ans = true, bool afc = false,
         int aecSuppress = 0, int ansSuppress = 0, bool aecGate = false, string? recordOut = null,
-        int hpfHz = 80, int lpfHz = 0, string? bridgeDevice = null, int bridgeLatencyMs = 150, bool recordBridge = false)
+        int hpfHz = 80, int lpfHz = 0, string? bridgeDevice = null, int bridgeLatencyMs = 150, bool recordBridge = false,
+        string? notch = null, int notchQ = 25)
     {
         var captureDevices = await _passthrough.GetCaptureDevicesAsync();
         var renderDevices = await _passthrough.GetRenderDevicesAsync();
         var capture = ResolveDevice(captureDevices, inDevice, "录音");
         var render = ResolveDevice(renderDevices, outDevice, "播放");
         var bridge = ResolveDevice(renderDevices, bridgeDevice, "桥接");
+        var notchHz = (notch ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => int.TryParse(s, out var hz) ? hz : 0)
+            .Where(hz => hz > 0)
+            .Distinct()
+            .ToArray();
         AudioPassthroughStats? liveStats = null;
 
         // 输出环回录制（AEC 客观评测：残余回声能量直接可测）
@@ -383,6 +390,7 @@ public class AudioCommands
         ConsoleFormatter.Info($"扩音：[{capture?.FriendlyName ?? "系统默认录音"}] → [{render?.FriendlyName ?? "系统默认播放"}]");
         ConsoleFormatter.Info($"{rate}Hz/16bit/1ch，渲染缓冲 {latencyMs}ms，音量 {volume:F2}x（>1 时限制器自动防破音）；" +
                               $"带通 HPF={(hpfHz > 0 ? $"{hpfHz}Hz" : "关")} LPF={(lpfHz > 0 ? $"{lpfHz}Hz" : "关")}；" +
+                              (notchHz.Length > 0 ? $"定点滤除 {string.Join("/", notchHz)}Hz Q{notchQ}；" : "") +
                               $"处理链 AEC={(aec ? 1 : 0)} ANS={(ans ? 1 : 0)} AFC={(afc ? 1 : 0)}" +
                               (aecSuppress > 0 ? $"（手动 {aecSuppress}dB）" : "") +
                               (ansSuppress > 0 ? $"（手动 {ansSuppress}dB）" : "") +
@@ -422,6 +430,8 @@ public class AudioCommands
                 EnableAecGate = aecGate,
                 HpfHz = hpfHz,
                 LpfHz = lpfHz,
+                NotchCentersHz = notchHz,
+                NotchQ = notchQ,
                 BridgeDeviceId = bridge?.DeviceId,
                 BridgeLatencyMs = bridgeLatencyMs
             });
@@ -468,6 +478,7 @@ public class AudioCommands
             Capture = $"{stats.CaptureDevice} ({stats.CaptureFormat})",
             Render = $"{stats.RenderDevice} ({stats.RenderFormat})",
             Bridge = stats.BridgeDevice.Length == 0 ? "关" : $"{stats.BridgeDevice}（丢弃 {stats.BridgeDroppedBytes}B）",
+            Notch = stats.NotchConfig.Length == 0 ? "关" : stats.NotchConfig,
             stats.CaptureCallbacks,
             stats.RenderPulls
         });

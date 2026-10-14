@@ -69,6 +69,12 @@ public interface IAudioPassthrough : IDisposable
     /// 带通降噪（切机械抖动/低频传导与高频嘶声；作用于 AEC 之前的麦克风帧）。0 = 该边关闭。运行中即时生效。
     /// </summary>
     void SetBandpass(int hpfHz, int lpfHz);
+
+    /// <summary>
+    /// 定点滤除（notch）：对列表里每个中心频率挖一个窄坑（带宽≈中心/Q），用于电机/变压器类单频啸声。
+    /// 空列表 = 关。运行中即时生效。
+    /// </summary>
+    void SetNotches(int[] centersHz, int q);
 }
 
 /// <summary>

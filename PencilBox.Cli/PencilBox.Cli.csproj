@@ -21,4 +21,10 @@
     <ProjectReference Include="..\PencilBox.Infrastructure\PencilBox.Infrastructure.csproj" />
   </ItemGroup>
 
+  <!-- dsp 脚本随发布产物走：PythonProcessBridge 找 exe 旁的 dsp/，发布单文件不打包 content，需显式拷贝 -->
+  <ItemGroup>
+    <None Include="..\dsp\**\*" Link="dsp\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

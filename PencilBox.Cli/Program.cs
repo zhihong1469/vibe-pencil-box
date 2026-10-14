@@ -356,7 +356,9 @@ public class Program
                 GetOptionInt(args, "--lpf", 0),            // 带通上边 Hz（0=关）
                 GetOption(args, "--bridge"),               // 桥接副汇（供其他软件当已降噪麦克风）
                 GetOptionInt(args, "--bridge-latency", 150),
-                HasFlag(args, "--record-bridge")),          // 输出环回录制（AEC 客观评测）
+                HasFlag(args, "--record-bridge"),          // 输出环回录制（AEC 客观评测）
+                GetOption(args, "--notch"),                // 定点滤除 Hz 列表，如 1000 或 1000,2000（电机单频啸声）
+                GetOptionInt(args, "--notch-q", 25)),      // notch Q（中心/带宽，越大坑越窄）
 
             // 延迟测量底座（box/07 §2）：脉冲互相关闭环延迟
             "latency-probe" or "probe" => await cmd.LatencyProbeAsync(
@@ -695,6 +697,7 @@ public class Program
                                [--aec-suppress N] [--ans-suppress N]  手动调参 dB（0/缺省=自动档）
                                [--aec-gate]  AEC 条件触发：参考静音满 500ms 旁路 AEC（实验，默认关）
                                [--hpf 80] [--lpf 0]  带通降噪 Hz（0=关；HPF 切机械抖动/低频传导）
+                               [--notch 1000,2000] [--notch-q 25]  定点滤除（电机单频啸声；频率用 dsp run --script fft_analysis 实测）
                                [--bridge <设备>] [--bridge-latency 150]  桥接副汇：后级信号复投第二设备（虚拟声卡）
                                [--duration 0(=Ctrl+C 停)]
                      probe   延迟探测：播扫频脉冲串→采集同录→互相关闭环延迟（自校准：--in/--out 同本机）

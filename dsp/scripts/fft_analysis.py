@@ -103,7 +103,11 @@ def process_file(file_path, fft_size=1024, window="hann", sample_rate=16000,
     if np.any(voice_mask) and np.any(out_mask):
         voice_power = np.mean(mags[voice_mask] ** 2)
         noise_power = np.mean(mags[out_mask] ** 2)
-        snr_db = float(10.0 * np.log10(voice_power / (noise_power + 1e-12)))
+        # 近静音段 voice_power 可能下溢为 0 → log10 除零 → -Inf，桥端 JSON 解析会崩
+        if voice_power <= 0.0 or not np.isfinite(voice_power):
+            snr_db = -180.0
+        else:
+            snr_db = float(10.0 * np.log10(voice_power / (noise_power + 1e-12)))
     else:
         snr_db = 0.0
 

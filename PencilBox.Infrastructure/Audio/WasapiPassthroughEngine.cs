@@ -49,6 +49,11 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
 
     // 带通降噪（AEC 前级）：HPF/LPF 各两节级联 24dB/oct；数组整体替换保证运行中调频无撕裂
     private volatile BiquadFilter[]? _bandpass;
+    // 滤波链状态（SetBandpass/SetNotches 与 StartCore 共用一份，整体重建数组）
+    private int _hpfHzState = 80;
+    private int _lpfHzState;
+    private int[] _notchHzState = [];
+    private int _notchQState = 25;
 
     // 桥接副汇：处理链后级信号复投第二渲染设备（虚拟声卡/第二扬声器），供其他软件当已降噪麦克风。
     // 写满丢最旧、绝不反压主链——主扩音延迟不受它影响；消费端卡顿只体现为 BridgeDroppedBytes。
@@ -198,7 +203,9 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         _fadeInTotal = MathF.Max(1f, outFormat.SampleRate * 0.3f);
         _fadeInLeft = (int)_fadeInTotal;
 
-        // 带通降噪下/上边（0=关）
+        // 带通降噪下/上边（0=关）+ 定点滤除（notch，中心频率列表）
+        _notchHzState = options.NotchCentersHz ?? [];
+        _notchQState = options.NotchQ;
         ApplyBandpass(options.HpfHz, options.LpfHz);
 
         // 2.5 桥接副汇（可选）：必须在采集启动之前初始化——采集一开跑就持续进环，
@@ -347,26 +354,47 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         output.Play();
     }
 
-    /// <summary>构建带通级联（各两节 24dB/oct）；两边都关则返回 null</summary>
-    private void ApplyBandpass(int hpfHz, int lpfHz)
+    /// <summary>按当前状态重建滤波链：HPF/LPF 各两节（24dB/oct）+ 每个 notch 中心一节</summary>
+    private void ApplyFilterChain()
     {
         var rate = _outFormat?.SampleRate ?? 16000;
-        var list = new List<BiquadFilter>(4);
-        if (hpfHz > 0)
+        var list = new List<BiquadFilter>(4 + _notchHzState.Length);
+        if (_hpfHzState > 0)
         {
-            list.Add(new BiquadFilter(BiquadResponse.HighPass, hpfHz, rate));
-            list.Add(new BiquadFilter(BiquadResponse.HighPass, hpfHz, rate));
+            list.Add(new BiquadFilter(BiquadResponse.HighPass, _hpfHzState, rate));
+            list.Add(new BiquadFilter(BiquadResponse.HighPass, _hpfHzState, rate));
         }
-        if (lpfHz > 0)
+        if (_lpfHzState > 0)
         {
-            list.Add(new BiquadFilter(BiquadResponse.LowPass, lpfHz, rate));
-            list.Add(new BiquadFilter(BiquadResponse.LowPass, lpfHz, rate));
+            list.Add(new BiquadFilter(BiquadResponse.LowPass, _lpfHzState, rate));
+            list.Add(new BiquadFilter(BiquadResponse.LowPass, _lpfHzState, rate));
+        }
+        foreach (var hz in _notchHzState)
+        {
+            if (hz > 0 && hz < rate / 2 * 0.99)
+                list.Add(new BiquadFilter(BiquadResponse.Notch, hz, rate, Math.Max(1, _notchQState)));
         }
         Volatile.Write(ref _bandpass, list.Count == 0 ? null : list.ToArray());
     }
 
+    /// <summary>设置带通（UI 滑条/CLI 起动参数）并重建滤波链</summary>
+    private void ApplyBandpass(int hpfHz, int lpfHz)
+    {
+        _hpfHzState = Math.Max(0, hpfHz);
+        _lpfHzState = Math.Max(0, lpfHz);
+        ApplyFilterChain();
+    }
+
     /// <summary>运行中调整带通（UI 滑条；数组整体替换，采集线程逐帧取引用）</summary>
     public void SetBandpass(int hpfHz, int lpfHz) => ApplyBandpass(hpfHz, lpfHz);
+
+    /// <summary>运行中调整定点滤除（notch；数组整体替换，采集线程逐帧取引用）</summary>
+    public void SetNotches(int[] centersHz, int q)
+    {
+        _notchHzState = centersHz ?? [];
+        _notchQState = q;
+        ApplyFilterChain();
+    }
 
     private void DetachAndDispose(WasapiCapture capture)
     {
@@ -768,6 +796,8 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             DspOverruns = Interlocked.Read(ref _dspOverruns),
             BridgeDevice = _bridgeName,
             BridgeDroppedBytes = _bridgeRing?.DroppedBytes ?? 0,
+            NotchConfig = _notchHzState.Length == 0 ? string.Empty
+                : $"{string.Join(",", _notchHzState)}Hz Q{_notchQState}",
             EstimatedLatencyMs = EstimateBoxLatencyMs(),
             AecGateBypassMs = Interlocked.Read(ref _gateBypassFrames) * 10
         };

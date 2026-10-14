@@ -82,6 +82,13 @@ public sealed class PassthroughStartOptions
     /// <summary>带通降噪上边：低通截止（Hz，0=关）。16k 处理时 8k 以上已被采样率天然滤除，默认关。</summary>
     public int LpfHz { get; set; }
 
+    /// <summary>定点滤除（notch）中心频率列表（Hz，空=关）。挖电机/变压器类窄带单频啸声；
+    /// 实测真实频率：录音 → `dsp run --script fft_analysis` 看 dominant/peaks。</summary>
+    public int[] NotchCentersHz { get; set; } = [];
+
+    /// <summary>定点滤除 Q（中心/带宽；越大坑越窄，默认 25 → 1kHz 带宽 40Hz）</summary>
+    public int NotchQ { get; set; } = 25;
+
     /// <summary>桥接副汇渲染设备 ID（null/空=关）。处理链后级信号复投一份给虚拟声卡/第二设备，
     /// 供其他软件当"已降噪麦克风"用；写满即丢最旧，绝不反压主链（主延迟不受影响）。</summary>
     public string? BridgeDeviceId { get; set; }
@@ -115,6 +122,9 @@ public sealed class AudioPassthroughStats
 
     /// <summary>桥接副汇累计丢弃字节（消费不及时丢最旧的量）</summary>
     public long BridgeDroppedBytes { get; set; }
+
+    /// <summary>定点滤除配置描述（如 "1000,2000Hz Q25"；空=未启用）</summary>
+    public string NotchConfig { get; set; } = string.Empty;
 
     /// <summary>本次会话时长（秒）</summary>
     public double ElapsedSeconds { get; set; }

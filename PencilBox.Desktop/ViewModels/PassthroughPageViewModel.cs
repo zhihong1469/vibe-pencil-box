@@ -113,6 +113,36 @@ public partial class PassthroughPageViewModel : ObservableObject
         if (IsRunning) _passthrough.SetBandpass(HpfEffective, LpfEffective);
     }
 
+    // 定点滤除（notch）：挖电机/变压器类窄带单频啸声；Hz 逗号分隔列表，空=关。
+    // 真实频率先实测：audio capture 录电机段 → dsp run --script fft_analysis 看 dominant_freq/peaks。
+
+    /// <summary>notch 中心频率文本（如 "1000" 或 "1000,2000"；空=关）</summary>
+    [ObservableProperty]
+    private string _notchText = "";
+
+    /// <summary>notch Q（中心/带宽；越大坑越窄，默认 25 → 1kHz 带宽 40Hz）</summary>
+    [ObservableProperty]
+    private double _notchQSlider = 25;
+
+    public int NotchQEffective => (int)Math.Clamp(NotchQSlider, 1, 100);
+
+    /// <summary>解析 Hz 列表（非法 token 跳过）；返回 null 表示无可生效配置</summary>
+    public int[]? ParseNotchHz() => NotchText
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(s => int.TryParse(s, out var hz) ? hz : 0)
+        .Where(hz => hz > 0 && hz < 8000)
+        .Distinct()
+        .ToArray();
+
+    private void ApplyNotchLive()
+    {
+        if (IsRunning && ParseNotchHz() is { } list) _passthrough.SetNotches(list, NotchQEffective);
+    }
+
+    partial void OnNotchTextChanged(string value) => ApplyNotchLive();
+
+    partial void OnNotchQSliderChanged(double value) => ApplyNotchLive();
+
     // 调参（自动档=内置推荐；手动档开放滑条，方便边调边听边学）
 
     [ObservableProperty]
@@ -242,6 +272,8 @@ public partial class PassthroughPageViewModel : ObservableObject
                 EnableAecGate = AecGateEnabled,
                 HpfHz = HpfEffective,
                 LpfHz = LpfEffective,
+                NotchCentersHz = ParseNotchHz() ?? [],
+                NotchQ = NotchQEffective,
                 BridgeDeviceId = SelectedBridgeDevice?.DeviceId
             });
             StatusMessage = "扩音中：采集 → 扬声器实时直通（耳机模式下无啸叫风险）";
@@ -361,9 +393,10 @@ public partial class PassthroughPageViewModel : ObservableObject
             var lim = s.LimiterGain < 0.995f ? $" | 限制器 {s.LimiterGain:F2}（已触顶）" : "";
             var gate = s.AecGateBypassMs > 0 ? $" | 门控旁路 {s.AecGateBypassMs:F0}ms" : "";
             var bridge = s.BridgeDevice.Length == 0 ? "" : $" | 桥接 {s.BridgeDevice}（丢弃 {s.BridgeDroppedBytes}B）";
+            var notch = s.NotchConfig.Length == 0 ? "" : $" | 定点 {s.NotchConfig}";
             StatsSummary = $"时长 {s.ElapsedSeconds,6:F1}s | 环形均值 {s.RingDepthAvgMs,6:F1}ms / 峰值 {s.RingDepthMaxMs,6:F1}ms | " +
                            $"欠载 {s.UnderrunEvents} | 丢弃 {s.DroppedBytes}B | {s.CaptureFormat} → {s.RenderFormat} | 缓冲 {s.RenderLatencyMs}ms | " +
-                           $"AEC偏移 {s.AecOffsetMs:F1}ms / DSP最大 {s.DspMaxMs:F2}ms{lim}{gate}{bridge} | Box段延迟 ~{s.EstimatedLatencyMs:F0}ms";
+                           $"AEC偏移 {s.AecOffsetMs:F1}ms / DSP最大 {s.DspMaxMs:F2}ms{lim}{gate}{bridge}{notch} | Box段延迟 ~{s.EstimatedLatencyMs:F0}ms";
         });
     }
 }

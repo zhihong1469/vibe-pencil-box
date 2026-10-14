@@ -62,5 +62,43 @@ public class BiquadFilterTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new BiquadFilter(BiquadResponse.HighPass, 0, Rate));
         Assert.Throws<ArgumentOutOfRangeException>(() => new BiquadFilter(BiquadResponse.LowPass, Rate / 2, Rate));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new BiquadFilter(BiquadResponse.Notch, 1000, Rate, 0));
+    }
+
+    [Fact]
+    public void Notch_KillsCenterTone_AndPassesNeighbors()
+    {
+        const double f0 = 1000;
+        const double q = 25;
+        double LevelAt(double hz)
+        {
+            var filter = new BiquadFilter(BiquadResponse.Notch, f0, Rate, q);
+            var buf = Sine(hz, 4000);
+            filter.Process(buf);
+            return 20 * Math.Log10(RmsTail(buf, 1000) / RmsTail(Sine(hz, 4000), 1000));
+        }
+
+        // 中心挖深坑（电机单频 ≥20dB 衰减），坑外 1/5 倍频程人声几乎无损
+        Assert.True(LevelAt(f0) <= -40, $"1kHz 中心应深坑（≤-40dB），实得 {LevelAt(f0):F1}dB");
+        Assert.InRange(LevelAt(800), -1.0, 1.0);
+        Assert.InRange(LevelAt(1250), -1.0, 1.0);
+    }
+
+    [Fact]
+    public void Notch_Cascade_RemovesHarmonics_Independently()
+    {
+        // 双 notch（基频+二次谐波）各挖各的坑，互不拖累通带
+        var n1 = new BiquadFilter(BiquadResponse.Notch, 1000, Rate, 25);
+        var n2 = new BiquadFilter(BiquadResponse.Notch, 2000, Rate, 25);
+        var buf = Sine(1000, 4000);
+        n1.Process(buf); n2.Process(buf);
+        var at1k = 20 * Math.Log10(RmsTail(buf, 1000) / RmsTail(Sine(1000, 4000), 1000));
+
+        var buf3 = Sine(3000, 4000);
+        n1.Process(buf3); n2.Process(buf3);
+        var at3k = 20 * Math.Log10(RmsTail(buf3, 1000) / RmsTail(Sine(3000, 4000), 1000));
+
+        Assert.True(at1k <= -40, $"1kHz 应被挖掉，实得 {at1k:F1}dB");
+        Assert.InRange(at3k, -1.0, 1.0);
     }
 }
