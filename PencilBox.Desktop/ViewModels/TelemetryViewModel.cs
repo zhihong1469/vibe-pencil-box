@@ -29,6 +29,8 @@ namespace PencilBox.Desktop.ViewModels;
 /// 同一 <see cref="TelemetryRecorder"/>/<see cref="TelemetryCsv"/> 单点（CLI 录的 CSV 本页直接回放，反之亦然）。
 /// 三视图=原始时域（raw_gx/gz → dps）/ 输出时域（out_x/y + rate 可叠加）/ 输入-输出曲线
 /// （|rate| 分桶 vs |out| 均值）；叠图诊断模式默认关（量纲打架，讨论稿结论）。
+/// 另有**全量数据读出**面板：13 信号+seq/flags 逐行露出最新帧纯数值（图表只画判读通道，
+/// gy/加速度三轴/rate_roll/flags 不画线但在此可见；温度字段 S18 待笔端裁决后补行）。
 /// </summary>
 public partial class TelemetryViewModel : ObservableObject
 {
@@ -56,6 +58,9 @@ public partial class TelemetryViewModel : ObservableObject
         _config = config;
 
         _serialChannel.FrameReceived += OnFrameReceived;
+        foreach (var r in new[] { _rSeq, _rFlags, _rFrozen, _rDrag, _rBias, _rNvds, _rTemp,
+                 _rGx, _rGy, _rGz, _rAx, _rAy, _rAz, _rRateYaw, _rRateRoll, _rOutX, _rOutY })
+            LiveRows.Add(r);
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         _refreshTimer.Tick += (_, _) => RefreshCharts();
         _refreshTimer.Start();
@@ -123,6 +128,55 @@ public partial class TelemetryViewModel : ObservableObject
 
     [ObservableProperty]
     private string _ioScaleText = "";
+
+    // ============ 全量数据读出（最新帧；与三视图同一刷新时钟，回放同源） ============
+
+    /// <summary>读出面板一行（值仅在变化时触发绑定，空转零开销）</summary>
+    public sealed class LiveValueRow : ObservableObject
+    {
+        private string _value = "—";
+        public string Name { get; }
+        public string Value { get => _value; set { if (_value != value) { _value = value; OnPropertyChanged(); } } }
+        public LiveValueRow(string name) => Name = name;
+    }
+
+    private readonly LiveValueRow _rSeq = new("seq"), _rFlags = new("flags"),
+        _rFrozen = new("冻结bit0"), _rDrag = new("拖拽bit1"), _rBias = new("零偏标定bit2"),
+        _rNvds = new("NVDS载入bit3"), _rTemp = new("temp_imu"),
+        _rGx = new("gx"), _rGy = new("gy"), _rGz = new("gz"),
+        _rAx = new("ax"), _rAy = new("ay"), _rAz = new("az"),
+        _rRateYaw = new("rate_yaw"), _rRateRoll = new("rate_roll"),
+        _rOutX = new("out_x"), _rOutY = new("out_y");
+
+    /// <summary>全量读出面板（17 行定名：seq/flags/四状态位/温度/六轴/rate×2/out×2）</summary>
+    public ObservableCollection<LiveValueRow> LiveRows { get; } = new();
+
+    private void UpdateLiveReadout(TelemetryFrame? f)
+    {
+        if (f == null)
+        {
+            foreach (var r in LiveRows)
+                r.Value = "—";
+            return;
+        }
+        _rSeq.Value = f.Seq.ToString();
+        _rFlags.Value = $"0x{f.Flags:X2}";
+        _rFrozen.Value = f.IsFrozen ? "●" : "○";
+        _rDrag.Value = f.IsDragIntent ? "●" : "○";
+        _rBias.Value = f.IsBiasCalibrated ? "●" : "○";
+        _rNvds.Value = f.IsBiasFromNvds ? "●" : "○";
+        _rTemp.Value = $"{f.TempC:F2} °C";
+        _rGx.Value = $"{f.RawGx * 0.01:F2} dps";
+        _rGy.Value = $"{f.RawGy * 0.01:F2} dps";
+        _rGz.Value = $"{f.RawGz * 0.01:F2} dps";
+        _rAx.Value = $"{f.RawAx * 0.001:F3} g";
+        _rAy.Value = $"{f.RawAy * 0.001:F3} g";
+        _rAz.Value = $"{f.RawAz * 0.001:F3} g";
+        _rRateYaw.Value = $"{f.RateYaw * 0.01:F2} dps";
+        _rRateRoll.Value = $"{f.RateRoll * 0.01:F2} dps";
+        _rOutX.Value = ((int)f.OutX).ToString();
+        _rOutY.Value = ((int)f.OutY).ToString();
+    }
 
     // ============ 帧接收 ============
 
@@ -229,6 +283,243 @@ public partial class TelemetryViewModel : ObservableObject
         StatusText = $"录波已存：{dialog.FileName}（{window.Count} 帧 @ {FpsOf(window):F1}fps，丢流 {ratio * 100:F3}%）" +
                      "——metrics：python tools/airmouse_metrics.py";
     }
+
+    // ============ 零漂统计模式（对齐卷 06 §4.1 stillsurvey；CLI stillstats 同一 DriftSurvey 单点） ============
+
+    [ObservableProperty]
+    private bool _isSurveyRunning;
+
+    [ObservableProperty]
+    private string _surveyButtonText = "开始零漂统计";
+
+    partial void OnIsSurveyRunningChanged(bool value) => SurveyButtonText = value ? "停止统计" : "开始零漂统计";
+
+    /// <summary>统计时长（秒；建议 ≥60，要联动温漂回归 ≥300 且带冷热差）</summary>
+    [ObservableProperty]
+    private int _surveySecs = 60;
+
+    /// <summary>统计面板摘要（样本/剔除比/三方对照/温漂数/决策链，多行）</summary>
+    [ObservableProperty]
+    private string _surveySummary = "笔静置（架上/平放）后点「开始零漂统计」——双通道分布 + 三方对照 + 温漂数一次直出（06 卷 §4.1）；动笔会被自动剔除，剔除 >20% 提示重跑。";
+
+    /// <summary>全窗分布统计行（四通道）</summary>
+    public ObservableCollection<SurveyRow> SurveyRows { get; } = new();
+
+    /// <summary>分阶段行（等样本数切窗；看 Kalman 收敛/温漂趋势）</summary>
+    public ObservableCollection<SurveyStageRow> SurveyStages { get; } = new();
+
+    /// <summary>零漂统计面板一行（双单位 dps(0.01dps 原值) 已格式化）</summary>
+    public sealed class SurveyRow
+    {
+        public string Channel { get; init; } = "";
+        public int Frames { get; init; }
+        public string Min { get; init; } = "";
+        public string Max { get; init; } = "";
+        public string Mean { get; init; } = "";
+        public string Median { get; init; } = "";
+        public string Rms { get; init; } = "";
+        public string Sigma { get; init; } = "";
+        public string P5 { get; init; } = "";
+        public string P95 { get; init; } = "";
+    }
+
+    /// <summary>分阶段一行：中位（P5~P95）dps</summary>
+    public sealed class SurveyStageRow
+    {
+        public string Stage { get; init; } = "";
+        public string Window { get; init; } = "";
+        public int Frames { get; init; }
+        public string Gx { get; init; } = "";
+        public string Gz { get; init; } = "";
+        public string Yaw { get; init; } = "";
+        public string Roll { get; init; } = "";
+    }
+
+    private CancellationTokenSource? _surveyCts;
+
+    /// <summary>
+    /// 零漂统计开关：实时模式=静置收流 N 秒→STOP→CSV（可选保存）→报告直出；
+    /// 回放模式=直接分析回放缓冲（同一录波重跑数值一致——确定性验收）。
+    /// </summary>
+    [RelayCommand]
+    private async Task ToggleSurveyAsync()
+    {
+        if (IsSurveyRunning)
+        {
+            _surveyCts?.Cancel();
+            return;
+        }
+
+        if (_replayMode)
+        {
+            List<(long Ts, TelemetryFrame F)> snap;
+            lock (_gate)
+                snap = _samples.ToList();
+            FillSurveyReport(DriftSurvey.Analyze(snap.Select(s => (s.Ts, s.F)).ToList()),
+                null, $"回放缓冲 {snap.Count} 帧（离线）");
+            return;
+        }
+
+        if (!await StartAsync())
+            return;
+
+        IsStreaming = true;
+        IsSurveyRunning = true;
+        _surveyCts = new CancellationTokenSource();
+        var ct = _surveyCts.Token;
+
+        // 三方对照前置：0x07/0x08（RAM 当前零偏）+ 0x09/0x0A（NVDS 持久值）；读不到不阻断
+        var bias = await ReadBiasContextAsync();
+
+        int secs = Math.Clamp(SurveySecs, 10, 3600);
+        StatusText = $"零漂统计 {secs}s 中…（笔静置；动笔会被门剔除）";
+        long windowStart = Environment.TickCount64;
+        long deadline = windowStart + secs * 1000L;
+        bool aborted = false;
+        while (Environment.TickCount64 < deadline)
+        {
+            try { await Task.Delay(200, ct); }
+            catch (OperationCanceledException) { aborted = true; break; }
+            lock (_gate)
+                StatsText = $"{_samples.Count(s => s.Ts >= windowStart)} 帧";
+        }
+
+        await StopAsync(null);
+        IsSurveyRunning = false;
+
+        List<(long Ts, TelemetryFrame F)> window;
+        lock (_gate)
+            window = _samples.Where(s => s.Ts >= windowStart).ToList();
+        if (window.Count == 0)
+        {
+            SurveySummary = "统计作废：0 帧——笔端未推流（0.13.24 已知欠口=发射未生效，见 report/2026-10-15）";
+            return;
+        }
+
+        var report = DriftSurvey.Analyze(
+            window.Select(s => (s.Ts, s.F)).ToList(), new DriftSurvey.Options(Stages: 4), bias);
+
+        // CSV 照落盘（复用 record 格式；取消保存不挡报告）
+        string? savedPath = null;
+        var dialog = new SaveFileDialog
+        {
+            Filter = "CSV 录波|*.csv",
+            FileName = $"airmouse_still_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            try
+            {
+                string? firmware = null;
+                try
+                {
+                    var verResp = await new CommandRequester(_clock, _config).RequestAsync(
+                        _serialChannel, _codec.EncodeReadVersion(), CompanyCmd.ReadVersion);
+                    if (verResp != null && _codec.TryParseVersionResp(verResp, out var ver) && ver.Status == CompanyStatus.Ok)
+                        firmware = $"0.{ver.SverMajor}.{ver.SverMinor}.{ver.SverPatch}";
+                }
+                catch { /* meta 标 unknown */ }
+
+                File.WriteAllText(dialog.FileName,
+                    TelemetryCsv.Build(window.Select(s => (s.Ts, s.F)), FpsOf(window),
+                        CountDropped(window), Divider, firmware),
+                    new UTF8Encoding(false));
+                savedPath = dialog.FileName;
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"CSV 保存失败：{ex.Message}";
+            }
+        }
+
+        FillSurveyReport(report, savedPath,
+            (aborted ? "（手动提前停止）" : null) ?? "");
+    }
+
+    /// <summary>三方对照读数：0x07/0x08/0x09/0x0A 单参读（失败=null 不阻断）</summary>
+    private async Task<DriftSurvey.BiasContext?> ReadBiasContextAsync()
+    {
+        async Task<float?> ReadOne(byte id)
+        {
+            try
+            {
+                var resp = await new CommandRequester(_clock, _config).RequestAsync(
+                    _serialChannel, _codec.EncodeTuningRead(id), CompanyCmd.TuningParam);
+                if (resp != null && _codec.TryParseTuningReadResp(resp, out var status, out var echoId, out var value) &&
+                    status == TuningStatus.Ok && echoId == id)
+                    return value;
+            }
+            catch { /* 单项失败不阻断 */ }
+            return null;
+        }
+
+        if (!_serialChannel.IsOpen)
+            return null;
+        return new DriftSurvey.BiasContext(
+            await ReadOne(0x07), await ReadOne(0x08), await ReadOne(0x09), await ReadOne(0x0A));
+    }
+
+    /// <summary>报告 → 面板行 + 摘要（口径与 CLI stillstats 报告一致）</summary>
+    private void FillSurveyReport(DriftSurvey.Report r, string? savedPath, string note)
+    {
+        SurveyRows.Clear();
+        SurveyStages.Clear();
+        if (r.AcceptedFrames == 0)
+        {
+            SurveySummary = $"统计作废：{r.TotalFrames} 帧全被剔除（动了笔/冻结）——静置重跑（06 卷 §4.1）";
+            return;
+        }
+
+        foreach (var a in new[] { r.Gx, r.Gz, r.RateYaw, r.RateRoll })
+        {
+            if (a == null) continue;
+            SurveyRows.Add(new SurveyRow
+            {
+                Channel = a.Channel,
+                Frames = a.Count,
+                Min = Cell(a.Min), Max = Cell(a.Max),
+                Mean = Cell(a.Mean), Median = Cell(a.Median),
+                Rms = Cell(a.Rms), Sigma = Cell(a.Sigma),
+                P5 = Cell(a.P5), P95 = Cell(a.P95),
+            });
+        }
+
+        foreach (var s in r.Stages)
+        {
+            SurveyStages.Add(new SurveyStageRow
+            {
+                Stage = $"#{s.Index}",
+                Window = $"{s.StartMs / 1000.0:F1}~{s.EndMs / 1000.0:F1}s",
+                Frames = s.Frames,
+                Gx = Band(s.Gx), Gz = Band(s.Gz), Yaw = Band(s.RateYaw), Roll = Band(s.RateRoll),
+            });
+        }
+
+        var lines = new List<string>
+        {
+            $"统计窗 {r.SpanMs / 1000.0:F1}s：样本 {r.AcceptedFrames}/{r.TotalFrames}（剔除 {r.RejectedFrames}={r.RejectRatio * 100:F1}%）" +
+            (r.RejectRatio > DriftSurvey.RejectRatioWarn ? "——剔除超 20%，统计窗被污染建议重跑" : "（<20% 门 ✓）") + note,
+        };
+        if (r.Bias is { } b)
+            lines.Add($"三方对照：RAM 零偏 0x07/0x08 = {Fmt(b.RamGx)} / {Fmt(b.RamGz)} dps ｜ NVDS 0x09/0x0A = {Fmt(b.NvdsGx)} / {Fmt(b.NvdsGz)} dps");
+        lines.Add(r.TempRegressionValid
+            ? $"温漂回归：温度 {r.TempStartC:F2}→{r.TempEndC:F2}°C → gx {r.TempSlopeGxDpsPerC:+0.00000;-0.00000} ｜ gz {r.TempSlopeGzDpsPerC:+0.00000;-0.00000} dps/°C"
+            : $"温漂回归：跳过（温度跨度 {r.TempSpanC:F2}°C < {DriftSurvey.MinTempSpanC:F1}；要联动请录 ≥5min 且带冷热差）");
+        lines.Add(r.ResidualExceedsGuard
+            ? $"⚠ 残余零漂 |mean| > {DriftSurvey.GuardDeadzoneDps}dps 守卫死区——可写 0x0B=1 固化当前 RAM 零偏（调参页 0x0B 卡）或等笔端守卫自动写"
+            : $"✓ 补偿后残余零漂 |mean| ≤ {DriftSurvey.GuardDeadzoneDps}dps 守卫死区——当前补偿覆盖良好");
+        if (savedPath != null)
+            lines.Add($"录波已存：{savedPath}");
+
+        SurveySummary = string.Join("\n", lines);
+    }
+
+    private static string Cell(double fixedPoint) => $"{fixedPoint / 100.0:F3}({fixedPoint:0})";
+
+    private static string Band(DriftSurvey.AxisStats a) =>
+        $"{a.MedianDps:+0.000;-0.000;0.000}（{a.P5 / 100.0:+0.000;-0.000;0.000}~{a.P95 / 100.0:+0.000;-0.000;0.000}）";
+
+    private static string Fmt(float? v) => v == null ? "—" : $"{(double)v:+0.000;-0.000;0.000}";
 
     [RelayCommand]
     private void OpenCsv()
@@ -360,11 +651,13 @@ public partial class TelemetryViewModel : ObservableObject
             if (_samples.Count == 0)
             {
                 StatsText = IsStreaming ? StatsText : "";
+                UpdateLiveReadout(null);
                 return;
             }
             var first = _samples[^1].Ts - WindowMs;
             snap = _replayMode ? _samples.ToList() : _samples.SkipWhile(s => s.Ts < first).ToList();
         }
+        UpdateLiveReadout(snap[^1].F);
 
         double dpsPerLsb = 0.01;   // 定点定案（对齐卷 06 §1）：陀螺 raw=0.01dps 直读物理量，无 FS 换算
         long t0 = snap[0].Ts, t1 = snap[^1].Ts;
@@ -473,7 +766,8 @@ internal static class CsvFile
             if (t.Length == 0 || t.StartsWith("#") || t.StartsWith("pc_rx_ts"))
                 continue;
             var parts = t.Split(',');
-            if (parts.Length != 13)
+            // 13 列=v1 旧录波（无 temp），14 列=v2（尾列 temp_imu）
+            if (parts.Length is not (13 or 14))
                 continue;
             try
             {
@@ -482,7 +776,8 @@ internal static class CsvFile
                     short.Parse(parts[3]), short.Parse(parts[4]), short.Parse(parts[5]),
                     short.Parse(parts[6]), short.Parse(parts[7]), short.Parse(parts[8]),
                     short.Parse(parts[9]), short.Parse(parts[10]),
-                    sbyte.Parse(parts[11]), sbyte.Parse(parts[12]))));
+                    sbyte.Parse(parts[11]), sbyte.Parse(parts[12]),
+                    parts.Length >= 14 ? short.Parse(parts[13]) : (short)0)));
             }
             catch (FormatException)
             {

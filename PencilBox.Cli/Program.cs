@@ -569,6 +569,17 @@ public class Program
                 (byte)Math.Clamp(GetOptionInt(rest, "--div", 1), 1, 255),
                 GetOption(rest, "--out")),
 
+            // 0x62 零漂统计模式（对齐卷 06 §4.1 stillsurvey）：静置开统计→分布报告；--csv 离线分析已有录波
+            "stillstats" => await sp.GetRequiredService<CompanyStreamCommands>().StillStatsAsync(
+                GetOption(rest, "--port"),
+                GetOptionInt(rest, "--secs", 60),
+                (byte)Math.Clamp(GetOptionInt(rest, "--div", 1), 1, 255),
+                GetOption(rest, "--out"),
+                Math.Max(1, GetOptionInt(rest, "--stages", 4)),
+                GetOptionDouble(rest, "--gate", 0.5),
+                HasFlag(rest, "--json"),
+                GetOption(rest, "--csv")),
+
             // 0x53 状态上行（基站把统一TX 状态槽原样搬运上行；仅 USB 轨）：
             // 拉取快照一次，--monitor N 继续监听基站主动推送 N 秒（电量/休眠等实时变化）
             "status" => await cmd.StatusAsync(port, GetOptionInt(rest, "--monitor", 0)),
@@ -773,6 +784,12 @@ public class Program
                     record   [--secs 30] [--div 1] [--out f.csv] --port COMx
                                                               START→收 N 秒→STOP→CSV 落盘（原码直出）+
                                                               # meta: fps/dropped/div/fw 尾注；Ctrl+C 提前收束不丢数据
+                    stillstats 零漂统计模式（对齐卷 06 §4.1，笔**静置**开统计→分布报告直出）：
+                             [--secs 60] [--stages 4] [--gate 0.5] --port COMx
+                                                              双通道（raw=去偏差前全量 / rate=补偿后残余）+
+                                                              三方对照 0x07~0x0A + 温漂回归 + 分位 P5/中位/P95；
+                                                              剔除 >20% 提示重跑；CSV 照落盘复用 record 格式
+                             --csv f.csv [--stages N] [--json] 离线模式：直接分析已有录波（不出串口）
 
         GLOBAL OPTIONS:
             --verbose / -v    Verbose logging
@@ -805,6 +822,8 @@ public class Program
             pencilbox company param snapshot save A --port COM23     (快照 A → use B → use A 互切对比)
             pencilbox company stream on --port COM23 --secs 5        (0x62 START→实测帧率→自动 STOP)
             pencilbox company record --port COM23 --secs 30 --out r.csv   (录波→CSV+meta；配 tools/airmouse_metrics.py)
+            pencilbox company stillstats --port COM23 --secs 60     (笔静置零漂统计→分布报告+三方对照；CSV 照落盘)
+            pencilbox company stillstats --csv r.csv --stages 6     (离线分析已有录波：分阶段中位/分位+温漂)
             pencilbox company pencmd set-k2 1                       (BLE 中转：USB 信封 → 基站 → 当前笔，0x21 方式1)
             pencilbox company pencmd query-k2                       (BLE 中转查询 0x42；笔未连接回 STATUS=02)
             pencilbox company pencmd --port COM20 set-k2 1          (串口直连形态，笔端本地终结)
@@ -878,6 +897,12 @@ public class Program
     {
         var val = GetOption(args, name);
         return int.TryParse(val, out int result) ? result : defaultValue;
+    }
+
+    private static double GetOptionDouble(string[] args, string name, double defaultValue)
+    {
+        var val = GetOption(args, name);
+        return double.TryParse(val, out double result) ? result : defaultValue;
     }
 
     private static bool HasFlag(string[] args, string name)

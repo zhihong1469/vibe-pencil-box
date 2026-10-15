@@ -74,14 +74,14 @@ public sealed class TelemetryRecorder
 /// <summary>`0x62` 录波 CSV 生成（单点：CLI `record` 与 Desktop 录波/回放导出共用同一格式）</summary>
 public static class TelemetryCsv
 {
-    /// <summary>表头（pc-issues 对齐卷 06 §2 列序；pc_rx_ts=PC 毫秒时标，用于延迟估计）</summary>
+    /// <summary>表头（pc-issues 对齐卷 06 §2 列序 v2；pc_rx_ts=PC 毫秒时标用于延迟估计，temp_imu=0.01°C 定点）</summary>
     public const string Header =
-        "pc_rx_ts,seq,flags,raw_gx,raw_gy,raw_gz,raw_ax,raw_ay,raw_az,rate_yaw,rate_roll,out_x,out_y";
+        "pc_rx_ts,seq,flags,raw_gx,raw_gy,raw_gz,raw_ax,raw_ay,raw_az,rate_yaw,rate_roll,out_x,out_y,temp_imu";
 
-    /// <summary>一行样本（原码直出：raw=LSB、rate=0.01dps 定点、out=HID 原值）</summary>
+    /// <summary>一行样本（定点直出不换算：raw 陀螺 0.01dps/加速度 0.001g、rate=0.01dps、out=HID 原值、temp_imu=0.01°C）</summary>
     public static string Row(long pcRxMs, TelemetryFrame f) =>
         $"{pcRxMs},{f.Seq},{f.Flags},{f.RawGx},{f.RawGy},{f.RawGz},{f.RawAx},{f.RawAy},{f.RawAz}," +
-        $"{f.RateYaw},{f.RateRoll},{f.OutX},{f.OutY}";
+        $"{f.RateYaw},{f.RateRoll},{f.OutX},{f.OutY},{f.TempImu}";
 
     /// <summary>
     /// 元数据尾注（对齐卷 06 §2：fps/dropped/div/fw_ver）：`# meta: fps=..,dropped=..,div=..,fw=..`。
@@ -101,5 +101,49 @@ public static class TelemetryCsv
             sb.AppendLine(Row(ts, f));
         sb.Append(Meta(fps, dropped, divider, firmwareVersion));
         return sb.ToString();
+    }
+
+    /// <summary>解析一行样本（v2 14 列含 temp_imu；v1 旧录波 13 列兼容、TempImu=0）</summary>
+    public static bool TryParseRow(string line, out long pcRxMs, out TelemetryFrame frame)
+    {
+        pcRxMs = 0;
+        frame = new TelemetryFrame(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        var parts = line.Split(',');
+        if (parts.Length is not (13 or 14))
+            return false;
+        try
+        {
+            pcRxMs = long.Parse(parts[0]);
+            frame = new TelemetryFrame(
+                ushort.Parse(parts[1]), byte.Parse(parts[2]),
+                short.Parse(parts[3]), short.Parse(parts[4]), short.Parse(parts[5]),
+                short.Parse(parts[6]), short.Parse(parts[7]), short.Parse(parts[8]),
+                short.Parse(parts[9]), short.Parse(parts[10]),
+                sbyte.Parse(parts[11]), sbyte.Parse(parts[12]),
+                parts.Length >= 14 ? short.Parse(parts[13]) : (short)0);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;   // 脏行（半截写入的尾行）
+        }
+    }
+
+    /// <summary>
+    /// 读整个录波文件（跳过表头/`#` 尾注/脏行）——CLI `stillstats --csv` 离线分析用；
+    /// 与 Desktop 回放同格式不同实现（Desktop 内部另有解析，格式单点在本类）。
+    /// </summary>
+    public static List<(long PcRxMs, TelemetryFrame Frame)> ReadAll(string path)
+    {
+        var rows = new List<(long, TelemetryFrame)>();
+        foreach (var line in File.ReadLines(path))
+        {
+            var t = line.Trim();
+            if (t.Length == 0 || t.StartsWith("#") || t.StartsWith("pc_rx_ts"))
+                continue;
+            if (TryParseRow(t, out var ts, out var f))
+                rows.Add((ts, f));
+        }
+        return rows;
     }
 }

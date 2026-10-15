@@ -10,9 +10,9 @@ namespace PencilBox.Tests;
 /// <summary>
 /// `0x62` 空鼠遥测流（笔端 06 卷 + pc-issues 对齐卷 06）：codec 黄金向量 + 录制器丢流回绕 + CSV 格式。
 ///
-/// 字节口径：21B 流帧全大端（seq u16 / flags u8 / 六轴 i16 / rate 双 i16 / out 双 i8）；
-/// START/STOP 应答载荷 ≤3B（子命令回显 + STATUS[+divider]）。单位定案（对齐卷 06 §1）：
-/// 陀螺 raw=0.01dps、加速度 raw=0.001g（定点直出，原"LSB 原码+FS 系数"提案作废，饱和非回绕）。
+/// 字节口径：v2 流帧 23B 全大端（seq u16 / flags u8 / 六轴 i16 / rate 双 i16 / out 双 i8 / temp_imu i16），
+/// v1 21B（无 temp 尾）兼容收；START/STOP 应答载荷 ≤3B（子命令回显 + STATUS[+divider]）。
+/// 单位定案（对齐卷 06 §1）：陀螺 raw=0.01dps、加速度 raw=0.001g、temp=0.01°C（定点直出，饱和非回绕）。
 /// </summary>
 public class CompanyStreamTests
 {
@@ -74,7 +74,7 @@ public class CompanyStreamTests
         Assert.Equal(TuningStatus.OtaBusy, status);
     }
 
-    // ================= 0x62 流帧解析（21B 大端 + 应答/流帧判别） =================
+    // ================= 0x62 流帧解析（v2 23B / v1 21B 大端 + 应答/流帧判别） =================
 
     [Fact]
     public void TryParseTelemetryFrame_GoldenVector_BigEndian()
@@ -114,25 +114,69 @@ public class CompanyStreamTests
         Assert.Equal(-2000, f.RateRoll);
         Assert.Equal(-3, f.OutX);
         Assert.Equal(7, f.OutY);
+        Assert.Equal(0, f.TempImu);     // v1 帧：无温度尾 → 0
+    }
+
+    [Fact]
+    public void TryParseTelemetryFrame_V2_TempTail_AndNvdsBit()
+    {
+        // v2 23B：v1 21B 向量尾部追加 temp_imu=0x0FA0=4000（40.00°C）；flags=0x0D=冻结|零偏标定|NVDS 装载
+        var payload = new byte[]
+        {
+            0x12, 0x34,             // seq
+            0x0D,                   // flags: bit0 冻结 | bit2 零偏标定 | bit3 NVDS 装载
+            0xFF, 0xFF,             // gx = -1
+            0x00, 0x02,             // gy = 2
+            0x80, 0x00,             // gz = -32768
+            0x40, 0x00,             // ax = 16384
+            0xFF, 0xFE,             // ay = -2
+            0x00, 0x01,             // az = 1
+            0x04, 0xD2,             // rate_yaw = 1234
+            0xF8, 0x30,             // rate_roll = -2000
+            0xFD,                   // out_x = -3
+            0x07,                   // out_y = 7
+            0x0F, 0xA0,             // temp_imu = 4000 → 40.00°C（大端）
+        };
+        Assert.Equal(StreamCmd.FramePayloadLength, payload.Length);   // v2=23
+        Assert.Equal(0x1A, StreamCmd.FramePayloadLength + 3);         // 帧 LEN 字节=0x1A（总长 30B）
+
+        Assert.True(_codec.TryParseTelemetryFrame(payload, out var f));
+        Assert.Equal(0x1234, f.Seq);
+        Assert.Equal(0x0D, f.Flags);
+        Assert.True(f.IsFrozen);
+        Assert.True(f.IsBiasCalibrated);
+        Assert.True(f.IsBiasFromNvds);
+        Assert.False(f.IsDragIntent);
+        Assert.Equal(4000, f.TempImu);
+        Assert.Equal(40.00, f.TempC, 3);
+        Assert.Equal(-1, f.RawGx);
+        Assert.Equal(-32768, f.RawGz);
+        Assert.Equal(-3, f.OutX);
     }
 
     [Fact]
     public void TryParseTelemetryFrame_WrongLength_Rejected()
     {
-        // 应答载荷（≤3B）混入 / 断帧 → 一律拒绝
+        // 应答载荷（≤3B）混入 / 断帧 → 一律拒绝（21/23 之外全拒）
         Assert.False(_codec.TryParseTelemetryFrame(new byte[] { 0x01, 0x00, 0x02 }, out _));
         Assert.False(_codec.TryParseTelemetryFrame(new byte[20], out _));
         Assert.False(_codec.TryParseTelemetryFrame(new byte[22], out _));
+        Assert.False(_codec.TryParseTelemetryFrame(new byte[24], out _));
     }
 
     [Fact]
     public void StreamCmd_ResponseDiscriminator_MatchesDoc()
     {
-        // 判别口径（对齐卷 06 §1）：载荷 ≤3B=应答、=21B=流帧
+        // 判别口径（对齐卷 06 §1 v2）：载荷 ≤3B=应答、23B=v2 流帧（权威）、21B=v1 兼容
         Assert.True(StreamCmd.IsResponse(2));
         Assert.True(StreamCmd.IsResponse(3));
         Assert.False(StreamCmd.IsResponse(21));
-        Assert.Equal(21, StreamCmd.FramePayloadLength);
+        Assert.False(StreamCmd.IsResponse(23));
+        Assert.Equal(23, StreamCmd.FramePayloadLength);
+        Assert.Equal(21, StreamCmd.FramePayloadLengthV1);
+        Assert.True(StreamCmd.IsFramePayload(23));
+        Assert.True(StreamCmd.IsFramePayload(21));
+        Assert.False(StreamCmd.IsFramePayload(22));
     }
 
     // ================= 录制器：丢流（seq 回绕）/ 帧率 / 丢流率 =================
@@ -193,11 +237,12 @@ public class CompanyStreamTests
     [Fact]
     public void TelemetryCsv_Header_And_Row_Golden()
     {
-        Assert.Equal("pc_rx_ts,seq,flags,raw_gx,raw_gy,raw_gz,raw_ax,raw_ay,raw_az,rate_yaw,rate_roll,out_x,out_y",
+        // v2 列序（对齐卷 06 §2）：尾列 temp_imu（0.01°C 定点直出）
+        Assert.Equal("pc_rx_ts,seq,flags,raw_gx,raw_gy,raw_gz,raw_ax,raw_ay,raw_az,rate_yaw,rate_roll,out_x,out_y,temp_imu",
             TelemetryCsv.Header);
 
-        var f = new TelemetryFrame(0x1234, 5, -1, 2, -32768, 16384, -2, 1, 1234, -2000, -3, 7);
-        Assert.Equal("1000,4660,5,-1,2,-32768,16384,-2,1,1234,-2000,-3,7",
+        var f = new TelemetryFrame(0x1234, 5, -1, 2, -32768, 16384, -2, 1, 1234, -2000, -3, 7, 4000);
+        Assert.Equal("1000,4660,5,-1,2,-32768,16384,-2,1,1234,-2000,-3,7,4000",
             TelemetryCsv.Row(1000, f));
     }
 
@@ -221,8 +266,8 @@ public class CompanyStreamTests
         var lines = text.Split('\n');
 
         Assert.StartsWith(TelemetryCsv.Header, lines[0]);
-        Assert.Equal("100,0,0,1,0,0,0,0,0,0,0,0,0\r", lines[1]);   // AppendLine → \r\n
-        Assert.Equal("120,2,0,0,0,0,0,0,0,0,0,0,0\r", lines[2]);
+        Assert.Equal("100,0,0,1,0,0,0,0,0,0,0,0,0,0\r", lines[1]);   // AppendLine → \r\n；v2 尾列 temp_imu=0
+        Assert.Equal("120,2,0,0,0,0,0,0,0,0,0,0,0,0\r", lines[2]);
         Assert.StartsWith("# meta: fps=", lines[3]);
         Assert.Contains("dropped=1", lines[3]);
     }

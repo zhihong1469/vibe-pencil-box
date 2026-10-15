@@ -127,7 +127,7 @@ public interface ICompanyCodec
     bool TryParseStreamResp(ReadOnlySpan<byte> data, byte expectSubCmd, out byte status, out byte divider);
 
     /// <summary>
-    /// 解析 `0x62` 流帧载荷（定长 21B 大端，笔端 06 卷 §2）；
+    /// 解析 `0x62` 流帧载荷（v2 定长 23B 大端，笔端 06 卷 §2；v1 21B 兼容收、TempImu=0）；
     /// 长度不符（含 START/STOP 应答混入）返回 false。
     /// </summary>
     bool TryParseTelemetryFrame(ReadOnlySpan<byte> data, out TelemetryFrame frame);
@@ -551,7 +551,7 @@ public sealed class CompanyCodec : ICompanyCodec
 
     public bool TryParseTelemetryFrame(ReadOnlySpan<byte> data, out TelemetryFrame frame)
     {
-        if (data.Length != StreamCmd.FramePayloadLength)
+        if (!StreamCmd.IsFramePayload(data.Length))
         {
             frame = new TelemetryFrame(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
             return false;
@@ -569,7 +569,8 @@ public sealed class CompanyCodec : ICompanyCodec
             ReadInt16BigEndian(data.Slice(15)),
             ReadInt16BigEndian(data.Slice(17)),
             (sbyte)data[19],
-            (sbyte)data[20]);
+            (sbyte)data[20],
+            data.Length >= StreamCmd.FramePayloadLength ? ReadInt16BigEndian(data.Slice(21)) : (short)0);
         return true;
     }
 

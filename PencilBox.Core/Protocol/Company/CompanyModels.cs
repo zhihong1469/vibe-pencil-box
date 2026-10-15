@@ -295,10 +295,17 @@ public static class StreamCmd
     /// <summary>STOP：请求空载荷；应答 `[00][STATUS]`；未开再停=00 幂等</summary>
     public const byte Stop = 0x00;
 
-    /// <summary>流帧载荷定长（21B；帧 LEN 字节=0x18、帧总长 28B）</summary>
-    public const int FramePayloadLength = 21;
+    /// <summary>流帧载荷 v1 定长（21B；帧 LEN 字节=0x18、总长 28B）——v2 前旧口径，兼容收</summary>
+    public const int FramePayloadLengthV1 = 21;
 
-    /// <summary>应答与流帧的判别口径：CMDTYPE `0x62` 载荷 ≤3B=START/STOP 应答（与请求配对消费），=21B=流帧</summary>
+    /// <summary>流帧载荷 v2 定长（23B=v1 尾部追加 temp_imu；帧 LEN 字节=0x1A、总长 30B）——笔端 06 卷 §2 v2 权威</summary>
+    public const int FramePayloadLength = 23;
+
+    /// <summary>是流帧载荷？v2 23B 权威、v1 21B 兼容（真机已发 v2，v1 仅旧固件/旧录波）</summary>
+    public static bool IsFramePayload(int payloadLength) =>
+        payloadLength is FramePayloadLengthV1 or FramePayloadLength;
+
+    /// <summary>应答与流帧的判别口径：CMDTYPE `0x62` 载荷 ≤3B=START/STOP 应答（与请求配对消费），21B/23B=流帧</summary>
     public static bool IsResponse(int payloadLength) => payloadLength is >= 2 and <= 3;
 }
 
@@ -313,11 +320,15 @@ public static class TelemetryFlags
 
     /// <summary>bit2：零偏已标定</summary>
     public const byte BiasCalibrated = 0x04;
+
+    /// <summary>bit3：本次 boot 零偏来自 NVDS 装载（零偏机制 v2，验证回合判装载生效）</summary>
+    public const byte BiasFromNvds = 0x08;
 }
 
 /// <summary>
-/// `0x62` 流帧（定长 21B，大端，笔端 06 卷 §2）：raw 六轴为**寄存器 LSB 原码**（不换算不去偏，
-/// 换算系数落 <see cref="CompanyConfig"/> 单点）；rate 为滤波后 0.01dps 定点；out 为 HID 出口位移。
+/// `0x62` 流帧（v2 定长 23B，大端，笔端 06 卷 §2；v1 21B 兼容收、<see cref="TempImu"/> 缺省 0）：
+/// raw 六轴为定点原码（陀螺 0.01dps/加速度 0.001g，S10 笔端定案，不换算不去偏，PC 全链路直读物理量）；
+/// rate 为滤波后 0.01dps 定点；out 为 HID 出口位移；temp_imu 为 0.01°C 定点（笔端 1Hz 刷新、其余帧重复上值）。
 /// </summary>
 public sealed record TelemetryFrame(
     ushort Seq,
@@ -325,7 +336,8 @@ public sealed record TelemetryFrame(
     short RawGx, short RawGy, short RawGz,
     short RawAx, short RawAy, short RawAz,
     short RateYaw, short RateRoll,
-    sbyte OutX, sbyte OutY)
+    sbyte OutX, sbyte OutY,
+    short TempImu = 0)
 {
     /// <summary>bit0：冻结期（含尾窗）</summary>
     public bool IsFrozen => (Flags & TelemetryFlags.Frozen) != 0;
@@ -335,4 +347,10 @@ public sealed record TelemetryFrame(
 
     /// <summary>bit2：零偏已标定</summary>
     public bool IsBiasCalibrated => (Flags & TelemetryFlags.BiasCalibrated) != 0;
+
+    /// <summary>bit3：本次 boot 零偏来自 NVDS 装载（零偏机制 v2）</summary>
+    public bool IsBiasFromNvds => (Flags & TelemetryFlags.BiasFromNvds) != 0;
+
+    /// <summary>IMU 温度（°C；= TempImu×0.01，定点单点换算在此一处）</summary>
+    public double TempC => TempImu * 0.01;
 }

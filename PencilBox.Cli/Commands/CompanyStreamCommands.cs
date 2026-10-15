@@ -202,6 +202,227 @@ public class CompanyStreamCommands
         return 0;
     }
 
+    // ============ stillstats：零漂统计模式（对齐卷 06 §4.1，2026-10-15 用户需求） ============
+
+    /// <summary>
+    /// `stillstats [--secs 60] [--csv f.csv]`：笔**静置**开统计——收 N 秒流 → STOP → 直出零漂分布报告
+    /// （双通道：raw=去偏差前全量零漂 / rate=补偿后残余；三方对照 0x07~0x0A；CSV 照落盘复用 record 格式）。
+    /// 动了笔→动段被门剔除，剔除 >20% 提示重跑；0 帧=1。`--csv` 给离线模式：直接分析已有录波不出串口。
+    /// </summary>
+    public async Task<int> StillStatsAsync(string? port, int secs, byte divider, string? outFile,
+        int stages, double gateDps, bool json, string? analyzeCsv)
+    {
+        // —— 离线模式：读 CSV → 同一单点分析（无串口；三方对照缺笔端实读=null） ——
+        if (!string.IsNullOrWhiteSpace(analyzeCsv))
+        {
+            var rows = TelemetryCsv.ReadAll(analyzeCsv);
+            if (rows.Count == 0)
+            {
+                ConsoleFormatter.Error($"离线分析：{analyzeCsv} 无样本（先 record/stillstats 产出 CSV）");
+                return 1;
+            }
+            var offline = DriftSurvey.Analyze(
+                rows.Select(r => (r.PcRxMs, r.Frame)).ToList(), new DriftSurvey.Options(gateDps, stages));
+            PrintStillReport(offline, json, Path.GetFullPath(analyzeCsv));
+            return offline.AcceptedFrames == 0 ? 1 : 0;
+        }
+
+        if (!await EnsureSerialAsync(port))
+            return 1;
+
+        // 三方对照前置：笔端实读 0x07/0x08（RAM 当前零偏）+ 0x09/0x0A（NVDS 持久值）；读不到留空不阻断
+        var bias = await ReadBiasContextAsync();
+
+        // 0x03 读版本（meta 尾注用；容忍失败）
+        string? firmware = null;
+        var verResp = await new CommandRequester(_clock, _config).RequestAsync(
+            _serialChannel, _codec.EncodeReadVersion(), CompanyCmd.ReadVersion);
+        if (verResp != null && _codec.TryParseVersionResp(verResp, out var ver) && ver.Status == CompanyStatus.Ok)
+            firmware = $"0.{ver.SverMajor}.{ver.SverMinor}.{ver.SverPatch}";
+
+        var recorder = new TelemetryRecorder();
+        var unsub = SubscribeFrames(recorder);
+        try
+        {
+            ConsoleFormatter.Info($"[STILL] 笔请静置（架上/平放）→ 0x62/01 START（div={divider}，统计 {secs}s，门 {gateDps:F2}dps）← {_serialChannel.Describe}");
+            var start = await RequestStreamCmdAsync(_codec.EncodeStreamStart(divider), StreamCmd.Start);
+            if (start == null)
+                return NoAnswer(port);
+            if (start.Value.Status != TuningStatus.Ok)
+                return StatusFail("START", start.Value.Status);
+
+            using var cts = new CancellationTokenSource();
+            ConsoleCancelEventHandler onBreak = (_, e) => { e.Cancel = true; cts.Cancel(); };
+            Console.CancelKeyPress += onBreak;
+            try
+            {
+                for (int elapsed = 1; elapsed <= secs; elapsed++)
+                {
+                    try { await Task.Delay(1000, cts.Token); }
+                    catch (OperationCanceledException) { break; }
+
+                    if (elapsed % 10 == 0 || elapsed == secs)
+                        ConsoleFormatter.Info($"[STILL] {elapsed}/{secs}s：已收 {recorder.Count} 帧");
+                }
+            }
+            finally
+            {
+                Console.CancelKeyPress -= onBreak;
+            }
+        }
+        finally
+        {
+            unsub();
+        }
+
+        var stop = await RequestStreamCmdAsync(_codec.EncodeStreamStop(), StreamCmd.Stop);
+        if (stop == null || stop.Value.Status != TuningStatus.Ok)
+            ConsoleFormatter.Warn("STOP 未确认（无应答或 STATUS≠00）——`company stream off` 幂等收尾");
+
+        if (recorder.Count == 0)
+        {
+            ConsoleFormatter.Error("统计结束：0 帧——笔端未推流（0.13.24 已知欠口=发射未生效；见 pc-issues report/2026-10-15）");
+            return 1;
+        }
+
+        // CSV 照落盘（复用 record 格式——metrics.py 温漂/漂移指标可对同一文件互校）
+        var path = string.IsNullOrWhiteSpace(outFile)
+            ? $"airmouse_still_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
+            : outFile.Trim();
+        File.WriteAllText(path, TelemetryCsv.Build(recorder.Samples, recorder.Fps, recorder.Dropped, divider, firmware),
+            new UTF8Encoding(false));
+
+        var report = DriftSurvey.Analyze(
+            recorder.Samples.Select(s => (s.PcRxMs, s.Frame)).ToList(),
+            new DriftSurvey.Options(gateDps, stages), bias);
+        PrintStillReport(report, json, Path.GetFullPath(path));
+        return report.AcceptedFrames == 0 ? 1 : 0;
+    }
+
+    /// <summary>三方对照读数：0x07/0x08（RAM）+ 0x09/0x0A（NVDS）；单项读失败=null 不阻断统计</summary>
+    private async Task<DriftSurvey.BiasContext> ReadBiasContextAsync()
+    {
+        async Task<float?> ReadOne(byte id)
+        {
+            var resp = await new CommandRequester(_clock, _config).RequestAsync(
+                _serialChannel, _codec.EncodeTuningRead(id), CompanyCmd.TuningParam);
+            if (resp != null && _codec.TryParseTuningReadResp(resp, out var status, out var echoId, out var value) &&
+                status == TuningStatus.Ok && echoId == id)
+                return value;
+            return null;
+        }
+
+        return new DriftSurvey.BiasContext(
+            await ReadOne(0x07), await ReadOne(0x08), await ReadOne(0x09), await ReadOne(0x0A));
+    }
+
+    /// <summary>零漂统计报告打印（对齐卷 06 §4.1：双通道表/三方对照/分阶段/温漂数/决策链；双单位 dps(定点原值)）</summary>
+    private static void PrintStillReport(DriftSurvey.Report r, bool json, string csvPath)
+    {
+        if (json)
+        {
+            Console.Out.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                csv = csvPath,
+                total_frames = r.TotalFrames,
+                accepted = r.AcceptedFrames,
+                rejected = r.RejectedFrames,
+                reject_ratio = Math.Round(r.RejectRatio, 4),
+                span_ms = r.SpanMs,
+                temp_start_c = Math.Round(r.TempStartC, 2),
+                temp_end_c = Math.Round(r.TempEndC, 2),
+                temp_span_c = Math.Round(r.TempSpanC, 2),
+                bias = r.Bias == null ? null : new
+                {
+                    ram_gx = r.Bias.RamGx, ram_gz = r.Bias.RamGz,
+                    nvds_gx = r.Bias.NvdsGx, nvds_gz = r.Bias.NvdsGz,
+                },
+                gx = AxisDto(r.Gx), gz = AxisDto(r.Gz),
+                rate_yaw = AxisDto(r.RateYaw), rate_roll = AxisDto(r.RateRoll),
+                stages = r.Stages.Select(s => new
+                {
+                    index = s.Index, frames = s.Frames,
+                    start_ms = s.StartMs, end_ms = s.EndMs,
+                    gx_median_dps = Round4(s.Gx.MedianDps), gx_p5_dps = Round4(s.Gx.P5 / 100.0), gx_p95_dps = Round4(s.Gx.P95 / 100.0),
+                    gz_median_dps = Round4(s.Gz.MedianDps), gz_p5_dps = Round4(s.Gz.P5 / 100.0), gz_p95_dps = Round4(s.Gz.P95 / 100.0),
+                    rate_yaw_median_dps = Round4(s.RateYaw.MedianDps),
+                    rate_roll_median_dps = Round4(s.RateRoll.MedianDps),
+                }),
+                temp_regression_valid = r.TempRegressionValid,
+                temp_slope_gx_dps_per_c = r.TempRegressionValid ? (double?)Math.Round(r.TempSlopeGxDpsPerC, 5) : null,
+                temp_slope_gz_dps_per_c = r.TempRegressionValid ? (double?)Math.Round(r.TempSlopeGzDpsPerC, 5) : null,
+                residual_exceeds_guard = r.ResidualExceedsGuard,
+            }, new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+            return;
+        }
+
+        if (r.AcceptedFrames == 0)
+        {
+            ConsoleFormatter.Error($"零漂统计作废：{r.TotalFrames} 帧全被剔除（动了笔/冻结）——静置重跑（对齐卷 06 §4.1）");
+            return;
+        }
+
+        ConsoleFormatter.Success($"[STILL] 统计窗 {r.SpanMs / 1000.0:F1}s：样本 {r.AcceptedFrames}/{r.TotalFrames}（剔除 {r.RejectedFrames}={r.RejectRatio * 100:F1}%）" +
+                                 (r.RejectRatio > DriftSurvey.RejectRatioWarn ? "——剔除超 20%，统计窗被污染建议重跑" : "（<20% 门 ✓）"));
+
+        if (r.Bias is { } b)
+            ConsoleFormatter.Info($"[STILL] 三方对照：RAM 零偏 0x07/0x08 = {Fmt(b.RamGx)} / {Fmt(b.RamGz)} dps ｜ NVDS 0x09/0x0A = {Fmt(b.NvdsGx)} / {Fmt(b.NvdsGz)} dps" +
+                                  (b.NvdsGx == null ? "（NVDS 读失败=可能未固化，0）" : ""));
+
+        ConsoleFormatter.Info("[STILL] 分布统计（全窗；dps，括号=0.01dps 定点原值；raw=去偏差前全量零漂，rate=补偿后残余）");
+        Console.Out.WriteLine("  通道      frames  min            max            mean           median         RMS            σ              P5             P95");
+        foreach (var a in new[] { r.Gx, r.Gz, r.RateYaw, r.RateRoll })
+        {
+            if (a == null) continue;
+            Console.Out.WriteLine(
+                $"  {a.Channel,-9} {a.Count,6}  {Cell(a.Min)} {Cell(a.Max)} {Cell(a.Mean)} {Cell(a.Median)} {Cell(a.Rms)} {Cell(a.Sigma)} {Cell(a.P5)} {Cell(a.P95)}");
+        }
+
+        if (r.Stages.Count > 0)
+        {
+            ConsoleFormatter.Info($"[STILL] 分阶段（等样本数 {r.Stages.Count} 段；中位（P5~P95）dps——看 Kalman 收敛/温漂趋势）");
+            foreach (var s in r.Stages)
+                Console.Out.WriteLine(
+                    $"  #{s.Index} {s.StartMs / 1000.0,6:F1}~{s.EndMs / 1000.0:F1}s {s.Frames,5} 帧  " +
+                    $"gx {Fmt3(s.Gx.MedianDps)}({Fmt3(s.Gx.P5 / 100.0)}~{Fmt3(s.Gx.P95 / 100.0)})  " +
+                    $"gz {Fmt3(s.Gz.MedianDps)}({Fmt3(s.Gz.P5 / 100.0)}~{Fmt3(s.Gz.P95 / 100.0)})  " +
+                    $"yaw {Fmt3(s.RateYaw.MedianDps)}({Fmt3(s.RateYaw.P5 / 100.0)}~{Fmt3(s.RateYaw.P95 / 100.0)})  " +
+                    $"roll {Fmt3(s.RateRoll.MedianDps)}({Fmt3(s.RateRoll.P5 / 100.0)}~{Fmt3(s.RateRoll.P95 / 100.0)})");
+        }
+
+        if (r.TempRegressionValid)
+            ConsoleFormatter.Info($"[STILL] 温漂回归：温度 {r.TempStartC:F2}→{r.TempEndC:F2}°C（跨度 {r.TempSpanC:F2}）→ " +
+                                  $"gx {r.TempSlopeGxDpsPerC:+0.00000;-0.00000} dps/°C ｜ gz {r.TempSlopeGzDpsPerC:+0.00000;-0.00000} dps/°C");
+        else
+            ConsoleFormatter.Info($"[STILL] 温漂回归：跳过（温度跨度 {r.TempSpanC:F2}°C < {DriftSurvey.MinTempSpanC:F1}——要联动温漂请录 ≥5min 且带冷热差）");
+
+        if (r.ResidualExceedsGuard)
+            ConsoleFormatter.Warn($"[STILL] 决策：残余零漂 |mean| > {DriftSurvey.GuardDeadzoneDps}dps（笔端守卫死区）——建议 `param set --id 0x0B --value 1` 固化当前 RAM 零偏，或等笔端守卫自动写");
+        else
+            ConsoleFormatter.Success($"[STILL] 决策：补偿后残余零漂 |mean| ≤ {DriftSurvey.GuardDeadzoneDps}dps 守卫死区——当前补偿覆盖良好");
+
+        ConsoleFormatter.Success($"录波已存：{csvPath}——互校：python tools/airmouse_metrics.py <该文件>（漂移 RMS/温漂回归）");
+    }
+
+    private static object? AxisDto(DriftSurvey.AxisStats? a) => a == null ? null : new
+    {
+        channel = a.Channel, count = a.Count,
+        min = a.Min, max = a.Max,
+        mean = Round4(a.MeanDps), median = Round4(a.MedianDps),
+        rms = Round4(a.Rms / 100.0), sigma = Round4(a.Sigma / 100.0),
+        p5 = Round4(a.P5 / 100.0), p95 = Round4(a.P95 / 100.0),
+    };   // dps 域（定点/100）
+
+    private static double Round4(double v) => Math.Round(v, 4);
+
+    /// <summary>定点原值 → dps（定点）双单位格：`-0.123(-12)`</summary>
+    private static string Cell(double fixedPoint) =>
+        $"{fixedPoint / 100.0,7:F3}({fixedPoint,5:0})";
+
+    private static string Fmt(float? v) => v == null ? "—" : $"{(double)v:+0.000;-0.000;0.000}";
+
+    private static string Fmt3(double v) => $"{v:+0.000;-0.000;0.000}";
+
     // ============ 私有 ============
 
     /// <summary>

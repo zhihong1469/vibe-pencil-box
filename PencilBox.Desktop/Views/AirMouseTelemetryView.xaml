@@ -64,8 +64,82 @@
                 </GroupBox>
             </WrapPanel>
 
+            <!-- 全量数据读出（最新帧）：图表只画判读通道，全部信号+seq/flags 在此全露出 -->
+            <GroupBox Header="全量数据读出（最新帧 · 每 120ms 刷新；gy / 加速度三轴 / rate_roll / flags 位 / 温度在此露出，●=有效 ○=无效）"
+                      Margin="0,0,0,4">
+                <ItemsControl ItemsSource="{Binding LiveRows}" Margin="2">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="#DDD" BorderThickness="1" CornerRadius="2" Padding="6,2" Margin="2">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Name}" Foreground="Gray" FontSize="11"
+                                               VerticalAlignment="Center" MinWidth="52"/>
+                                    <TextBlock Text="{Binding Value}" FontFamily="Consolas" FontWeight="Bold"
+                                               Margin="6,0,0,0" VerticalAlignment="Center" MinWidth="88"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </GroupBox>
+
+            <!-- 零漂统计模式（对齐卷 06 §4.1 stillsurvey）：笔静置开统计→分布报告直出；与 CLI stillstats 同一单点 -->
+            <GroupBox Header="零漂统计（静置标定助手 · 双通道：raw=去偏差前全量零漂 / rate=补偿后残余；动了笔自动剔除，>20% 提示重跑）"
+                      Margin="0,0,0,4">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,4">
+                        <Button Command="{Binding ToggleSurveyCommand}" Content="{Binding SurveyButtonText}"
+                                Margin="0,0,8,0" Padding="10,3" MinWidth="110"/>
+                        <TextBlock Text="统计时长" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox Text="{Binding SurveySecs}" Width="48" VerticalAlignment="Center" Margin="0,0,2,0"
+                                 ToolTip="统计秒数（10~3600；建议 ≥60，要联动温漂回归 ≥300 且带冷热差）"/>
+                        <TextBlock Text="s" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="回放模式下点开关=直接分析回放缓冲（同一录波重跑数值一致）"
+                                   Foreground="Gray" FontSize="11" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding SurveySummary}" Foreground="#2C3E50" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"/>
+
+                    <ListView ItemsSource="{Binding SurveyRows}" FontSize="11" BorderThickness="0" Margin="0,0,0,4">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="通道" DisplayMemberBinding="{Binding Channel}" Width="70"/>
+                                <GridViewColumn Header="帧数" DisplayMemberBinding="{Binding Frames}" Width="52"/>
+                                <GridViewColumn Header="min" DisplayMemberBinding="{Binding Min}" Width="86"/>
+                                <GridViewColumn Header="max" DisplayMemberBinding="{Binding Max}" Width="86"/>
+                                <GridViewColumn Header="mean" DisplayMemberBinding="{Binding Mean}" Width="86"/>
+                                <GridViewColumn Header="中位" DisplayMemberBinding="{Binding Median}" Width="86"/>
+                                <GridViewColumn Header="RMS" DisplayMemberBinding="{Binding Rms}" Width="86"/>
+                                <GridViewColumn Header="σ" DisplayMemberBinding="{Binding Sigma}" Width="86"/>
+                                <GridViewColumn Header="P5" DisplayMemberBinding="{Binding P5}" Width="86"/>
+                                <GridViewColumn Header="P95" DisplayMemberBinding="{Binding P95}" Width="86"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <ListView ItemsSource="{Binding SurveyStages}" FontSize="11" BorderThickness="0" Margin="0,0,0,2">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="阶段" DisplayMemberBinding="{Binding Stage}" Width="46"/>
+                                <GridViewColumn Header="时间窗" DisplayMemberBinding="{Binding Window}" Width="104"/>
+                                <GridViewColumn Header="帧数" DisplayMemberBinding="{Binding Frames}" Width="52"/>
+                                <GridViewColumn Header="raw_gx 中位(P5~P95)" DisplayMemberBinding="{Binding Gx}" Width="200"/>
+                                <GridViewColumn Header="raw_gz 中位(P5~P95)" DisplayMemberBinding="{Binding Gz}" Width="200"/>
+                                <GridViewColumn Header="rate_yaw 中位(P5~P95)" DisplayMemberBinding="{Binding Yaw}" Width="200"/>
+                                <GridViewColumn Header="rate_roll 中位(P5~P95)" DisplayMemberBinding="{Binding Roll}" Width="200"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </StackPanel>
+            </GroupBox>
+
             <TextBlock Foreground="Gray" FontSize="11" TextWrapping="Wrap"
-                       Text="录波四步配方（对齐卷 06）：静止 3s → 慢速画圆 → 快速甩停 → 点菜单目标；录完 python tools/airmouse_metrics.py &lt;csv&gt; 出五指标。指标/网格搜索属离线阶段③，见对齐卷。"/>
+                       Text="录波四步配方（对齐卷 06）：静止 3s → 慢速画圆 → 快速甩停 → 点菜单目标；录完 python tools/airmouse_metrics.py &lt;csv&gt; 出五指标+温漂回归。指标/网格搜索属离线阶段③，见对齐卷。"/>
         </StackPanel>
     </GroupBox>
 </UserControl>

@@ -5,12 +5,15 @@
 用法:
     python tools/airmouse_metrics.py <record.csv> [--json]
 
-五指标（对齐卷 06 §4 表）:
+五指标（对齐卷 06 §4 表）+ v2 温漂:
     静止漂移 RMS  静止段（非冻结且 out=0）rate 去均值 RMS —— 手停光标稳
     移动抖动      移动段 rate 逐帧高频差分 RMS —— 小动不抖
     过冲          快速甩停后 300ms 窗内 out 反向过零面积 —— 大动收得住
     延迟          raw|rate| 与 |out| 互相关峰值偏移（帧粒度）—— 跟手感
     丢流          seq 缺口计数/率（与 # meta 尾注互校）—— 链路质量（应 <0.1%）
+    温漂回归(v2)  静止段 raw_gx/raw_gz 滑窗均值 vs temp_imu 线性回归 →
+                  零偏温度系数（dps/°C）+ 残差 —— 反哺笔端 NVDS 写死区定量依据；
+                  v1 旧录波（无 temp 列）或温度跨度 <0.5°C 时自动跳过
 
 口径:
     - CSV 全部**定点直出**（对齐卷 06 §1 笔端落码定案，原"LSB 原码"提案作废）：
@@ -27,6 +30,7 @@ import sys
 
 COLS = ["pc_rx_ts", "seq", "flags", "raw_gx", "raw_gy", "raw_gz",
         "raw_ax", "raw_ay", "raw_az", "rate_yaw", "rate_roll", "out_x", "out_y"]
+COLS_V2 = COLS + ["temp_imu"]     # v2 录波尾列 temp_imu（0.01°C 定点）
 
 FLAG_FROZEN = 0x01
 
@@ -47,9 +51,14 @@ def load(path):
             if line.startswith("#") or line.startswith("pc_rx_ts"):
                 continue
             parts = line.split(",")
-            if len(parts) != len(COLS):
+            if len(parts) == len(COLS):                     # v1 旧录波：无温度列
+                row = {k: int(v) for k, v in zip(COLS, parts)}
+                row["temp_imu"] = None
+            elif len(parts) == len(COLS_V2):                # v2：尾列 temp_imu
+                row = {k: int(v) for k, v in zip(COLS_V2, parts)}
+            else:
                 continue
-            rows.append({k: int(v) for k, v in zip(COLS, parts)})
+            rows.append(row)
     return rows, meta
 
 
@@ -145,6 +154,47 @@ def seq_dropped(rows):
     return dropped
 
 
+def _linreg(xs, ys):
+    """最小二乘 y=slope*x+b → (slope, intercept, 残差RMS)。"""
+    mx, my = mean(xs), mean(ys)
+    den = sum((x - mx) ** 2 for x in xs)
+    if den == 0:
+        return None
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
+    b = my - slope * mx
+    resid = rms([y - (slope * x + b) for x, y in zip(xs, ys)])
+    return slope, b, resid
+
+
+def temp_drift(rows, window=50, min_span_c=0.5):
+    """温漂回归（v2，对齐卷 06 §4）：静止段 raw_gx/raw_gz **滑窗均值** vs temp_imu 线性回归
+    → 零偏温度系数（dps/°C）+ 残差。滑窗压掉随机游走、留温漂趋势；
+    v1 录波（temp 缺列）/温度跨度 <0.5°C（回归被噪声支配）→ None。
+    满足笔端零偏机制 v2 验证回合 3 与 NVDS 写死区（0.05dps）定量依据。"""
+    static, _ = split_segments(rows)
+    pts = [r for r in static if r.get("temp_imu") is not None]
+    if len(pts) < window * 2:
+        return None
+    t = [r["temp_imu"] * 0.01 for r in pts]             # 0.01°C → °C
+    span = max(t) - min(t)
+    if span < min_span_c:
+        return None
+    out = {"temp_span_c": round(span, 2), "static_frames": len(pts)}
+    for axis in ("raw_gx", "raw_gz"):
+        g = [r[axis] * 0.01 for r in pts]               # 0.01dps → dps
+        tw, gw = [], []
+        for i in range(0, len(g), window):
+            seg = slice(i, min(i + window, len(g)))
+            tw.append(mean(t[seg]))
+            gw.append(mean(g[seg]))
+        lr = _linreg(tw, gw)
+        if lr is None:
+            return None
+        slope, b, resid = lr
+        out[axis] = {"slope_dps_per_c": round(slope, 5), "resid_dps": round(resid, 4)}
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="空鼠录波指标（对齐卷 06 §4）")
     ap.add_argument("csv", help="record 产物 CSV")
@@ -165,6 +215,7 @@ def main():
     jitter = jitter_rms(rows)
     over = overshoot(rows)
     lat = latency(rows)
+    tdrift = temp_drift(rows)
 
     report = {
         "file": args.csv,
@@ -191,6 +242,8 @@ def main():
     if lat:
         report["latency_frames"] = lat[0]
         report["latency_ms_est"] = round(lat[1], 1)
+    if tdrift:
+        report["temp_drift"] = tdrift
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -208,6 +261,15 @@ def main():
             print(f"   过冲面积    = {over[0]}（{over[1]} 次甩停事件；300ms 窗反向 |out| 累计）")
         if lat:
             print(f"   延迟        = {lat[0]} 帧（≈{lat[1]:.0f}ms @ {fps}fps；互相关峰值，帧粒度下限）")
+        if tdrift:
+            gx, gz = tdrift["raw_gx"], tdrift["raw_gz"]
+            print(f"   温漂回归    = gx {gx['slope_dps_per_c']:+.5f} dps/°C（残差 {gx['resid_dps']:.4f}）｜"
+                  f"gz {gz['slope_dps_per_c']:+.5f} dps/°C（残差 {gz['resid_dps']:.4f}）"
+                  f"——静止段滑窗 vs temp，温度跨度 {tdrift['temp_span_c']}°C")
+        elif any(r["temp_imu"] is None for r in rows):
+            print("   温漂回归    = 跳过（v1 录波无 temp_imu 列——笔端 v2 固件重录）")
+        else:
+            print("   温漂回归    = 跳过（温度跨度 <0.5°C——录更久或冷热差再录）")
     return 0
 
 
