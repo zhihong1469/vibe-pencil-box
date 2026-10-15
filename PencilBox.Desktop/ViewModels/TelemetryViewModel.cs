@@ -316,12 +316,26 @@ public partial class TelemetryViewModel : ObservableObject
         public string Min { get; init; } = "";
         public string Max { get; init; } = "";
         public string Mean { get; init; } = "";
+        public string Compensation { get; init; } = "";
         public string Median { get; init; } = "";
         public string Rms { get; init; } = "";
         public string Sigma { get; init; } = "";
         public string P5 { get; init; } = "";
         public string P95 { get; init; } = "";
     }
+
+    /// <summary>原始时域图补偿点虚线（gx/gz，与曲线同刻度；P5~P95 截尾均值）</summary>
+    public partial class CompLines : ObservableObject
+    {
+        private PointCollection _gx = new();
+        private PointCollection _gz = new();
+        private string _text = "";
+        public PointCollection Gx { get => _gx; set => SetProperty(ref _gx, value); }
+        public PointCollection Gz { get => _gz; set => SetProperty(ref _gz, value); }
+        public string Text { get => _text; set => SetProperty(ref _text, value); }
+    }
+
+    public CompLines Comp { get; } = new();
 
     /// <summary>分阶段一行：中位（P5~P95）dps</summary>
     public sealed class SurveyStageRow
@@ -478,7 +492,7 @@ public partial class TelemetryViewModel : ObservableObject
                 Channel = a.Channel,
                 Frames = a.Count,
                 Min = Cell(a.Min), Max = Cell(a.Max),
-                Mean = Cell(a.Mean), Median = Cell(a.Median),
+                Mean = Cell(a.Mean), Compensation = Cell(a.Winsor), Median = Cell(a.Median),
                 Rms = Cell(a.Rms), Sigma = Cell(a.Sigma),
                 P5 = Cell(a.P5), P95 = Cell(a.P95),
             });
@@ -502,6 +516,15 @@ public partial class TelemetryViewModel : ObservableObject
         };
         if (r.Bias is { } b)
             lines.Add($"三方对照：RAM 零偏 0x07/0x08 = {Fmt(b.RamGx)} / {Fmt(b.RamGz)} dps ｜ NVDS 0x09/0x0A = {Fmt(b.NvdsGx)} / {Fmt(b.NvdsGz)} dps");
+        if (r.Gx != null && r.Gz != null)
+        {
+            // 补偿点画进原始时域图（虚线，与曲线同刻度）；正漂负补/负漂正补，写 0x07/0x08 后用 rate 残余复测
+            _compGxDps = r.Gx.WinsorDps;
+            _compGzDps = r.Gz.WinsorDps;
+            RefreshCharts();   // 立即按当前刻度重画虚线
+            Comp.Text = $"虚线=补偿点（P5~P95 截尾均值）gx {r.Gx.WinsorDps:+0.000;-0.000} / gz {r.Gz.WinsorDps:+0.000} dps——正漂负补/负漂正补";
+            lines.Add($"补偿点：gx {r.Gx.WinsorDps:+0.000;-0.000} / gz {r.Gz.WinsorDps:+0.000} dps（P5~P95 截尾均值，已画进原始时域图虚线）——写 0x07/0x08 后用 rate 残余复测验证归零");
+        }
         lines.Add(r.TempRegressionValid
             ? $"温漂回归：温度 {r.TempStartC:F2}→{r.TempEndC:F2}°C → gx {r.TempSlopeGxDpsPerC:+0.00000;-0.00000} ｜ gz {r.TempSlopeGzDpsPerC:+0.00000;-0.00000} dps/°C"
             : $"温漂回归：跳过（温度跨度 {r.TempSpanC:F2}°C < {DriftSurvey.MinTempSpanC:F1}；要联动请录 ≥5min 且带冷热差）");
@@ -558,9 +581,18 @@ public partial class TelemetryViewModel : ObservableObject
         lock (_gate)
             _samples.Clear();
         _replayMode = false;
+        _compGxDps = null;
+        _compGzDps = null;
+        Comp.Gx = new PointCollection();
+        Comp.Gz = new PointCollection();
+        Comp.Text = "";
         RefreshCharts();
         StatusText = "已清空（实时/回放均可重新开始）";
     }
+
+    /// <summary>补偿点（dps；null=未统计）——原始图虚线由 RefreshCharts 按当前刻度每帧重画</summary>
+    private double? _compGxDps;
+    private double? _compGzDps;
 
     /// <summary>START（专用等待：载荷 ≤3B + 子命令回显，流帧 21B 不会误配对——CLI 同口径）</summary>
     private async Task<bool> StartAsync()
@@ -640,6 +672,12 @@ public partial class TelemetryViewModel : ObservableObject
 
     private const double W = 320, H = 150, ML = 34, MR = 8, MT = 8, MB = 20;
 
+    /// <summary>补偿点水平虚线两点（dps→图 Y 用调用方刻度闭包；出刻度窗=null 不画）</summary>
+    private static PointCollection CompHL(double? dps, Func<double, double> yOf, double scale) =>
+        dps.HasValue && Math.Abs(dps.Value) <= scale
+            ? new PointCollection { new Point(ML, yOf(dps.Value)), new Point(W - MR, yOf(dps.Value)) }
+            : new PointCollection();
+
     /// <summary>窗口 = 最近 WindowMs 毫秒（回放=全量；实时=滚动窗）</summary>
     private const int WindowMs = 10_000;
 
@@ -671,6 +709,8 @@ public partial class TelemetryViewModel : ObservableObject
         RawGxPoints = Line(snap, s => xOf(s.Ts), s => rawYOf(s.F.RawGx * dpsPerLsb));
         RawGzPoints = Line(snap, s => xOf(s.Ts), s => rawYOf(s.F.RawGz * dpsPerLsb));
         RawScaleText = $"±{rawScale:0.#}dps";
+        Comp.Gx = CompHL(_compGxDps, rawYOf, rawScale);   // 零漂统计补偿点虚线（与曲线同刻度，出窗不画）
+        Comp.Gz = CompHL(_compGzDps, rawYOf, rawScale);
 
         // —— 输出时域：out_x/out_y（i8 原值；窗内自动刻度，缺省 ±16）
         int outMax = Math.Max(8, snap.Max(s => Math.Max(Math.Abs((int)s.F.OutX), Math.Abs((int)s.F.OutY))));

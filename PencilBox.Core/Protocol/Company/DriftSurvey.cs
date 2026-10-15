@@ -27,17 +27,28 @@ public static class DriftSurvey
     /// <summary>动段剔除占比超过它 → 提示"统计窗被污染建议重跑"（06 §4.1）</summary>
     public const double RejectRatioWarn = 0.20;
 
-    /// <summary>单通道分布统计（0.01dps 定点原值域；Count=参与统计帧数）</summary>
+    /// <summary>
+    /// 单通道分布统计（0.01dps 定点原值域；Count=参与统计帧数）。
+    /// <see cref="Winsor"/>=**P5~P95 截尾均值（winsorized mean）＝补偿点**：正态下效率≈均值、
+    /// 重尾下稳健≈中位数（高斯最优是均值、但静止实测混桌振/人碰重尾离群会把均值拉偏；
+    /// 纯中位对高斯只有 ~64% 效率——截尾均值两头兼顾，补偿点带符号：正漂负补/负漂正补）。
+    /// </summary>
     public sealed record AxisStats(
         string Channel, int Count,
         int Min, int Max,
         double Mean, double Median, double Rms, double Sigma,
         double P5, double P95)
     {
+        /// <summary>补偿点 = P5~P95 截尾均值（0.01dps 定点域；分析器填充）</summary>
+        public double Winsor { get; init; }
+
         /// <summary>dps 域（=定点 /100，单点换算）</summary>
         public double MeanDps => Mean / 100.0;
 
         public double MedianDps => Median / 100.0;
+
+        /// <summary>补偿点 dps</summary>
+        public double WinsorDps => Winsor / 100.0;
     }
 
     /// <summary>分阶段统计（等样本数切窗；看 Kalman 收敛/温漂趋势用）</summary>
@@ -168,7 +179,7 @@ public static class DriftSurvey
         return report;
     }
 
-    /// <summary>单通道分布统计：min/max/mean/中位/RMS(对零)/σ/P5/P95；分位=线性插值（确定性）</summary>
+    /// <summary>单通道分布统计：min/max/mean/中位/RMS(对零)/σ/P5/P95 + 补偿点（截尾均值）；分位=线性插值（确定性）</summary>
     public static AxisStats Compute(string channel, IEnumerable<int> values)
     {
         var sorted = values.OrderBy(v => v).ToList();
@@ -176,10 +187,12 @@ public static class DriftSurvey
         double p5 = Quantile(sorted, 0.05);
         double p50 = Quantile(sorted, 0.50);
         double p95 = Quantile(sorted, 0.95);
+        // 补偿点：钳到 [P5,P95] 再取均值（winsorized mean）
+        double winsor = sorted.Sum(v => Math.Clamp((double)v, p5, p95)) / sorted.Count;
         double rms = Math.Sqrt(sorted.Sum(v => (double)v * v) / sorted.Count);
         double sigma = Math.Sqrt(sorted.Sum(v => (v - mean) * (v - mean)) / sorted.Count);
         return new AxisStats(channel, sorted.Count, sorted[0], sorted[^1],
-            mean, p50, rms, sigma, p5, p95);
+            mean, p50, rms, sigma, p5, p95) { Winsor = winsor };
     }
 
     /// <summary>线性插值分位：pos=p×(n-1)，相邻两序取样插值</summary>

@@ -32,9 +32,12 @@
                 <GroupBox Header="原始时域（raw_gx 蓝 / raw_gz 绿 → dps；手抖/零漂/噪声底）" Margin="0,0,8,8">
                     <Canvas Width="320" Height="150" Background="#FAFAFA" HorizontalAlignment="Left">
                         <Line X1="34" Y1="79" X2="312" Y2="79" Stroke="#DDD"/>
+                        <Polyline Points="{Binding Comp.Gx}" Stroke="#1F618D" StrokeThickness="1.2" StrokeDashArray="4 3"/>
+                        <Polyline Points="{Binding Comp.Gz}" Stroke="#1E8449" StrokeThickness="1.2" StrokeDashArray="4 3"/>
                         <Polyline Points="{Binding RawGxPoints}" Stroke="#1F618D" StrokeThickness="1"/>
                         <Polyline Points="{Binding RawGzPoints}" Stroke="#1E8449" StrokeThickness="1"/>
                         <TextBlock Canvas.Left="2" Canvas.Top="4" FontSize="10" Foreground="Gray" Text="{Binding RawScaleText}"/>
+                        <TextBlock Canvas.Left="60" Canvas.Top="4" FontSize="10" Foreground="#1F618D" Text="补偿点虚线（gx蓝/gz绿）"/>
                         <TextBlock Canvas.Left="34" Canvas.Top="134" FontSize="10" Foreground="Gray" Text="0"/>
                         <TextBlock Canvas.Left="286" Canvas.Top="134" FontSize="10" Foreground="Gray" Text="10s 窗"/>
                     </Canvas>
@@ -113,6 +116,7 @@
                                 <GridViewColumn Header="min" DisplayMemberBinding="{Binding Min}" Width="86"/>
                                 <GridViewColumn Header="max" DisplayMemberBinding="{Binding Max}" Width="86"/>
                                 <GridViewColumn Header="mean" DisplayMemberBinding="{Binding Mean}" Width="86"/>
+                                <GridViewColumn Header="补偿点" DisplayMemberBinding="{Binding Compensation}" Width="86"/>
                                 <GridViewColumn Header="中位" DisplayMemberBinding="{Binding Median}" Width="86"/>
                                 <GridViewColumn Header="RMS" DisplayMemberBinding="{Binding Rms}" Width="86"/>
                                 <GridViewColumn Header="σ" DisplayMemberBinding="{Binding Sigma}" Width="86"/>

@@ -52,6 +52,27 @@ public class DriftSurveyTests
         Assert.Equal(-1.23, s.MeanDps, 8);
     }
 
+    // ================= 补偿点（P5~P95 截尾均值） =================
+
+    [Fact]
+    public void Compute_WinsorMean_RobustAgainstOutliers()
+    {
+        // [0×5, 100]：中位=0、均值=16.67（被离群拉偏）、P95=75 → 截尾均值=(5×0+75)/6=12.5——重尾下贴中位
+        var s = DriftSurvey.Compute("raw_gx", new[] { 0, 0, 0, 0, 0, 100 });
+        Assert.Equal(0, s.Median, 6);
+        Assert.Equal(100.0 / 6, s.Mean, 6);
+        Assert.Equal(12.5, s.Winsor, 6);
+    }
+
+    [Fact]
+    public void Compute_WinsorMean_SymmetricClean_EqualsMean()
+    {
+        // 对称无离群（高斯近似）：钳位不削任何样本 → 截尾均值==均值（正态下均值最优、零效率损失）
+        var s = DriftSurvey.Compute("raw_gz", Enumerable.Range(0, 11).Select(i => (i - 5) * 2));
+        Assert.Equal(s.Mean, s.Winsor, 6);
+        Assert.Equal(0.0, s.WinsorDps, 8);
+    }
+
     // ================= 判静止门（冻结剔除 + rate 门） =================
 
     [Fact]

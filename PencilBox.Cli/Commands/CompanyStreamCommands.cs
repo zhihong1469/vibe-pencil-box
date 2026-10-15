@@ -370,13 +370,17 @@ public class CompanyStreamCommands
                                   (b.NvdsGx == null ? "（NVDS 读失败=可能未固化，0）" : ""));
 
         ConsoleFormatter.Info("[STILL] 分布统计（全窗；dps，括号=0.01dps 定点原值；raw=去偏差前全量零漂，rate=补偿后残余）");
-        Console.Out.WriteLine("  通道      frames  min            max            mean           median         RMS            σ              P5             P95");
+        Console.Out.WriteLine("  通道      frames  min            max            mean           补偿点          median         RMS            σ              P5             P95");
         foreach (var a in new[] { r.Gx, r.Gz, r.RateYaw, r.RateRoll })
         {
             if (a == null) continue;
             Console.Out.WriteLine(
-                $"  {a.Channel,-9} {a.Count,6}  {Cell(a.Min)} {Cell(a.Max)} {Cell(a.Mean)} {Cell(a.Median)} {Cell(a.Rms)} {Cell(a.Sigma)} {Cell(a.P5)} {Cell(a.P95)}");
+                $"  {a.Channel,-9} {a.Count,6}  {Cell(a.Min)} {Cell(a.Max)} {Cell(a.Mean)} {Cell(a.Winsor)} {Cell(a.Median)} {Cell(a.Rms)} {Cell(a.Sigma)} {Cell(a.P5)} {Cell(a.P95)}");
         }
+
+        if (r.Gx != null && r.Gz != null)
+            ConsoleFormatter.Info($"[STILL] 补偿点（P5~P95 截尾均值）：gx {r.Gx.WinsorDps:+0.000;-0.000} dps / gz {r.Gz.WinsorDps:+0.000;-0.000} dps" +
+                                  "——正漂负补/负漂正补：按笔端 bias 语义（out=raw-bias 则写同号值）写 0x07/0x08，写完用 rate 残余通道复测验证归零");
 
         if (r.Stages.Count > 0)
         {
@@ -409,9 +413,10 @@ public class CompanyStreamCommands
         channel = a.Channel, count = a.Count,
         min = a.Min, max = a.Max,
         mean = Round4(a.MeanDps), median = Round4(a.MedianDps),
+        comp_dps = Round4(a.WinsorDps),
         rms = Round4(a.Rms / 100.0), sigma = Round4(a.Sigma / 100.0),
         p5 = Round4(a.P5 / 100.0), p95 = Round4(a.P95 / 100.0),
-    };   // dps 域（定点/100）
+    };   // dps 域（定点/100）；comp=补偿点（P5~P95 截尾均值）
 
     private static double Round4(double v) => Math.Round(v, 4);
 
