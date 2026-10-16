@@ -23,6 +23,21 @@ public interface ICompanyCodec
     /// <summary>解析 `0x03` 应答</summary>
     bool TryParseVersionResp(ReadOnlySpan<byte> data, out VersionInfo info);
 
+    // ===== 0x04 读 Git Hash（内部调试指令；只走串口/USB 直达轨，不走 BLE——定稿 2026-10-16 §8-1）=====
+
+    /// <summary>
+    /// `0x04` 读 Git Hash 请求：`[target]`（`LEN=0x04`）。canonical：笔端串口轨 `0x11`、基站 USB 轨 `0x00`
+    /// （定稿 §3.2；串口轨设备对任意 target 恒应答自身，但按 canonical 填保帧面自解释）。
+    /// </summary>
+    byte[] EncodeReadHash(byte target);
+
+    /// <summary>
+    /// 解析 `0x04` 应答：`[STATUS][HASH40]`（`LEN=0x2C`——STATUS 1B + 40 字符 hex **ASCII**，非二进制）。
+    /// `HASH` 不足 40 字符视为结构非法；尾部多余字节忽略（前向兼容）。`STATUS=0xFF` 表 hash 不可用
+    /// （理论不发生——固件编译期内嵌，定稿 §3.5）。
+    /// </summary>
+    bool TryParseHashResp(ReadOnlySpan<byte> data, out byte status, out string hash);
+
     /// <summary>`0x51` 读配对信息请求（`PARAM=01` + `NO`）</summary>
     byte[] EncodePairRead(byte no);
 
@@ -193,6 +208,28 @@ public sealed class CompanyCodec : ICompanyCodec
             return false;
 
         info = new VersionInfo(data[0], data[1], data[2], data[3], data[4]);
+        return true;
+    }
+
+    // ================= 0x04 读 Git Hash（定稿 2026-10-16） =================
+
+    /// <summary>HASH 字段宽度 = 40 字符 hex ASCII（与归档 CSV `full_commit_hash`、boot banner 同源）</summary>
+    public const int HashAsciiLength = 40;
+
+    public byte[] EncodeReadHash(byte target) =>
+        CompanyFrame.Build(CompanyFrame.BaseCmdRequest, CompanyCmd.ReadHash, new[] { target });
+
+    public bool TryParseHashResp(ReadOnlySpan<byte> data, out byte status, out string hash)
+    {
+        status = 0;
+        hash = string.Empty;
+
+        // STATUS(1) + HASH(40)；占位全零（40 个 '0'）也占满 40B
+        if (data.Length < 1 + HashAsciiLength)
+            return false;
+
+        status = data[0];
+        hash = ReadAsciiFixed(data.Slice(1, HashAsciiLength));
         return true;
     }
 

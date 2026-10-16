@@ -133,7 +133,10 @@ public partial class OtaPageViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanStart))]
     private string _firmwarePath = string.Empty;
 
-    /// <summary>目标版本 `M.m.p`（须**异于**设备当前版本，否则设备回 `DCMD=0x02` 跳过）</summary>
+    /// <summary>
+    /// 目标版本 `M.m.p`。与设备当前版本**相同也允许**（同版本升级，2026-10-16 裁定：限制不做、非错误）——
+    /// 新固件（`VP_OTA_SAME_VERSION_SKIP_EN` 关）受理整包重刷；旧固件回 `DCMD=0x02` 跳过。两者均正常。
+    /// </summary>
     [ObservableProperty]
     private string _targetVersion = "1.0.0";
 
@@ -194,7 +197,8 @@ public partial class OtaPageViewModel : ObservableObject
 
     /// <summary>
     /// 读**设备当前版本**（`0x03`）：按当前通道走 —— 串口＝笔端、USB＝基站。
-    /// 用途：① 升级前判断"是否已同版本"（相同则设备会回 `DCMD=02` 跳过，不进传输）；
+    /// 用途：① 升级前提示"是否已同版本"（**注意而非错误**：同版本升级属正常——新固件受理重刷、
+    /// 旧固件回 `DCMD=02` 跳过，OTA升级固件级校验议题 2026-10-16 裁定）；
     /// ② 升级后复核（第 4 轮真写 Flash 后才会变化；STUB 阶段不变属预期）。
     /// </summary>
     [RelayCommand]
@@ -274,7 +278,9 @@ public partial class OtaPageViewModel : ObservableObject
             }
 
             DeviceVersionText = $"MODEL=0x{info.Model:X2}　SVER={sver}" +
-                                (sameAsTarget ? "（与目标版本相同 ⇒ 设备会回 DCMD=02 跳过传输）" : string.Empty);
+                                (sameAsTarget
+                                    ? "（与目标版本相同：同版本升级属正常，非错误——新固件将受理重刷，旧固件回 DCMD=02 跳过）"
+                                    : string.Empty);
 
             AddLog($"[0x03] MODEL=0x{info.Model:X2} SVER={sver}{viaNote}");
         }
@@ -305,7 +311,8 @@ public partial class OtaPageViewModel : ObservableObject
 
         FirmwarePath = dlg.FileName;
 
-        // 从文件名推断目标版本（如 `pen_r1_v10_v0.11.16_target_*.bin` → `0.11.16`），减少手填错
+        // 从文件名推断目标版本（旧 `pen_r1_v10_v0.11.16_target_*.bin` → `0.11.16`；
+        // 新 `R1P_1.0.1_dev_win_<shorthash>.bin` → `1.0.1`），减少手填错
         var inferred = TryParseVersionFromFileName(dlg.FileName);
         if (inferred != null)
         {
@@ -333,12 +340,17 @@ public partial class OtaPageViewModel : ObservableObject
         }
     }
 
-    /// <summary>从固件文件名推断版本号（`v0.11.16` / `v1.2.4` → `M.m.p`；无则 null）</summary>
+    /// <summary>
+    /// 从固件文件名推断版本号 → `M.m.p`；无则 null。双命名并存期兼容（版本管理 2026-10 定稿）：
+    /// 旧 `pen_r1_v10_v0.11.16_target_*.bin`（`v` 前缀）、
+    /// 新 `<target>_<X.Y.Z>_<build_tag>_<env>_<shorthash>.bin`（如 `R1P_1.0.1_dev_win_d6baf49.bin`，下划线分隔）。
+    /// 排除短 hash/日期误配：须三点分段且段后非数字（`20261015`、`d6baf49` 均不命中）。
+    /// </summary>
     private static string? TryParseVersionFromFileName(string path)
     {
         var match = System.Text.RegularExpressions.Regex.Match(
             System.IO.Path.GetFileName(path),
-            @"v(\d+)\.(\d+)\.(\d+)",
+            @"(?:[v_]|^)(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\d)",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         return match.Success
@@ -441,7 +453,7 @@ public partial class OtaPageViewModel : ObservableObject
             if (result.IsTerminalSuccess)
             {
                 var note = result.Outcome == OtaOutcome.Skipped
-                    ? "（设备已同版本，未进入传输）"
+                    ? "（设备已同版本未进入传输——属正常，非错误）"
                     : result.TerminalLost
                         ? "；终态帧未达，满块 + R2 同版本确认判定成功 —— 请点【读设备版本】核对"
                         : "；请点【读设备版本】核对（设备已复位重启，版本应已更新）";

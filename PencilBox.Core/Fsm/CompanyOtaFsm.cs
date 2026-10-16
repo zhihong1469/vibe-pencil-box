@@ -396,6 +396,12 @@ public sealed class CompanyOtaFsm
                     }
                     else
                     {
+                        // 同版本语义注意级（非错误）：同版本重刷 + 终态竞态下设备可能实际已升级成功
+                        //（OTA升级固件级校验议题：skip 宏关闭后同版本受理整包重刷，终态丢失即撞此形态，
+                        // issues-pencil/14 方案甲根治前的已知窗口）——失败照报，但提示以读版本/hash 复核为准
+                        Warning?.Invoke(this,
+                            "若本次为同版本包（SVER 与设备相同）：设备可能实际已升级成功（终态帧竞态丢失）——" +
+                            "请用 identify / company hash 复核设备实际版本后再决定是否重刷");
                         MoveTo(OtaFsmState.Failed,
                             $"等终态窗超时且 R2 已用（满块 {_blocksDone}/{_totalBlocks}，终态帧丢失无法确认，issues-pencil/14）");
                     }

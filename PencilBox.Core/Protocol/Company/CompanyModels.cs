@@ -11,6 +11,13 @@ public static class CompanyCmd
     /// <summary>读被查询设备自身型号/版本</summary>
     public const byte ReadVersion = 0x03;
 
+    /// <summary>
+    /// 读 Git Hash 内部指令（定稿 2026-10-16：`_share/issues/0-待处理/产品落地/版本管理/Box/读hash内部指令-0x04协议定稿与上位机对齐（最终版）.md`）。
+    /// `target` 复用 0x03 语义：`0x00` 基站（USB 轨）/ `0x11` 笔端（**仅插线 UART1 串口直达**，
+    /// 无线轨不开放——40B 载荷占 BLE 带宽与音频相冲，定案 §8-1）。应答 `STATUS + 40B hex ASCII`。
+    /// </summary>
+    public const byte ReadHash = 0x04;
+
     /// <summary>配对信息读写（`PARAM` 01 读 / 02 写 / 03 清绑定——补充 01，仅笔端串口轨）</summary>
     public const byte PairInfo = 0x51;
 

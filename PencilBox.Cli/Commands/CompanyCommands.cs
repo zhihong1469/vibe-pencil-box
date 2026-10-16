@@ -118,6 +118,75 @@ public class CompanyCommands
         return 0;
     }
 
+    /// <summary>
+    /// `company hash`：`0x04` 读 Git Hash 内部指令（定稿 2026-10-16，40 字符 hex ASCII）。
+    /// 双轨各自直达：`--port` = 笔端插线串口（canonical `target=0x11`，0x61 同轨）；
+    /// 无 `--port` = 基站 USB（`target=0x00`）。**无线轨不开放**——USB 轨问笔端（`--target pen`）
+    /// 直接提示不支持（定稿 §3.3/§8-1：40B 载荷占 BLE 带宽与音频实时传输相冲，留扩展位另立变更）。
+    /// 依赖固件 `INTERNAL_DEBUG_CMD_ENABLE` 构建：量产构建 `case 0x04` 整体裁除 → 无应答属预期（§3.7）。
+    /// </summary>
+    /// <param name="port">指定则走串口（笔端，target=0x11）；否则 USB（基站，target=0x00）</param>
+    /// <param name="target">仅 USB 轨校验：`pen` = 无线读笔端 hash → 不支持；串口轨忽略（恒 0x11）</param>
+    public async Task<int> HashAsync(string? port, string? target = null)
+    {
+        // 无线轨不开放（定案 §8-1）：USB 问笔端 = 经基站 BLE——明确提示不支持，不发帧空等
+        if (port == null && target?.ToLowerInvariant() is "pen" or "pencil")
+        {
+            ConsoleFormatter.Error("0x04 读笔端 hash 仅支持插线串口直达（--port COMx，与 0x61 调参同轨）——" +
+                                   "无线轨（经基站 BLE）不开放：40B 载荷占 BLE 带宽、与音频实时传输相冲" +
+                                   "（定稿 §3.3/§8-1，将来放开须另立变更申请）");
+            return 1;
+        }
+
+        var channel = await ResolveChannelAsync(port);
+        if (channel == null)
+            return 1;
+
+        // canonical（定稿 §3.2）：笔端串口轨 0x11、基站 USB 轨 0x00（串口轨对任意 target 恒应答自身，按 canonical 填）
+        byte targetByte = port != null ? (byte)0x11 : (byte)0x00;
+        string targetDesc = port != null
+            ? "笔端（插线串口，target=0x11）"
+            : "基站（USB，target=0x00）";
+        if (port != null && target != null)
+            targetDesc += "（--target 被忽略：串口轨 canonical 0x11）";
+
+        var requester = new CommandRequester(_clock, _config);
+        var request = _codec.EncodeReadHash(targetByte);
+
+        ConsoleFormatter.Info($"[COMPANY] 0x04 读 Git Hash ← {channel.Describe}（目标：{targetDesc}）");
+        ConsoleFormatter.Info($"[COMPANY] TX {request.Length}B: {Hex(request)}");
+
+        var resp = await requester.RequestAsync(channel, request, CompanyCmd.ReadHash);
+        if (resp == null)
+        {
+            ConsoleFormatter.Error($"0x04 无应答（{_config.ResponseTimeoutMs}ms × {_config.MaxRetry + 1} 次）——" +
+                                   "固件须 INTERNAL_DEBUG_CMD_ENABLE 构建（量产构建裁除 0x04，无应答属预期，定稿 §3.7）");
+            return 1;
+        }
+
+        ConsoleFormatter.Info($"[COMPANY] RX: {Hex(CompanyFrame.Build(CompanyFrame.BaseCmdResponse, CompanyCmd.ReadHash, resp))}");
+
+        if (!_codec.TryParseHashResp(resp, out var status, out var hash))
+        {
+            ConsoleFormatter.Error("0x04 应答结构非法（缺 STATUS 或 HASH 不足 40 字符）");
+            return 1;
+        }
+
+        if (status != CompanyStatus.Ok)
+        {
+            ConsoleFormatter.Error($"STATUS=0x{status:X2}：hash 不可用（定稿 §3.5，理论不发生——固件编译期内嵌）");
+            return 1;
+        }
+
+        ConsoleFormatter.Success($"GIT_HASH={hash}");
+        if (hash.All(c => c == '0'))
+            ConsoleFormatter.Warn("HASH 为占位全零——构建缺 git 信息（定稿 §3.4 宏缺席兜底），现场溯源改用 boot banner/归档 CSV");
+
+        // 对拍锚（定稿 §2/§3.4）：包名第 5 字段 = 7 位 short hash；boot banner `* Commit:` 行同源
+        ConsoleFormatter.Info($"对拍：包名 short hash（第 5 字段）应 = {hash[..7]}；boot banner `* Commit:` 行应与本值一致");
+        return 0;
+    }
+
     /// <summary>`company pair read`：`0x51` 读配对信息（`--port` 走串口笔端，否则 USB 基站）。</summary>
     public async Task<int> PairReadAsync(string? port, byte no)
     {
@@ -264,7 +333,8 @@ public class CompanyCommands
     /// <param name="port">指定则走串口（笔端轨）；否则 USB（基站自升级轨）</param>
     /// <param name="fwPath">固件 bin</param>
     /// <param name="target">bs=0x00 基站 / pen=0x01 笔</param>
-    /// <param name="sver">目标版本 `M.m.p`（须异于设备当前版本，否则走 DCMD=02 跳过分支）</param>
+    /// <param name="sver">目标版本 `M.m.p`。与设备当前版本相同也允许（同版本升级属正常非错误）：
+    /// 新固件受理整包重刷；旧固件（skip 宏开）回 DCMD=02 跳过——两者均成功路径</param>
     public async Task<int> OtaAsync(string? port, string fwPath, string target = "bs",
         string sver = "1.0.0", int hver = -1, int chunkGapMs = -1, int abortAfterBlock = -1)
     {

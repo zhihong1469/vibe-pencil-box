@@ -53,6 +53,7 @@ public sealed class CompanyFrameDecoder : IFrameDecoder
         return cmdType switch
         {
             CompanyCmd.ReadVersion => arrow + DecodeReadVersion(uplink, data),
+            CompanyCmd.ReadHash => arrow + DecodeReadHash(uplink, data),
             CompanyCmd.PairInfo => arrow + DecodePairInfo(uplink, data),
             CompanyCmd.PairEnter => arrow + DecodePairEnter(uplink, data),
             CompanyCmd.Ota => arrow + DecodeOta(uplink, data),
@@ -75,6 +76,21 @@ public sealed class CompanyFrameDecoder : IFrameDecoder
 
         return $"0x03 应答 STA={info.Status:X2} MODEL={info.Model:X2}({ModelText(info.Model)}) " +
                $"SVER={info.SverMajor}.{info.SverMinor}.{info.SverPatch}";
+    }
+
+    // ===== 0x04 读 Git Hash =====
+
+    private string DecodeReadHash(bool uplink, ReadOnlySpan<byte> data)
+    {
+        if (!uplink)
+            return $"0x04 读 Git Hash（target=0x{(data.Length > 0 ? data[0] : 0):X2}）";
+
+        if (!_codec.TryParseHashResp(data, out var status, out var hash))
+            return "0x04 应答（结构非法）";
+
+        return status != CompanyStatus.Ok
+            ? $"0x04 应答 STA={status:X2}（hash 不可用）"
+            : $"0x04 应答 STA=00 HASH={hash}";
     }
 
     // ===== 0x51 配对信息读写 =====

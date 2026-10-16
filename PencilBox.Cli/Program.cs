@@ -542,6 +542,11 @@ public class Program
         return action switch
         {
             "identify" or "id" => await cmd.IdentifyAsync(port, GetOption(rest, "--target")),
+
+            // 0x04 读 Git Hash（定稿 2026-10-16；内部调试指令）：串口=笔端(0x11) / USB=基站(0x00)，
+            // 无线轨不开放（--target pen 仅在 USB 轨被拒并提示不支持）
+            "hash" => await cmd.HashAsync(port, GetOption(rest, "--target")),
+
             "pair" => await DispatchCompanyPairAsync(cmd, rest, port, no),
 
             // 固件路径支持两种写法：位置参数（便于照抄笔端文档里的命令）或 --fw <path>
@@ -804,6 +809,8 @@ public class Program
             pencilbox device ep4 send --cmd A4 --ble       (auto-find SunVote pen MAC via BLE)
             pencilbox company identify                     (0x03，USB 报基站）
             pencilbox company identify --port COM3         (0x03，串口报笔端）
+            pencilbox company hash                         (0x04 读 Git Hash，USB 报基站；40 位 hex ASCII)
+            pencilbox company hash --port COM3             (0x04 读笔端 hash，仅插线串口；无线轨不支持)
             pencilbox company pair read --no 0
             pencilbox company pair write --no 0 --mac AA:BB:CC:DD:EE:FF --name SunVoteR1:AABBCCDDEEFF
             pencilbox company pair enter                   (0x52，等待 01 → 02/03）
