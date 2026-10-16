@@ -362,6 +362,10 @@ public class CompanyCommands
             : Downtype.BaseStation;
         var hv = (byte)(hver >= 0 ? hver : (dt == Downtype.Pen ? _config.HverPen : _config.HverHid));
 
+        // 包名×升级对象错配：注意级不拦截（防呆不防傻——文件名可改，设备侧指纹/容量判据才是真闸）
+        if (FirmwareNaming.TargetMismatchNotice(fwPath, dt) is { } mismatch)
+            ConsoleFormatter.Warn($"[COMPANY] {mismatch}");
+
         var fsm = new CompanyOtaFsm(_codec, channel, _clock, _config);
         fsm.Transitioned += (_, t) => ConsoleFormatter.Info($"[FSM] {t.From} → {t.To}：{t.Reason}");
         fsm.Progress += (_, p) => ConsoleFormatter.Info(

@@ -295,6 +295,104 @@ public partial class OtaPageViewModel : ObservableObject
         }
     }
 
+    // ============ 设备 Hash 核对（0x04 内部调试指令，升级前溯源/升级后复核） ============
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanReadDeviceHash))]
+    private bool _isReadingHash;
+
+    [ObservableProperty]
+    private string _deviceHashText = "未读取";
+
+    public bool CanReadDeviceHash => !IsReadingHash && !IsUpgrading;
+
+    /// <summary>
+    /// 读设备 Git Hash（`0x04` 内部调试指令，定稿 2026-10-16）：串口＝笔端（target=0x11，插线直达）/
+    /// USB＝基站（target=0x00）。**B1 无线轨（USB 问笔端）不开放**（定稿 §3.3/§8-1：40B 载荷与音频相冲）
+    /// ——提示不支持、不发帧。依赖固件 `INTERNAL_DEBUG_CMD_ENABLE` 构建（量产裁除 → 无应答属预期）。
+    /// </summary>
+    [RelayCommand]
+    private async Task ReadDeviceHashAsync()
+    {
+        try
+        {
+            IsReadingHash = true;
+            DeviceHashText = "读取中...";
+
+            // 无线轨不开放（与 CLI 同口径）：USB + 笔端对象 = 经基站 BLE → 本地提示，不发帧空等
+            if (!SelectedTarget.UseSerial && SelectedTarget.Downtype == Downtype.Pen)
+            {
+                DeviceHashText = "不支持：0x04 读笔端 hash 仅限插线串口（无线轨不开放——40B 载荷与音频实时传输相冲，定稿 §3.3）";
+                AddLog("[0x04] 无线轨不支持（USB 问笔端）——请切「笔端（串口直连）」通道再读");
+                return;
+            }
+
+            ICommandChannel channel;
+            byte targetByte;
+            string viaNote;
+            if (SelectedTarget.UseSerial)
+            {
+                var ch = await EnsureSerialChannelAsync();
+                if (ch == null)
+                {
+                    DeviceHashText = "串口未就绪：请先选择并确认笔端串口";
+                    return;
+                }
+                channel = ch;
+                targetByte = 0x11;
+                viaNote = "（串口直达，target=0x11）";
+            }
+            else
+            {
+                if (!_usbChannel.IsOpen)
+                {
+                    DeviceHashText = "基站未连接：请先在仪表盘连接接收器 USB 命令通道（0xFF02）";
+                    return;
+                }
+                channel = _usbChannel;
+                targetByte = 0x00;
+                viaNote = "（USB，target=0x00）";
+            }
+
+            var requester = new CommandRequester(_clock, _config);
+            var resp = await requester.RequestAsync(channel, _codec.EncodeReadHash(targetByte), CompanyCmd.ReadHash);
+            if (resp == null)
+            {
+                DeviceHashText = "0x04 无应答（超时）：固件须 INTERNAL_DEBUG_CMD_ENABLE 构建（量产裁除 0x04 属预期）";
+                AddLog($"[0x04] 无应答（超时）{viaNote}");
+                return;
+            }
+
+            if (!_codec.TryParseHashResp(resp, out var status, out var hash))
+            {
+                DeviceHashText = "0x04 应答结构非法（缺 STATUS 或 HASH 不足 40 字符）";
+                AddLog("[0x04] 应答结构非法");
+                return;
+            }
+
+            if (status != CompanyStatus.Ok)
+            {
+                DeviceHashText = $"0x04 失败：STATUS=0x{status:X2}（hash 不可用，定稿 §3.5）";
+                AddLog($"[0x04] 失败：STATUS=0x{status:X2}");
+                return;
+            }
+
+            DeviceHashText = hash == new string('0', 40)
+                ? $"{hash}（占位全零——构建缺 git 信息，溯源改用 boot banner/归档 CSV）"
+                : hash;
+            AddLog($"[0x04] HASH={hash}{viaNote}（对拍：包名第 5 字段应={hash[..7]}，boot banner `* Commit:` 同源）");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "0x04 read hash failed");
+            DeviceHashText = $"读 hash 失败：{ex.Message}";
+        }
+        finally
+        {
+            IsReadingHash = false;
+        }
+    }
+
     // ============ 固件选择 ============
 
     [RelayCommand]
@@ -320,6 +418,11 @@ public partial class OtaPageViewModel : ObservableObject
             AddLog($"[FILE] 已从文件名推断目标版本：{TargetVersion}（请确认与固件自身版本一致）");
         }
 
+        // 包名×升级对象错配：注意不拦截（防呆不防傻——文件名可改，设备侧指纹/容量判据才是真闸）
+        var mismatch = FirmwareNaming.TargetMismatchNotice(dlg.FileName, SelectedTarget.Downtype);
+        if (mismatch != null)
+            AddLog($"[FILE] ⚠ {mismatch}");
+
         try
         {
             var image = await File.ReadAllBytesAsync(dlg.FileName);
@@ -330,7 +433,8 @@ public partial class OtaPageViewModel : ObservableObject
                 ? $"　⚠ 超出设备上限 {_config.MaxImageBytes} B（设备会回 FF + 原因 02）"
                 : string.Empty;
 
-            ImageSummary = $"{image.Length} 字节 / {blocks} 块　CRC16=0x{crc:X4}{overLimit}";
+            ImageSummary = $"{image.Length} 字节 / {blocks} 块　CRC16=0x{crc:X4}{overLimit}" +
+                           (mismatch != null ? $"　⚠ {mismatch}" : string.Empty);
             AddLog($"[FILE] {dlg.FileName}（{image.Length}B, CRC16=0x{crc:X4}, {blocks} 块）");
         }
         catch (Exception ex)
@@ -397,6 +501,10 @@ public partial class OtaPageViewModel : ObservableObject
             StatusMessage = "目标版本格式非法：应为 M.m.p（如 1.0.0）";
             return;
         }
+
+        // 包名×升级对象错配复检（选文件后可切换通道）：注意不拦截（防呆不防傻）
+        if (FirmwareNaming.TargetMismatchNotice(FirmwarePath, SelectedTarget.Downtype) is { } startMismatch)
+            AddLog($"[WARN] {startMismatch}");
 
         try
         {

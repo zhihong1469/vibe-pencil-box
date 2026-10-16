@@ -77,6 +77,22 @@
                             ToolTip="按当前通道读 0x03：串口＝笔端 / USB＝基站。升级前用于判断是否已同版本；升级后用于复核版本是否变化"/>
                 </Grid>
 
+                <!-- 设备 Git Hash（0x04 内部调试指令）：现场溯源"跑的到底是哪笔提交" -->
+                <Grid Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="设备Hash：" VerticalAlignment="Center"
+                               Foreground="#555" MinWidth="68"/>
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#2C3E50"
+                               TextWrapping="Wrap" Text="{Binding DeviceHashText}"/>
+                    <Button Grid.Column="2" Content="读设备Hash(0x04)" Command="{Binding ReadDeviceHashCommand}"
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding CanReadDeviceHash}"
+                            ToolTip="内部调试指令，仅 INTERNAL_DEBUG_CMD_ENABLE 构建（量产裁除 → 无应答属预期）。串口＝笔端(0x11，插线直达) / USB＝基站(0x00)；B1 无线轨不开放。40 位 hex ASCII，与包名 short hash（第 5 字段）、boot banner `* Commit:` 行同源对拍"/>
+                </Grid>
+
                 <!-- 固件文件 -->
                 <Grid Margin="0,6,0,0">
                     <Grid.ColumnDefinitions>
@@ -107,7 +123,7 @@
                                Foreground="#555" MinWidth="68"/>
                     <TextBox Grid.Column="1" MinWidth="110" Margin="0,0,16,0"
                              Text="{Binding TargetVersion, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="格式 M.m.p。必须等于【该固件自身的版本号】（设备会按它做同版本跳过与最终校验），且与设备当前版本不同 —— 相同则设备回 DCMD=0x02 跳过、不进传输。选文件时会尝试从文件名自动推断。"/>
+                             ToolTip="格式 M.m.p。填【该固件自身的版本号】（从文件名自动推断，请核对）。与设备当前版本相同也允许（同版本升级属正常非错误：新固件受理重刷，旧固件回 DCMD=0x02 跳过）。"/>
                     <TextBlock Grid.Column="2" Text="HVER：" VerticalAlignment="Center"
                                Foreground="#555" Margin="0,0,6,0"/>
                     <TextBox Grid.Column="3" Width="70" HorizontalAlignment="Left"
