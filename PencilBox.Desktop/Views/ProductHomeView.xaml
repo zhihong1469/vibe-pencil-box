@@ -310,6 +310,7 @@
 
                     <!-- 一键一卡（出厂默认整卡只读；行实例与 KeymapRows 共享，编辑即时互通） -->
                     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" MaxHeight="430" Margin="4">
+                        <StackPanel>
                         <ItemsControl ItemsSource="{Binding KeymapCards}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
@@ -485,25 +486,65 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+
+                        <!-- S1 档位开关卡（2026-10-17 起随配置可编辑；档位列锁定，键值=捕获/修饰位/专用键；设备写回待 0x55 PARAM 05/06） -->
+                        <Border BorderBrush="#D5DBDB" BorderThickness="1" CornerRadius="4"
+                                Background="#FDFEFE" Padding="8,6,8,8">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,4">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Background="#2C3E50" CornerRadius="3" Padding="6,2">
+                                            <TextBlock Text="S1 档位开关" Foreground="White"
+                                                       FontWeight="SemiBold" FontSize="12"/>
+                                        </Border>
+                                        <TextBlock Text="出厂默认（只读）" Foreground="#B03A2E" FontSize="11"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center"
+                                                   Visibility="{Binding DataContext.IsFactoryConfigSelected, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource InvertBoolConverter}}"/>
+                                        <TextBlock Text="档位→热键：笔切档位时上报（三档行固定，键值可改）" Foreground="#999"
+                                                   FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding SwitchRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,3,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="82"/>
+                                                    <ColumnDefinition Width="96"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- 档位（锁定：待机/识别/扩音，由开关物理位置决定，行不可增删） -->
+                                                <TextBlock Grid.Column="0" Text="{Binding ModeName}" VerticalAlignment="Center"
+                                                           ToolTip="档位由 S1 开关物理位置决定，行固定不可增删；切到该档位时上报右侧热键"/>
+                                                <TextBlock Grid.Column="1" Text="键盘" VerticalAlignment="Center" Foreground="#555"/>
+
+                                                <!-- 键值编辑（与按键行键盘动作同交互；切换表为单码字节，无消费键/鼠标键预设） -->
+                                                <StackPanel Grid.Column="2" Orientation="Horizontal" IsEnabled="{Binding IsEditable}">
+                                                    <ctrl:KeyCaptureBox Width="190" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                        CapturedModifier="{Binding Modifier, Mode=TwoWay}"
+                                                        CapturedUsage="{Binding CodeLo, Mode=TwoWay}"
+                                                        ToolTip="点击获得焦点后按下快捷键（修饰键+单主键）；Esc 清除"/>
+                                                    <TextBlock Text="修饰键" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#555"/>
+                                                    <CheckBox Content="Ctrl" IsChecked="{Binding HasCtrl}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                                    <CheckBox Content="Shift" IsChecked="{Binding HasShift}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                                    <CheckBox Content="Alt" IsChecked="{Binding HasAlt}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                    <TextBlock Text="专用键" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#555"
+                                                               ToolTip="物理键盘不存在的保留键（F13~F16，扩音/识别档出厂默认即 F15/F16），点它即设为该键值"/>
+                                                    <ComboBox Width="168" VerticalAlignment="Center"
+                                                              ItemsSource="{x:Static vm:KeymapRowViewModel.DedicatedKeys}"
+                                                              DisplayMemberPath="Name"
+                                                              SelectedItem="{Binding SelectedDedicatedKey, Mode=TwoWay}"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                        </StackPanel>
                     </ScrollViewer>
 
-                    <!-- S1 档位切换快捷键（固件切换表出厂真值，只读；暂无读写协议——pc-issues/04 §4） -->
-                    <StackPanel Grid.Row="3" Margin="4,2,4,4">
-                        <TextBlock Text="S1 档位切换快捷键（档位→热键，出厂真值只读；设备读写待 0x55 提案落地，pc-issues）"
-                                   Foreground="#666" FontSize="11" Margin="0,2,0,2"/>
-                        <DataGrid ItemsSource="{Binding SwitchRows}"
-                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
-                                  HeadersVisibility="Column" GridLinesVisibility="All"
-                                  SelectionMode="Single" MinHeight="70">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="档位" Binding="{Binding ModeName}" Width="90"/>
-                                <DataGridTextColumn Header="动作" Binding="{Binding ActionName}" Width="90"/>
-                                <DataGridTextColumn Header="码值" Binding="{Binding CodeName}" Width="130"/>
-                                <DataGridTextColumn Header="修饰键" Binding="{Binding ModifierName}" Width="90"/>
-                                <DataGridTextColumn Header="RAW" Binding="{Binding Raw}" Width="*"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </StackPanel>
                 </Grid>
             </GroupBox>
 

@@ -180,7 +180,7 @@ public partial class ProductHomeViewModel : ObservableObject
     [ObservableProperty]
     private ObservableCollection<KeymapRowViewModel> _keymapRows = new();
 
-    /// <summary>S1 档位切换快捷键（固件切换表出厂真值，只读；暂无读写协议——pc-issues/04 §4）</summary>
+    /// <summary>S1 档位切换快捷键（随命名配置携带，旧配置回落出厂真值；档位锁定、键值可编辑；设备写回待 0x55 PARAM 05/06）</summary>
     [ObservableProperty]
     private ObservableCollection<KeymapSwitchRowViewModel> _switchRows = new();
 
@@ -196,6 +196,7 @@ public partial class ProductHomeViewModel : ObservableObject
     private ObservableCollection<string> _keymapConfigNames = new();
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsFactoryConfigSelected))]
     private string? _selectedKeymapConfig;
 
     /// <summary>当前选中是否出厂默认（只读）——驱动保存/改名/删除按钮与表格可编辑性</summary>
@@ -257,10 +258,10 @@ public partial class ProductHomeViewModel : ObservableObject
             _logger.LogWarning(ex, "Keymap 配置存储初始化失败");
         }
 
-        // S1 档位切换表：出厂真值只读显示（与配置无关，全配置共用；设备读写待 0x55 提案落地）
+        // S1 档位切换表：出厂真值兜底显示（配置初始化成功后由 LoadSelectedConfigIntoCards 按配置重载）
         SwitchRows = new ObservableCollection<KeymapSwitchRowViewModel>(
             KeymapFactoryDefault.SwitchEntries
-                .Select(e => new KeymapSwitchRowViewModel(e))
+                .Select(e => new KeymapSwitchRowViewModel(e, isEditable: false))
                 .OrderBy(r => r.Mode));
 
         // 启动时加载本地已知笔端目录（显示"上次使用/使用过/出现过"历史）
@@ -1021,7 +1022,8 @@ public partial class ProductHomeViewModel : ObservableObject
 
         try
         {
-            _keymapConfigStore.Save(name, KeymapRows.Select(r => r.ToEntry()));
+            _keymapConfigStore.Save(name, KeymapRows.Select(r => r.ToEntry()),
+                SwitchRows.Select(r => r.ToEntry()));
             RefreshKeymapConfigNames();
             SelectedKeymapConfig = name;
             IsKeymapDirty = false;
@@ -1038,7 +1040,8 @@ public partial class ProductHomeViewModel : ObservableObject
     {
         try
         {
-            _keymapConfigStore.Save(SelectedKeymapConfig!, KeymapRows.Select(r => r.ToEntry()));
+            _keymapConfigStore.Save(SelectedKeymapConfig!, KeymapRows.Select(r => r.ToEntry()),
+                SwitchRows.Select(r => r.ToEntry()));
             IsKeymapDirty = false;
             StatusMessage = $"已保存到配置「{SelectedKeymapConfig}」（{KeymapRows.Count} 条）";
         }
@@ -1119,7 +1122,17 @@ public partial class ProductHomeViewModel : ObservableObject
             foreach (var row in rows)
                 row.PropertyChanged += OnKeymapRowPropertyChanged;
 
+            // S1 切换表：配置未携带（旧文件/迁移文件）→ 回落出厂真值（2026-10-17 起随配置携带）
+            var switchEntries = doc?.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries.ToList();
+            var switchRows = switchEntries
+                .Select(e => new KeymapSwitchRowViewModel(e, isEditable))
+                .OrderBy(r => r.Mode)
+                .ToList();
+            foreach (var row in switchRows)
+                row.PropertyChanged += OnKeymapRowPropertyChanged;
+
             KeymapRows = new ObservableCollection<KeymapRowViewModel>(rows);
+            SwitchRows = new ObservableCollection<KeymapSwitchRowViewModel>(switchRows);
             RebuildCards();
 
             if (doc == null)

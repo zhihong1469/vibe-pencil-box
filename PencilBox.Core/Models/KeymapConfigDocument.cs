@@ -19,4 +19,10 @@ public sealed class KeymapConfigDocument
 
     /// <summary>映射条目（索引即接收器表槽位）</summary>
     public List<KeymapEntry> Entries { get; set; } = new();
+
+    /// <summary>
+    /// S1 档位切换表（<see cref="KeymapSwitchEntry"/>，2026-10-17 起随配置携带）；
+    /// <c>null</c> = 本文件未携带（旧配置/迁移文件）→ 消费方回落 <see cref="KeymapFactoryDefault.SwitchEntries"/>。
+    /// </summary>
+    public List<KeymapSwitchEntry>? SwitchEntries { get; set; }
 }

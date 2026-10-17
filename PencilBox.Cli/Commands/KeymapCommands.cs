@@ -13,7 +13,8 @@ namespace PencilBox.Cli.Commands;
 
 /// <summary>
 /// `keymap` 域——命名 Keymap 配置的本地管理（pc-issues/04 提案 A/B 的 CLI-first 落地，2026-10-08）。
-/// 纯本地文件操作（`&lt;exe 同级&gt;/configs/keymap/`），不碰设备；设备读写（0xA0"阶段 6"）待固件实现后另补。
+/// 纯本地文件操作（`&lt;exe 同级&gt;/configs/keymap/`），不碰设备；设备读写待 0x55 三端裁决
+/// （按键表=PARAM 01/02，S1 切换表=PARAM 05/06，pc-issues/05）。
 /// 存储层保存/加载即按 K1→K6 规范排序（<see cref="KeymapSorting"/>），故写后索引可能与命令中给出的不同。
 /// </summary>
 public sealed class KeymapCommands
@@ -66,10 +67,13 @@ public sealed class KeymapCommands
             ("修饰键", r => KeymapFormatter.GetModifierName(r.Entry.Modifier)),
             ("RAW", r => string.Join(" ", r.Entry.ToBytes().Select(b => $"{b:X2}"))));
 
-        // S1 档位切换快捷键（固件另一张表 s_switch_default：档位→热键，暂无读写协议，出厂真值只读显示）
-        ConsoleFormatter.Info("S1 档位切换快捷键（切换表，只读；设备读写待固件 0xA0 扩展，见 pc-issues/04 §4）");
+        // S1 档位切换快捷键（固件另一张表 s_switch_default：档位→热键；随配置携带，未携带回落出厂真值；
+        // 设备写回待 0x55 PARAM 05/06，pc-issues/05）
+        var switchEntries = doc.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries.ToList();
+        ConsoleFormatter.Info(
+            $"S1 档位切换快捷键（切换表{(doc.SwitchEntries == null ? "，本配置未携带→显示出厂真值" : "")}；设备写回待 0x55，pc-issues/05）");
         ConsoleFormatter.PrintTable(
-            KeymapFactoryDefault.SwitchEntries
+            switchEntries
                 .Select((e, i) => (Entry: e, Index: (byte)i))
                 .OrderBy(r => r.Entry.Mode),
             ("#", r => r.Index.ToString()),
@@ -86,6 +90,8 @@ public sealed class KeymapCommands
     {
         _store.Initialize();
         from ??= _store.FactoryName;
+        if (from.Equals("factory", StringComparison.OrdinalIgnoreCase))
+            from = _store.FactoryName;   // 帮助文本承诺的别名（--from factory），2026-10-17 冒烟发现从未实现，补上
         var src = _store.Load(from);
         if (src == null)
         {
@@ -93,7 +99,7 @@ public sealed class KeymapCommands
             return 1;
         }
 
-        _store.Save(name, src.Entries);
+        _store.Save(name, src.Entries, src.SwitchEntries);
         _store.SetCurrentName(name);
         ConsoleFormatter.Success($"已创建配置「{name}」（复制自「{from}」，{src.Entries.Count} 条）并设为当前");
         return 0;
@@ -145,6 +151,55 @@ public sealed class KeymapCommands
         return 0;
     }
 
+    /// <summary>
+    /// `keymap switch &lt;名&gt; --mode 0|1|2 [--code 0x6A] [--mod alt]`：修改 S1 切换表某档位热键
+    /// （三档行固定不可增删；配置未携带切换表时先落出厂真值再改——首次编辑即把表写入配置文件）。
+    /// </summary>
+    public int Switch(string name, byte mode, byte? code, byte? modifier)
+    {
+        _store.Initialize();
+        if (mode > 2)
+        {
+            ConsoleFormatter.Error($"--mode {mode} 越界（0=待机 1=识别 2=扩音）");
+            return 1;
+        }
+        if (!code.HasValue && !modifier.HasValue)
+        {
+            ConsoleFormatter.Error("至少给一个字段：--code <byte> / --mod <ctrl|shift|alt|win|none|0~255>（用 show 看当前值）");
+            return 1;
+        }
+
+        var (doc, error) = LoadMutable(name);
+        if (doc == null)
+        {
+            ConsoleFormatter.Error(error!);
+            return 1;
+        }
+
+        // 出厂真值兜底必须**克隆条目**——常量数组对象是共享锚点，绝不原地改
+        var list = doc.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries
+            .Select(e => new KeymapSwitchEntry { Mode = e.Mode, Modifier = e.Modifier, CodeLo = e.CodeLo })
+            .ToList();
+        var entry = list.FirstOrDefault(e => e.Mode == mode);
+        if (entry == null)
+        {
+            entry = new KeymapSwitchEntry { Mode = mode };
+            list.Add(entry);
+        }
+        if (code.HasValue) entry.CodeLo = code.Value;
+        if (modifier.HasValue) entry.Modifier = modifier.Value;
+
+        doc.SwitchEntries = list;
+        _store.Save(name, doc.Entries, list);
+
+        ConsoleFormatter.Success(
+            $"已写入「{name}」S1 切换表：{KeymapFormatter.GetModeName(mode)} → " +
+            $"{KeymapFormatter.GetCodeName(KeyActionType.Keyboard, entry.CodeLo, 0)}" +
+            (entry.Modifier != 0 ? $" +{KeymapFormatter.GetModifierName(entry.Modifier)}" : "") +
+            "（RAW " + string.Join(" ", entry.ToBytes().Select(b => $"{b:X2}")) + "）");
+        return 0;
+    }
+
     /// <summary>`keymap remove &lt;名&gt; --index N`：删除一条</summary>
     public int Remove(string name, int index)
     {
@@ -184,12 +239,17 @@ public sealed class KeymapCommands
         }
     }
 
-    /// <summary>`keymap delete &lt;名&gt;`（出厂默认拒绝）</summary>
+    /// <summary>`keymap delete &lt;名&gt;`（出厂默认拒绝；不存在报错不静默）</summary>
     public int Delete(string name)
     {
         _store.Initialize();
         try
         {
+            if (_store.Load(name) == null)
+            {
+                ConsoleFormatter.Error($"配置不存在：{name}");
+                return 1;
+            }
             _store.Delete(name);
             ConsoleFormatter.Success($"已删除配置「{name}」（当前配置回落：{_store.GetCurrentName()}）");
             return 0;

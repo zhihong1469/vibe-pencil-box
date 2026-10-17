@@ -9,8 +9,8 @@ namespace PencilBox.Core.Models;
 /// S1 档位切换快捷键条目——字节级对应固件 `srv_keymap.c` 的 `srv_switch_entry_t`
 ///（[mode][modifier][code]，3B）：Dongle 检测到笔端 byte2 档位变化时查此表上报热键
 ///（扩音/识别档位切换边界）。与按键 Keymap 表（<see cref="KeymapEntry"/>）是**两张表**：
-/// 按键表走 0xA0 读写（未上线），切换表暂无读写协议（pc-issues/04 §4 扩展待固件裁决），
-/// PC 当前只做出厂真值只读显示。
+/// 按键表走 0x55 PARAM 01/02，切换表走 0x55 PARAM 05/06（pc-issues/05，待三端裁决）；
+/// 设备读写未上线前，PC 侧先做本地配置内编辑（命名配置携带，出厂真值兜底）。
 /// </summary>
 public class KeymapSwitchEntry
 {

@@ -24,8 +24,8 @@ public interface IKeymapConfigStore
     /// <summary>加载指定配置；不存在或损坏返回 null</summary>
     KeymapConfigDocument? Load(string name);
 
-    /// <summary>保存配置（新建或覆盖；出厂默认名拒绝）</summary>
-    void Save(string name, IEnumerable<KeymapEntry> entries);
+    /// <summary>保存配置（新建或覆盖；出厂默认名拒绝）。switchEntries=null = 不携带切换表（读时回落出厂真值）</summary>
+    void Save(string name, IEnumerable<KeymapEntry> entries, IEnumerable<KeymapSwitchEntry>? switchEntries = null);
 
     /// <summary>改名（出厂默认拒绝；目标已存在抛异常）</summary>
     void Rename(string oldName, string newName);

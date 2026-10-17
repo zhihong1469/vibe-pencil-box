@@ -151,6 +151,12 @@ public class Program
                 GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap remove <名> --index N"),
                 GetOptionInt(rest, "--index", -1)),
 
+            "switch" or "sw" => cmd.Switch(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap switch <名> --mode 0|1|2 [--code 0x6A] [--mod alt]"),
+                GetOption(rest, "--mode") is { } m ? KeymapTextParser.ParseByte(m) : throw new ArgumentException("缺少 --mode（0=待机 1=识别 2=扩音）"),
+                GetOption(rest, "--code") is { } code ? KeymapTextParser.ParseByte(code) : null,
+                GetOption(rest, "--mod") is { } mod ? KeymapTextParser.ParseModifier(mod) : null),
+
             "rename" or "mv" => cmd.Rename(
                 GetPositional(rest, 0) ?? throw new ArgumentException("用法：keymap rename <旧名> <新名>"),
                 GetPositional(rest, 1) ?? throw new ArgumentException("用法：keymap rename <旧名> <新名>")),
@@ -762,12 +768,14 @@ public class Program
             dsp      DSP signal processing (check, scripts, run, analyze)
             config   Configuration management (get, set, path)
             company  公司 V0.9 协议（0xFF02 命令通道；OTA 在此：company ota）
-            keymap   快捷键映射配置（本地 configs/keymap/；设备读写待固件 0xA0）
+            keymap   快捷键映射配置（本地 configs/keymap/；按键表+S1 切换表；设备读写待 0x55，pc-issues/05）
                      list / show [配置]                            配置清单 / 表格内容（缺省当前配置）
                      new <名> [--from <配置>]                      复制创建（缺省复制出厂默认）并设为当前
                      set <名> --index N [--key K3] [--event click]
                          [--action keyboard] [--code 0x4B] [--code-hi 0] [--mod alt]
                                                                    改/追加条目（存储按 K1→K6 规范排序，索引会变）
+                     switch <名> --mode 0|1|2 [--code 0x6A] [--mod alt]
+                                                                   改 S1 切换表某档位热键（三档行固定）
                      remove <名> --index N                         删除条目
                      rename <旧> <新> / delete <名> / use <名>     改名 / 删除 / 设为当前
                     identify | pair read/write/enter/factory/clear | ota | raw | status

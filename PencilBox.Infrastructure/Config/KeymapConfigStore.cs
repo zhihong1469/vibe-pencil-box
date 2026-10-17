@@ -55,6 +55,7 @@ public sealed class KeymapConfigStore : IKeymapConfigStore
             Name = FactoryName,
             CreatedAt = DateTime.Now,
             Entries = KeymapSorting.Canonical(KeymapFactoryDefault.Entries),
+            SwitchEntries = OrderedSwitch(KeymapFactoryDefault.SwitchEntries),
         });
 
         MigrateLegacyCache();
@@ -99,7 +100,7 @@ public sealed class KeymapConfigStore : IKeymapConfigStore
         }
     }
 
-    public void Save(string name, IEnumerable<KeymapEntry> entries)
+    public void Save(string name, IEnumerable<KeymapEntry> entries, IEnumerable<KeymapSwitchEntry>? switchEntries = null)
     {
         EnsureUserConfig(name);
         WriteDocument(new KeymapConfigDocument
@@ -107,8 +108,12 @@ public sealed class KeymapConfigStore : IKeymapConfigStore
             Name = name,
             CreatedAt = DateTime.Now,
             Entries = KeymapSorting.Canonical(entries),
+            SwitchEntries = switchEntries == null ? null : OrderedSwitch(switchEntries),
         });
     }
+
+    private static List<KeymapSwitchEntry> OrderedSwitch(IEnumerable<KeymapSwitchEntry> entries) =>
+        entries.OrderBy(e => e.Mode).ToList();   // 档位序（待机→识别→扩音），与按键表规范序同理
 
     public void Rename(string oldName, string newName)
     {

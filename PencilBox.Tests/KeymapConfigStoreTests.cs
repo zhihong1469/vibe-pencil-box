@@ -250,6 +250,45 @@ public class KeymapConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void KeyName_K5K6_SymmetricBareNames()
+    {
+        // 2026-10-17 用户定版：K5"功能"旧描述废弃，K5/K6 裸名对称（描述名未定前勿自造）
+        Assert.Equal("K5", KeymapFormatter.GetKeyName(0x05));
+        Assert.Equal("K6", KeymapFormatter.GetKeyName(0x06));
+    }
+
+    [Fact]
+    public void SwitchEntries_Roundtrip_LegacyFallback_FactoryCarried()
+    {
+        var store = CreateStore();
+        store.Initialize();
+
+        // ① 随配置保存并往返（存储按档位序归一，乱序给入）
+        store.Save("配置一", KeymapFactoryDefault.Entries,
+        [
+            new KeymapSwitchEntry { Mode = 0x01, Modifier = 0x04, CodeLo = 0x0A },
+            new KeymapSwitchEntry { Mode = 0x00, Modifier = 0x00, CodeLo = 0x2C },
+        ]);
+        var doc = store.Load("配置一")!;
+        Assert.NotNull(doc.SwitchEntries);
+        Assert.Equal(2, doc.SwitchEntries!.Count);
+        Assert.Equal(0x00, doc.SwitchEntries[0].Mode);   // 档位序：待机在前
+        Assert.Equal(0x2C, doc.SwitchEntries[0].CodeLo);
+        Assert.Equal(0x04, doc.SwitchEntries[1].Modifier);
+
+        // ② 不带切换表保存 → 文件不携带（消费方回落出厂真值）
+        store.Save("配置二", KeymapFactoryDefault.Entries);
+        Assert.Null(store.Load("配置二")!.SwitchEntries);
+
+        // ③ 出厂默认文件自带切换表（每次 Initialize 再生；存储按档位序，与常量按多重集合比对）
+        var factory = store.Load(store.FactoryName)!;
+        Assert.NotNull(factory.SwitchEntries);
+        Assert.Equal(3, factory.SwitchEntries!.Count);
+        foreach (var e in KeymapFactoryDefault.SwitchEntries)
+            Assert.Contains(factory.SwitchEntries, x => x.ToBytes().SequenceEqual(e.ToBytes()));
+    }
+
+    [Fact]
     public void K2_EventLock_And_PurposeDisplay()
     {
         // 作用化显示（pc-issues/04 §2A）：K2 的 0x03/0x04 按"语音会话开始/结束"描述
