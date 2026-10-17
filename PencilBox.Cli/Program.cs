@@ -774,8 +774,8 @@ public class Program
                      set <名> --index N [--key K3] [--event click]
                          [--action keyboard] [--code 0x4B] [--code-hi 0] [--mod alt]
                                                                    改/追加条目（存储按 K1→K6 规范排序，索引会变）
-                     switch <名> --mode 0|1|2 [--code 0x6A] [--mod alt]
-                                                                   改 S1 切换表某档位热键（三档行固定）
+                     switch <名> --mode 1|2 [--code 0x6A] [--mod alt]
+                                                                   改 S1 切换表档位热键（ON/SPK=扩音开关；IDLE 内部行拒改）
                      remove <名> --index N                         删除条目
                      rename <旧> <新> / delete <名> / use <名>     改名 / 删除 / 设为当前
                     identify | pair read/write/enter/factory/clear | ota | raw | status

@@ -160,12 +160,12 @@ public sealed class KeymapCommands
         _store.Initialize();
         if (mode > 2)
         {
-            ConsoleFormatter.Error($"--mode {mode} 越界（0=待机 1=ON·识别 2=SPK·扩音）");
+            ConsoleFormatter.Error($"--mode {mode} 越界（1=ON 2=SPK；0=IDLE 内部行不可改）");
             return 1;
         }
         if (KeymapRules.IsSwitchInternalRow(mode))
         {
-            ConsoleFormatter.Error($"拒绝写入：mode=0（待机）不是开关档位。{KeymapRules.SwitchIdleLockReason}");
+            ConsoleFormatter.Error($"拒绝写入：{KeymapRules.SwitchIdleLockReason}");
             return 1;
         }
         if (!code.HasValue && !modifier.HasValue)

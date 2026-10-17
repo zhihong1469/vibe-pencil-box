@@ -39,13 +39,12 @@ public static class KeymapRules
 
     // ---- S1 切换表（2026-10-17 固件查证：笔端 app_switch.c 0x16 只发 1/2；基站 srv_keymap.c IDLE 行仅断联补发内部消费） ----
 
-    /// <summary>S1 切换表内部行 mode（待机 IDLE=0：非开关档，见 <see cref="SwitchIdleLockReason"/>）</summary>
+    /// <summary>S1 切换表内部行 mode（IDLE=0：非开关档，见 <see cref="SwitchIdleLockReason"/>）</summary>
     public const byte SwitchInternalMode = 0x00;
 
-    /// <summary>内部行锁定原因（CLI/UI 共用文案；证据=笔端 app_switch.c:154/175/198 只发 1|2，开关 OFF=掉电不上报）</summary>
+    /// <summary>内部行锁定原因（CLI/UI 共用文案，2026-10-17 用户定版"言多必失"：一句话，证据链在 pc-issues/05 §8-6）</summary>
     public const string SwitchIdleLockReason =
-        "待机(mode=0)不是开关档位：S1 开关 OFF=掉电关机不上报，笔端 0x16 只上报 ON(识别)/SPK(扩音)；" +
-        "本行由基站「扩音态断联补发扩音关热键」内部使用（srv_keymap.c），键值保持出厂默认，不可编辑";
+        "IDLE(mode=0)为基站内部行（扩音态断联补发查表用，非开关档位），键值保持出厂默认，不可编辑";
 
     /// <summary>是否 S1 切换表内部行（mode=0，非用户可触发档位）</summary>
     public static bool IsSwitchInternalRow(byte mode) => mode == SwitchInternalMode;

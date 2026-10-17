@@ -11,10 +11,10 @@ namespace PencilBox.Desktop.ViewModels;
 
 /// <summary>
 /// S1 档位切换快捷键行（可编辑）——切换表 `KeymapSwitchEntry`（3B [mode][modifier][code]）的 UI 投影：
-/// 档位列锁定（行固定不可增删）；键值可编辑（捕获框/修饰位/专用键 F13~F16，与按键行同交互；
+/// 档位列锁定（行固定不可增删），键值可编辑（捕获框/修饰位/专用键 F13~F16，与按键行同交互；
 /// 切换表只有单码字节，无消费键/鼠标键预设）。
-/// 2026-10-17 固件查证：开关 OFF=掉电不上报、0x16 只发 ON(1)/SPK(2)——待机(mode=0)行是基站
-/// 内部行（断联补发查表用），键值锁定出厂默认（<see cref="KeymapRules.IsSwitchInternalRow"/>）。
+/// 2026-10-17 用户定版：S1=扩音开关，UI 显示一律物理丝印 ON/SPK（言多必失，不做语义注解）；
+/// IDLE(mode=0)行是基站内部行，不进快捷键 UI（配置内保留保真固件表，0x55 逐槽编址）。
 /// 设备写回待 0x55 PARAM 05/06（pc-issues/05）；当前编辑只落本地命名配置，出厂真值兜底。
 /// </summary>
 public partial class KeymapSwitchRowViewModel : ObservableObject
@@ -22,7 +22,7 @@ public partial class KeymapSwitchRowViewModel : ObservableObject
     /// <summary>本行是否可编辑（出厂默认配置整体只读）</summary>
     public bool IsEditable { get; }
 
-    /// <summary>待机行=基站内部行（键值锁定，非用户可触发档位）</summary>
+    /// <summary>待机行=基站内部行（键值锁定，UI 不显示）</summary>
     public bool IsInternalRow => KeymapRules.IsSwitchInternalRow(Mode);
 
     /// <summary>内部行锁定原因（tooltip；非内部行为 null）</summary>

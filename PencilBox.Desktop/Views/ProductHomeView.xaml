@@ -500,7 +500,7 @@
                                         <TextBlock Text="出厂默认（只读）" Foreground="#B03A2E" FontSize="11"
                                                    Margin="8,0,0,0" VerticalAlignment="Center"
                                                    Visibility="{Binding DataContext.IsFactoryConfigSelected, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource InvertBoolConverter}}"/>
-                                        <TextBlock Text="档位→热键：笔切档位时上报（ON·识别 / SPK·扩音 两档可改；待机行=基站内部行，锁定）" Foreground="#999"
+                                        <TextBlock Text="S1 三档开关：OFF=关机不上报；ON/SPK=扩音开关（切档上报右侧热键）" Foreground="#999"
                                                    FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Grid>
@@ -508,26 +508,25 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Grid Margin="0,3,0,0">
+                                                <Grid.Style>
+                                                    <Style TargetType="Grid">
+                                                        <Style.Triggers>
+                                                            <!-- IDLE 行=基站内部行，不进快捷键 UI（配置内保留保真固件表，0x55 逐槽编址） -->
+                                                            <DataTrigger Binding="{Binding IsInternalRow}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Grid.Style>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="82"/>
                                                     <ColumnDefinition Width="96"/>
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
 
-                                                <!-- 档位（锁定：行不可增删；待机行=基站内部行，悬停看锁原因） -->
+                                                <!-- 档位（锁定：行不可增删） -->
                                                 <TextBlock Grid.Column="0" Text="{Binding ModeName}" VerticalAlignment="Center"
-                                                           ToolTip="S1 开关：OFF=关机不上报 / ON=识别 / SPK=扩音；切到该档位时上报右侧热键">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsInternalRow}" Value="True">
-                                                                    <Setter Property="ToolTip" Value="{Binding InternalLockTip}"/>
-                                                                    <Setter Property="Foreground" Value="#999"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
+                                                           ToolTip="{Binding InternalLockTip}"/>
                                                 <TextBlock Grid.Column="1" Text="键盘" VerticalAlignment="Center" Foreground="#555"/>
 
                                                 <!-- 键值编辑（与按键行键盘动作同交互；切换表为单码字节，无消费键/鼠标键预设） -->

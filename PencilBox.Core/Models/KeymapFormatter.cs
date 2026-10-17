@@ -167,13 +167,13 @@ public static class KeymapFormatter
         return (modifier & 0xF0) != 0 ? $"{name}+0x{modifier >> 4:X2}" : name;
     }
 
-    /// <summary>S1 档位名（byte2 mode 语义 + 物理开关档位对照，2026-10-17 定版：
-    /// 开关 OFF=掉电关机不上报、ON=识别(1)、SPK=扩音(2)；待机(0)为协议内部状态非开关档）</summary>
+    /// <summary>S1 档位名（2026-10-17 用户定版"言多必失"：显示一律物理丝印 ON/SPK，不做语义注解；
+    /// S1 产品语义=扩音开关；mode=0 为协议内部值非开关档）</summary>
     public static string GetModeName(byte mode) => mode switch
     {
-        0x00 => "待机（内部）",
-        0x01 => "ON·识别",
-        0x02 => "SPK·扩音",
+        0x00 => "IDLE·内部",
+        0x01 => "ON",
+        0x02 => "SPK",
         _ => $"0x{mode:X2}"
     };
 }
