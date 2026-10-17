@@ -500,7 +500,7 @@
                                         <TextBlock Text="出厂默认（只读）" Foreground="#B03A2E" FontSize="11"
                                                    Margin="8,0,0,0" VerticalAlignment="Center"
                                                    Visibility="{Binding DataContext.IsFactoryConfigSelected, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource InvertBoolConverter}}"/>
-                                        <TextBlock Text="档位→热键：笔切档位时上报（三档行固定，键值可改）" Foreground="#999"
+                                        <TextBlock Text="档位→热键：笔切档位时上报（ON·识别 / SPK·扩音 两档可改；待机行=基站内部行，锁定）" Foreground="#999"
                                                    FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Grid>
@@ -514,13 +514,24 @@
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
 
-                                                <!-- 档位（锁定：待机/识别/扩音，由开关物理位置决定，行不可增删） -->
+                                                <!-- 档位（锁定：行不可增删；待机行=基站内部行，悬停看锁原因） -->
                                                 <TextBlock Grid.Column="0" Text="{Binding ModeName}" VerticalAlignment="Center"
-                                                           ToolTip="档位由 S1 开关物理位置决定，行固定不可增删；切到该档位时上报右侧热键"/>
+                                                           ToolTip="S1 开关：OFF=关机不上报 / ON=识别 / SPK=扩音；切到该档位时上报右侧热键">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsInternalRow}" Value="True">
+                                                                    <Setter Property="ToolTip" Value="{Binding InternalLockTip}"/>
+                                                                    <Setter Property="Foreground" Value="#999"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                                 <TextBlock Grid.Column="1" Text="键盘" VerticalAlignment="Center" Foreground="#555"/>
 
                                                 <!-- 键值编辑（与按键行键盘动作同交互；切换表为单码字节，无消费键/鼠标键预设） -->
-                                                <StackPanel Grid.Column="2" Orientation="Horizontal" IsEnabled="{Binding IsEditable}">
+                                                <StackPanel Grid.Column="2" Orientation="Horizontal" IsEnabled="{Binding EditorEnabled}">
                                                     <ctrl:KeyCaptureBox Width="190" VerticalAlignment="Center" Margin="0,0,8,0"
                                                         CapturedModifier="{Binding Modifier, Mode=TwoWay}"
                                                         CapturedUsage="{Binding CodeLo, Mode=TwoWay}"

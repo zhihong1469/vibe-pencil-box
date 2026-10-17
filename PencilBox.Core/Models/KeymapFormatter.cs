@@ -167,12 +167,13 @@ public static class KeymapFormatter
         return (modifier & 0xF0) != 0 ? $"{name}+0x{modifier >> 4:X2}" : name;
     }
 
-    /// <summary>S1 档位名（byte2 mode 语义，对齐固件 vp_protocol.h 注释与产品定名：待机/识别/扩音）</summary>
+    /// <summary>S1 档位名（byte2 mode 语义 + 物理开关档位对照，2026-10-17 定版：
+    /// 开关 OFF=掉电关机不上报、ON=识别(1)、SPK=扩音(2)；待机(0)为协议内部状态非开关档）</summary>
     public static string GetModeName(byte mode) => mode switch
     {
-        0x00 => "待机",
-        0x01 => "识别",
-        0x02 => "扩音",
+        0x00 => "待机（内部）",
+        0x01 => "ON·识别",
+        0x02 => "SPK·扩音",
         _ => $"0x{mode:X2}"
     };
 }

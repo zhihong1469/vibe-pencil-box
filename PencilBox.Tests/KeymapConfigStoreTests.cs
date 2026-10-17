@@ -241,12 +241,18 @@ public class KeymapConfigStoreTests : IDisposable
         Assert.Equal(new byte[] { 0x01, 0x00, 0x6B }, s[1].ToBytes()); // 识别(ON)  → F16
         Assert.Equal(new byte[] { 0x00, 0x00, 0x6B }, s[2].ToBytes()); // 待机(IDLE) → F16
 
-        // 档位名（产品定名：待机/识别/扩音）
-        Assert.Equal("待机", KeymapFormatter.GetModeName(0x00));
-        Assert.Equal("识别", KeymapFormatter.GetModeName(0x01));
-        Assert.Equal("扩音", KeymapFormatter.GetModeName(0x02));
+        // 档位名（2026-10-17 定版：带物理开关档对照；开关 OFF=掉电不上报，待机(0)=内部行非开关档）
+        Assert.Equal("待机（内部）", KeymapFormatter.GetModeName(0x00));
+        Assert.Equal("ON·识别", KeymapFormatter.GetModeName(0x01));
+        Assert.Equal("SPK·扩音", KeymapFormatter.GetModeName(0x02));
         Assert.Equal("F15", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x6A, 0));
         Assert.Equal("F16", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x6B, 0));
+
+        // 内部行锁（固件证据：笔端 app_switch.c 0x16 只发 1/2；基站 srv_keymap.c IDLE 行仅断联补发内部消费）
+        Assert.True(KeymapRules.IsSwitchInternalRow(0x00));
+        Assert.False(KeymapRules.IsSwitchInternalRow(0x01));
+        Assert.False(KeymapRules.IsSwitchInternalRow(0x02));
+        Assert.Contains("不是开关档位", KeymapRules.SwitchIdleLockReason);
     }
 
     [Fact]

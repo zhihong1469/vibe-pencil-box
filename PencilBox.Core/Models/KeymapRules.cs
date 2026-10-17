@@ -12,6 +12,9 @@ namespace PencilBox.Core.Models;
 /// K2(0x02) 的事件列是笔↔Dongle 的**语音会话边界协议契约**——笔端把两种启动方式
 /// （0x21 可切的单击翻转/长按 PTT）归一为 [2][0x03] 开始 / [2][0x04] 结束 上报，
 /// 事件列与"启动方式"无关，用户不可改；动作列（F13/F14 → 任意键值）可个性化。
+/// S1 切换表（2026-10-17 固件查证）：物理开关 OFF 档=掉电关机不上报，笔端 0x16 只发
+/// ON(识别=1)/SPK(扩音=2)——待机(mode=0)行是**基站内部行**（扩音态断联补发查表用），
+/// 不是用户可触发的开关档，键值锁定出厂默认。
 /// </summary>
 public static class KeymapRules
 {
@@ -33,4 +36,17 @@ public static class KeymapRules
     /// <summary>校验：K2 行事件被改即违规（CLI 拒写 / UI 锁格共用）</summary>
     public static bool IsK2EventViolation(byte keyId, KeyEventType eventType) =>
         IsK2(keyId) && !IsK2EventAllowed(eventType);
+
+    // ---- S1 切换表（2026-10-17 固件查证：笔端 app_switch.c 0x16 只发 1/2；基站 srv_keymap.c IDLE 行仅断联补发内部消费） ----
+
+    /// <summary>S1 切换表内部行 mode（待机 IDLE=0：非开关档，见 <see cref="SwitchIdleLockReason"/>）</summary>
+    public const byte SwitchInternalMode = 0x00;
+
+    /// <summary>内部行锁定原因（CLI/UI 共用文案；证据=笔端 app_switch.c:154/175/198 只发 1|2，开关 OFF=掉电不上报）</summary>
+    public const string SwitchIdleLockReason =
+        "待机(mode=0)不是开关档位：S1 开关 OFF=掉电关机不上报，笔端 0x16 只上报 ON(识别)/SPK(扩音)；" +
+        "本行由基站「扩音态断联补发扩音关热键」内部使用（srv_keymap.c），键值保持出厂默认，不可编辑";
+
+    /// <summary>是否 S1 切换表内部行（mode=0，非用户可触发档位）</summary>
+    public static bool IsSwitchInternalRow(byte mode) => mode == SwitchInternalMode;
 }

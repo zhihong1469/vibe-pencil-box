@@ -11,8 +11,10 @@ namespace PencilBox.Desktop.ViewModels;
 
 /// <summary>
 /// S1 档位切换快捷键行（可编辑）——切换表 `KeymapSwitchEntry`（3B [mode][modifier][code]）的 UI 投影：
-/// 档位列锁定（三档=待机/识别/扩音，物理开关位置决定，不可增删），键值可编辑
-/// （捕获框/修饰位/专用键 F13~F16，与按键行同交互；切换表只有单码字节，无消费键/鼠标键预设）。
+/// 档位列锁定（行固定不可增删）；键值可编辑（捕获框/修饰位/专用键 F13~F16，与按键行同交互；
+/// 切换表只有单码字节，无消费键/鼠标键预设）。
+/// 2026-10-17 固件查证：开关 OFF=掉电不上报、0x16 只发 ON(1)/SPK(2)——待机(mode=0)行是基站
+/// 内部行（断联补发查表用），键值锁定出厂默认（<see cref="KeymapRules.IsSwitchInternalRow"/>）。
 /// 设备写回待 0x55 PARAM 05/06（pc-issues/05）；当前编辑只落本地命名配置，出厂真值兜底。
 /// </summary>
 public partial class KeymapSwitchRowViewModel : ObservableObject
@@ -20,7 +22,16 @@ public partial class KeymapSwitchRowViewModel : ObservableObject
     /// <summary>本行是否可编辑（出厂默认配置整体只读）</summary>
     public bool IsEditable { get; }
 
-    /// <summary>触发档位（锁定：0=待机 1=识别 2=扩音）</summary>
+    /// <summary>待机行=基站内部行（键值锁定，非用户可触发档位）</summary>
+    public bool IsInternalRow => KeymapRules.IsSwitchInternalRow(Mode);
+
+    /// <summary>内部行锁定原因（tooltip；非内部行为 null）</summary>
+    public string? InternalLockTip => IsInternalRow ? KeymapRules.SwitchIdleLockReason : null;
+
+    /// <summary>键值编辑区总开关（出厂默认只读 或 内部行锁定）</summary>
+    public bool EditorEnabled => IsEditable && !IsInternalRow;
+
+    /// <summary>触发档位（锁定：0=待机 1=ON·识别 2=SPK·扩音）</summary>
     public byte Mode { get; }
 
     public string ModeName => KeymapFormatter.GetModeName(Mode);
@@ -77,7 +88,7 @@ public partial class KeymapSwitchRowViewModel : ObservableObject
 
     partial void OnSelectedDedicatedKeyChanged(KeymapRowViewModel.DedicatedKeyOption? value)
     {
-        if (value == null)
+        if (value == null || !EditorEnabled)
             return;
         ApplyCapturedKey(0x00, value.Usage);
         SelectedDedicatedKey = null;   // 复位以便重复选择同一项
