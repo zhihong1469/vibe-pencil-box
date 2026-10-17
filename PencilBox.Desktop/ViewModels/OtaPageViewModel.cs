@@ -304,7 +304,14 @@ public partial class OtaPageViewModel : ObservableObject
     [ObservableProperty]
     private string _deviceHashText = "未读取";
 
+    /// <summary>最近一次读到的 hash **纯值**（40 字符，不带展示注解）——「复制」按钮复制它，注解不混入剪贴板</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanCopyDeviceHash))]
+    private string _deviceHashValue = string.Empty;
+
     public bool CanReadDeviceHash => !IsReadingHash && !IsUpgrading;
+
+    public bool CanCopyDeviceHash => !string.IsNullOrEmpty(DeviceHashValue);
 
     /// <summary>
     /// 读设备 Git Hash（`0x04` 内部调试指令，定稿 2026-10-16）：串口＝笔端（target=0x11，插线直达）/
@@ -318,6 +325,7 @@ public partial class OtaPageViewModel : ObservableObject
         {
             IsReadingHash = true;
             DeviceHashText = "读取中...";
+            DeviceHashValue = string.Empty;
 
             // 无线轨不开放（与 CLI 同口径）：USB + 笔端对象 = 经基站 BLE → 本地提示，不发帧空等
             if (!SelectedTarget.UseSerial && SelectedTarget.Downtype == Downtype.Pen)
@@ -377,6 +385,7 @@ public partial class OtaPageViewModel : ObservableObject
                 return;
             }
 
+            DeviceHashValue = hash;
             DeviceHashText = hash == new string('0', 40)
                 ? $"{hash}（占位全零——构建缺 git 信息，溯源改用 boot banner/归档 CSV）"
                 : hash;
@@ -390,6 +399,28 @@ public partial class OtaPageViewModel : ObservableObject
         finally
         {
             IsReadingHash = false;
+        }
+    }
+
+    /// <summary>
+    /// 复制设备 hash 纯值到剪贴板（40 字符，展示注解不混入）——用于粘贴到 git 仓按提交号反查"跑的是哪笔提交"。
+    /// 剪贴板被其他进程独占时降级为日志提示（不崩）。
+    /// </summary>
+    [RelayCommand]
+    private void CopyDeviceHash()
+    {
+        if (string.IsNullOrEmpty(DeviceHashValue))
+            return;
+
+        try
+        {
+            System.Windows.Clipboard.SetDataObject(DeviceHashValue, true);
+            AddLog($"[0x04] HASH 已复制到剪贴板：{DeviceHashValue}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "clipboard copy failed");
+            AddLog($"[0x04] 复制失败（剪贴板被占用？）：{ex.Message}——请手动选中 hash 文本复制");
         }
     }
 

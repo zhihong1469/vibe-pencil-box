@@ -77,18 +77,27 @@
                             ToolTip="按当前通道读 0x03：串口＝笔端 / USB＝基站。升级前用于判断是否已同版本；升级后用于复核版本是否变化"/>
                 </Grid>
 
-                <!-- 设备 Git Hash（0x04 内部调试指令）：现场溯源"跑的到底是哪笔提交" -->
+                <!-- 设备 Git Hash（0x04 内部调试指令）：现场溯源"跑的到底是哪笔提交"；
+                     hash 文本用只读 TextBox（可鼠标选中），另有「复制」按钮一键复制纯值供 git 反查 -->
                 <Grid Margin="0,6,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="设备Hash：" VerticalAlignment="Center"
                                Foreground="#555" MinWidth="68"/>
-                    <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="#2C3E50"
-                               TextWrapping="Wrap" Text="{Binding DeviceHashText}"/>
-                    <Button Grid.Column="2" Content="读设备Hash(0x04)" Command="{Binding ReadDeviceHashCommand}"
+                    <TextBox Grid.Column="1" Text="{Binding DeviceHashText, Mode=OneWay}" IsReadOnly="True"
+                             BorderBrush="Transparent" Background="Transparent" Foreground="#2C3E50"
+                             VerticalAlignment="Center" VerticalContentAlignment="Center"
+                             TextWrapping="Wrap" Margin="0,0,8,0"
+                             ToolTip="40 位 hex ASCII。可直接鼠标拖选 + Ctrl+C；或点右侧「复制」取纯值"/>
+                    <Button Grid.Column="2" Content="复制" Command="{Binding CopyDeviceHashCommand}"
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding CanCopyDeviceHash}"
+                            Margin="0,0,8,0"
+                            ToolTip="复制 hash 纯值（40 字符，不含注解）到剪贴板——粘贴到 git 仓 git checkout &lt;hash&gt; 或平台搜索即可定位提交"/>
+                    <Button Grid.Column="3" Content="读设备Hash(0x04)" Command="{Binding ReadDeviceHashCommand}"
                             Style="{StaticResource ActionButton}" IsEnabled="{Binding CanReadDeviceHash}"
                             ToolTip="内部调试指令，仅 INTERNAL_DEBUG_CMD_ENABLE 构建（量产裁除 → 无应答属预期）。串口＝笔端(0x11，插线直达) / USB＝基站(0x00)；B1 无线轨不开放。40 位 hex ASCII，与包名 short hash（第 5 字段）、boot banner `* Commit:` 行同源对拍"/>
                 </Grid>
