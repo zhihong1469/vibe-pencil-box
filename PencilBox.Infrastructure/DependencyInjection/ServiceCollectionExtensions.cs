@@ -91,7 +91,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICommandClient>(sp => sp.GetRequiredService<DeviceService>());
         services.AddSingleton<IMacroService, MacroService>();
         services.AddSingleton<IAudioService, AudioService>();
-        services.AddSingleton<IKeymapService, KeymapService>();
         // 命名 Keymap 配置存储（pc-issues/04 提案 B：exe 同级 configs/keymap/，默认目录参数走可选构造注入）
         services.AddSingleton<IKeymapConfigStore, KeymapConfigStore>();
         services.AddSingleton<IPencilStateService, PencilStateService>();

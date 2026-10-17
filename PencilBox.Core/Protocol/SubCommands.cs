@@ -18,15 +18,10 @@ public enum PcSubCommand : byte
     VadUpdate = 0x03,
     FullParamsUpdate = 0x04,
 
-    // ========== 快捷键管理（0x10~0x17，本地 PC↔Dongle） ==========
-    GetKeymap = 0x10,
-    SetKeyEntry = 0x11,
-    DeleteKeyEntry = 0x12,
-    ResetKeymap = 0x13,
-    // 0x14 预留（权威为空）
-    GetKeymapInfo = 0x15,
-    CommitKeymap = 0x16,
-    RollbackKeymap = 0x17,
+    // ========== 快捷键管理（0x10~0x17）——已退役（2026-10-17） ==========
+    // 老"0xA0 阶段 6"PC↔Dongle Keymap 读写方案：固件从未实现，PC 侧 KeymapService /
+    // KeymapProtocol / IKeymapService 已随同清退。后续由 F5 轨 0x55 KEYMAP_CONFIG 承接
+    // （pc-issues 0x55 提案）；本段编号退役不回收、不复用，保持族内冻结。
 
     // ========== 设备控制（0x20~0x2F，穿透） ==========
     // 本地配对走 CMD 层 PAIR_*（0xA1~0xA4）；0x22~0x2F 预留勿用（含未来 PAIR_REPLACE 等规划）

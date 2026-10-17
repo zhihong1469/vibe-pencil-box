@@ -28,7 +28,6 @@ public partial class ProductHomeViewModel : ObservableObject
 {
     private readonly IDeviceService _deviceService;
     private readonly IPencilStateService _pencilStateService;
-    private readonly IKeymapService _keymapService;
     private readonly IKeymapConfigStore _keymapConfigStore;
     private readonly IPenBindingService _penBindingService;
     private readonly IDongleCommandClient _dongle;
@@ -185,8 +184,9 @@ public partial class ProductHomeViewModel : ObservableObject
     [ObservableProperty]
     private ObservableCollection<KeymapSwitchRowViewModel> _switchRows = new();
 
+    /// <summary>一键一卡视图（卡=物理键，行=事件；行实例与 <see cref="KeymapRows"/> 共享，编辑互通）</summary>
     [ObservableProperty]
-    private KeymapInfo? _keymapInfo;
+    private ObservableCollection<KeymapCardViewModel> _keymapCards = new();
 
     [ObservableProperty]
     private bool _isKeymapDirty;
@@ -207,7 +207,7 @@ public partial class ProductHomeViewModel : ObservableObject
         IsKeymapDirty = false;
         try { _keymapConfigStore.SetCurrentName(value ?? _keymapConfigStore.FactoryName); }
         catch (Exception ex) { _logger.LogWarning(ex, "记录当前 Keymap 配置失败"); }
-        LoadSelectedConfigIntoGrid();
+        LoadSelectedConfigIntoCards();
         NotifyKeymapMutateCommands();
     }
 
@@ -221,7 +221,6 @@ public partial class ProductHomeViewModel : ObservableObject
     public ProductHomeViewModel(
         IDeviceService deviceService,
         IPencilStateService pencilStateService,
-        IKeymapService keymapService,
         IKeymapConfigStore keymapConfigStore,
         IPenBindingService penBindingService,
         IDongleCommandClient dongle,
@@ -232,7 +231,6 @@ public partial class ProductHomeViewModel : ObservableObject
     {
         _deviceService = deviceService;
         _pencilStateService = pencilStateService;
-        _keymapService = keymapService;
         _keymapConfigStore = keymapConfigStore;
         _penBindingService = penBindingService;
         _dongle = dongle;
@@ -259,7 +257,7 @@ public partial class ProductHomeViewModel : ObservableObject
             _logger.LogWarning(ex, "Keymap 配置存储初始化失败");
         }
 
-        // S1 档位切换表：出厂真值只读显示（与配置无关，全配置共用；待固件 0xA0 扩展后才可改）
+        // S1 档位切换表：出厂真值只读显示（与配置无关，全配置共用；设备读写待 0x55 提案落地）
         SwitchRows = new ObservableCollection<KeymapSwitchRowViewModel>(
             KeymapFactoryDefault.SwitchEntries
                 .Select(e => new KeymapSwitchRowViewModel(e))
@@ -1007,16 +1005,7 @@ public partial class ProductHomeViewModel : ObservableObject
         _pollCts = null;
     }
 
-    // ============ Keymap 命令 ============
-
-    [RelayCommand]
-    private void ReadKeymap()
-    {
-        // 守卫（pc-issues/04）：新固件只有出厂默认表，上位机读写协议（0xA0 Sub-CMD，"阶段 6"）
-        // 未实现——老协议 PcSubCommand 帧发过去只会石沉大海。按钮可按，按下即明示、不发任何帧。
-        StatusMessage = "Keymap 读取：暂未开通（固件读写协议未实现，方案见 pc-issues/04）；已重载当前配置";
-        LoadSelectedConfigIntoGrid();
-    }
+    // ============ Keymap 命令（本地配置 CRUD；设备读写待 0x55，见 pc-issues 0x55 提案） ============
 
     // ---- 命名配置（pc-issues/04 提案 B；出厂默认只读） ----
 
@@ -1111,18 +1100,28 @@ public partial class ProductHomeViewModel : ObservableObject
             : _keymapConfigStore.GetCurrentName();
     }
 
-    /// <summary>把当前选中配置载入表格（出厂默认带"只读"标注）。</summary>
-    private void LoadSelectedConfigIntoGrid()
+    /// <summary>
+    /// 把当前选中配置载入一键一卡视图（出厂默认带"只读"标注）。
+    /// 行实例在 <see cref="KeymapRows"/>（保存真值序）与 <see cref="KeymapCards"/>（按键分组视图）间共享，
+    /// 卡片上的编辑即时反映到保存路径（Save 用 KeymapRows）。
+    /// </summary>
+    private void LoadSelectedConfigIntoCards()
     {
         var name = SelectedKeymapConfig;
         var doc = string.IsNullOrEmpty(name) ? null : _keymapConfigStore.Load(name);
         var entries = doc?.Entries ?? [];
         var count = entries.Count;
+        var isEditable = doc != null && !IsFactoryConfigSelected;
 
         MainThreadHelper.EnsureOnMainThread(() =>
         {
-            KeymapRows = new ObservableCollection<KeymapRowViewModel>(
-                entries.Select((e, i) => new KeymapRowViewModel((byte)i, e)));
+            var rows = entries.Select((e, i) => new KeymapRowViewModel((byte)i, e, isEditable)).ToList();
+            foreach (var row in rows)
+                row.PropertyChanged += OnKeymapRowPropertyChanged;
+
+            KeymapRows = new ObservableCollection<KeymapRowViewModel>(rows);
+            RebuildCards();
+
             if (doc == null)
                 StatusMessage = string.IsNullOrEmpty(name) ? "未选择配置" : $"配置「{name}」不可读";
             else if (IsFactoryConfigSelected)
@@ -1132,24 +1131,77 @@ public partial class ProductHomeViewModel : ObservableObject
         });
     }
 
-    [RelayCommand]
-    private void ApplyKeymap()
+    /// <summary>行级任意编辑 → 标脏（捕获框/下拉/复选/事件与动作切换都经行属性变更）。</summary>
+    private void OnKeymapRowPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        => IsKeymapDirty = true;
+
+    /// <summary>按物理键重建卡片视图（行实例不变，仅重组）。</summary>
+    private void RebuildCards()
     {
-        // 守卫（pc-issues/04）：固件 0xA0 读写协议未实现，Set/Commit 无对端。
-        StatusMessage = "Keymap 应用：暂未开通（固件读写协议未实现，方案见 pc-issues/04）";
+        KeymapCards = new ObservableCollection<KeymapCardViewModel>(
+            KeymapRows.GroupBy(r => r.KeyId)
+                .Select(g => new KeymapCardViewModel(g.Key, g.First().IsEditable, g))
+                .OrderBy(c => c.KeyId));
     }
 
+    /// <summary>给按键卡追加一行事件（出厂默认拒绝；事件列守卫与 CLI keymap set 同规则）。</summary>
     [RelayCommand]
-    private void ResetKeymap()
+    private void AddKeymapRow(KeymapCardViewModel? card)
     {
-        // 守卫（pc-issues/04）：固件 0xA0 读写协议未实现，Reset 无对端。
-        StatusMessage = "Keymap 恢复默认：暂未开通（固件读写协议未实现，方案见 pc-issues/04）";
-    }
+        if (card == null || !CanMutateKeymapConfig())
+            return;
 
-    [RelayCommand]
-    private void MarkKeymapDirty()
-    {
+        var nextEvent = PickNextEvent(card.KeyId, card.Rows.Select(r => r.EventType));
+        if (nextEvent == null)
+        {
+            StatusMessage = $"{card.KeyName} 的可用事件已全部在列（K2 事件为语音会话边界契约，不可扩展）";
+            return;
+        }
+
+        var row = new KeymapRowViewModel(0, new KeymapEntry { KeyId = card.KeyId, EventType = nextEvent.Value }, true);
+        row.PropertyChanged += OnKeymapRowPropertyChanged;
+
+        var rows = KeymapRows.ToList();
+        var idx = rows.FindIndex(r => r.KeyId > row.KeyId ||
+            (r.KeyId == row.KeyId && (byte)r.EventType > (byte)row.EventType));
+        if (idx < 0) rows.Add(row); else rows.Insert(idx, row);
+        RenumberRows(rows);
+
+        KeymapRows = new ObservableCollection<KeymapRowViewModel>(rows);
+        RebuildCards();
         IsKeymapDirty = true;
+        StatusMessage = $"已添加 {card.KeyName} {KeymapFormatter.GetEventTypeName(nextEvent.Value)}（空动作，请设置键值后保存）";
+    }
+
+    /// <summary>删除一行（出厂默认拒绝；K2 行是语音会话边界契约，不可删）。</summary>
+    [RelayCommand]
+    private void RemoveKeymapRow(KeymapRowViewModel? row)
+    {
+        if (row == null || !CanMutateKeymapConfig() || KeymapRules.IsK2(row.KeyId))
+            return;
+
+        var rows = KeymapRows.ToList();
+        rows.Remove(row);
+        RenumberRows(rows);
+
+        KeymapRows = new ObservableCollection<KeymapRowViewModel>(rows);
+        RebuildCards();
+        IsKeymapDirty = true;
+    }
+
+    private static void RenumberRows(List<KeymapRowViewModel> rows)
+    {
+        for (var i = 0; i < rows.Count; i++)
+            rows[i].Index = (byte)i;
+    }
+
+    /// <summary>按键选下一个可追加的事件（K2 只允许会话边界两事件）。</summary>
+    private static KeyEventType? PickNextEvent(byte keyId, IEnumerable<KeyEventType> present)
+    {
+        var candidates = KeymapRules.IsK2(keyId)
+            ? new[] { KeyEventType.LongPress, KeyEventType.LongRelease }
+            : new[] { KeyEventType.Click, KeyEventType.DoubleClick, KeyEventType.LongPress, KeyEventType.LongRelease };
+        return candidates.FirstOrDefault(ev => !present.Contains(ev));
     }
 
     // ============ 事件处理 ============

@@ -51,8 +51,8 @@ public class KeymapConfigStoreTests : IDisposable
         Assert.Equal(new byte[] { 0x04, 0x03, 0x01, 0x00, 0x4E, 0x00, 0x00, 0x00 }, e[5].ToBytes()); // K4 LONG_PRESS → PageDown
         Assert.Equal(new byte[] { 0x05, 0x03, 0x03, 0x00, 0xE9, 0x00, 0x00, 0x00 }, e[6].ToBytes()); // K5 LONG_PRESS → VOL+
         Assert.Equal(new byte[] { 0x06, 0x03, 0x03, 0x00, 0xEA, 0x00, 0x00, 0x00 }, e[7].ToBytes()); // K6 LONG_PRESS → VOL−
-        Assert.Equal(new byte[] { 0x02, 0x03, 0x01, 0x04, 0x42, 0x00, 0x00, 0x00 }, e[8].ToBytes()); // K2 语音会话开始 → ALT+F9（2026-10-08 键值变更）
-        Assert.Equal(new byte[] { 0x02, 0x04, 0x01, 0x04, 0x43, 0x00, 0x00, 0x00 }, e[9].ToBytes()); // K2 语音会话结束 → ALT+F10
+        Assert.Equal(new byte[] { 0x02, 0x03, 0x01, 0x00, 0x68, 0x00, 0x00, 0x00 }, e[8].ToBytes()); // K2 语音会话开始 → F13（2026-10-15 定稿：无修饰键）
+        Assert.Equal(new byte[] { 0x02, 0x04, 0x01, 0x00, 0x69, 0x00, 0x00, 0x00 }, e[9].ToBytes()); // K2 语音会话结束 → F14
     }
 
     // ===== 提案 B：命名配置存储 =====
@@ -218,8 +218,8 @@ public class KeymapConfigStoreTests : IDisposable
 
         var doc = store.Load(store.FactoryName)!;
 
-        // 顺序规范化：首位 = K2 语音会话开始（ALT+F9），末位 = K6 长按（VOL−）
-        Assert.Equal(new byte[] { 0x02, 0x03, 0x01, 0x04, 0x42, 0x00, 0x00, 0x00 }, doc.Entries[0].ToBytes());
+        // 顺序规范化：首位 = K2 语音会话开始（F13），末位 = K6 长按（VOL−）
+        Assert.Equal(new byte[] { 0x02, 0x03, 0x01, 0x00, 0x68, 0x00, 0x00, 0x00 }, doc.Entries[0].ToBytes());
         Assert.Equal(new byte[] { 0x06, 0x03, 0x03, 0x00, 0xEA, 0x00, 0x00, 0x00 }, doc.Entries[^1].ToBytes());
         Assert.Equal(new byte[] { 0x03, 0x01, 0x01, 0x00, 0x4B, 0x00, 0x00, 0x00 }, doc.Entries[2].ToBytes()); // K3 单击
 
@@ -234,19 +234,19 @@ public class KeymapConfigStoreTests : IDisposable
     [Fact]
     public void SwitchTable_MatchesFirmware_ByteLevel()
     {
-        // S1 档位切换表（固件 srv_keymap.c s_switch_default 2026-10-08 版，3B 条目 [mode][mod][code]）
+        // S1 档位切换表（固件 srv_keymap.c s_switch_default 2026-10-15 定稿版，3B 条目 [mode][mod][code]）
         var s = KeymapFactoryDefault.SwitchEntries;
         Assert.Equal(3, s.Length);
-        Assert.Equal(new byte[] { 0x02, 0x04, 0x44 }, s[0].ToBytes()); // 扩音(SPK) → ALT+F11
-        Assert.Equal(new byte[] { 0x01, 0x04, 0x45 }, s[1].ToBytes()); // 识别(ON)  → ALT+F12
-        Assert.Equal(new byte[] { 0x00, 0x04, 0x45 }, s[2].ToBytes()); // 待机(IDLE) → ALT+F12
+        Assert.Equal(new byte[] { 0x02, 0x00, 0x6A }, s[0].ToBytes()); // 扩音(SPK) → F15
+        Assert.Equal(new byte[] { 0x01, 0x00, 0x6B }, s[1].ToBytes()); // 识别(ON)  → F16
+        Assert.Equal(new byte[] { 0x00, 0x00, 0x6B }, s[2].ToBytes()); // 待机(IDLE) → F16
 
         // 档位名（产品定名：待机/识别/扩音）
         Assert.Equal("待机", KeymapFormatter.GetModeName(0x00));
         Assert.Equal("识别", KeymapFormatter.GetModeName(0x01));
         Assert.Equal("扩音", KeymapFormatter.GetModeName(0x02));
-        Assert.Equal("F11", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x44, 0));
-        Assert.Equal("F12", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x45, 0));
+        Assert.Equal("F15", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x6A, 0));
+        Assert.Equal("F16", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x6B, 0));
     }
 
     [Fact]
@@ -264,6 +264,12 @@ public class KeymapConfigStoreTests : IDisposable
         Assert.False(KeymapRules.IsK2EventViolation(0x02, KeyEventType.LongPress));
         Assert.False(KeymapRules.IsK2EventViolation(0x02, KeyEventType.LongRelease));
         Assert.False(KeymapRules.IsK2EventViolation(0x03, KeyEventType.Click));
+
+        // 2026-10-15 定稿键值：F13~F16 无修饰键（物理键盘不存在、系统零冲突）
+        Assert.Equal("F13", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x68, 0));
+        Assert.Equal("F14", KeymapFormatter.GetCodeName(KeyActionType.Keyboard, 0x69, 0));
+        Assert.Equal("—", KeymapFormatter.GetModifierName(0x00));
+        Assert.Equal("Ctrl+Alt", KeymapFormatter.GetModifierName(0x05));
     }
 
     [Fact]

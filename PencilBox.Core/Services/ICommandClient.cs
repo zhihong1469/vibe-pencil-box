@@ -10,7 +10,7 @@ namespace PencilBox.Core.Services;
 /// <summary>
 /// PC 命令客户端（事务模型）
 /// 发送 CUSTOM 命令并等待对应 Sub-CMD 的应答，支持超时。
-/// 由 DeviceService 实现，供 KeymapService / PencilStateService 等业务服务复用。
+/// 由 DeviceService 实现，供 PencilStateService 等业务服务复用。
 /// </summary>
 public interface ICommandClient
 {

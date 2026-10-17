@@ -5,6 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:proto="clr-namespace:PencilBox.Core.Protocol;assembly=PencilBox.Core"
              xmlns:ctrl="clr-namespace:PencilBox.Desktop.Controls"
+             xmlns:vm="clr-namespace:PencilBox.Desktop.ViewModels"
              mc:Ignorable="d"
              d:DesignHeight="720" d:DesignWidth="1100">
     <UserControl.Resources>
@@ -304,69 +305,191 @@
                                    VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666"/>
                     </StackPanel>
 
-                    <!-- 设备读写行（固件 0xA0 协议未实现：按下提示且不发帧——pc-issues/04） -->
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,0,4,4">
-                        <Button Content="读取设备表" Command="{Binding ReadKeymapCommand}"
-                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"
-                                ToolTip="暂未开通：固件 Keymap 读写协议（0xA0，阶段 6）未实现；按下仅提示并重载当前配置。方案见 pc-issues/04。"/>
-                        <Button Content="应用到设备" Command="{Binding ApplyKeymapCommand}"
-                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"
-                                ToolTip="暂未开通：固件 Keymap 读写协议（0xA0，阶段 6）未实现；按下仅提示、不下发。方案见 pc-issues/04。"/>
-                        <Button Content="恢复设备默认" Command="{Binding ResetKeymapCommand}"
-                                Style="{StaticResource ActionButton}" IsEnabled="{Binding IsConnected}"
-                                ToolTip="暂未开通：固件 Keymap 读写协议（0xA0，阶段 6）未实现；按下仅提示、不下发。方案见 pc-issues/04。"/>
-                        <TextBlock Text="（设备读写暂未开通：固件协议未实现；当前表格仅本地配置）"
-                                   VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#B03A2E" FontSize="11"/>
-                    </StackPanel>
+                    <!-- 设备读写行已摘（2026-10-17）：老 0xA0"阶段 6"死协议清退，设备同步等 0x55 立项落地
+                         （pc-issues 0x55 提案）；当前卡片仅本地配置，杜绝用户按到恒无效果的按钮 -->
 
-                    <!-- Keymap 表格（出厂默认=只读） -->
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding KeymapRows}"
-                              AutoGenerateColumns="False" CanUserAddRows="False"
-                              IsReadOnly="{Binding IsFactoryConfigSelected}"
-                              HeadersVisibility="Column" GridLinesVisibility="All"
-                              SelectionMode="Single" Margin="4" MinHeight="200" MaxHeight="420">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="40" IsReadOnly="True"/>
-                            <DataGridTextColumn Header="按键" Binding="{Binding KeyName}" Width="110" IsReadOnly="True"/>
-                            <DataGridTemplateColumn Header="事件类型" Width="110">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding EventTypeName}" VerticalAlignment="Center" Margin="4,0"
-                                                   ToolTip="{Binding EventLockTip}"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                                <DataGridTemplateColumn.CellEditingTemplate>
-                                    <DataTemplate>
-                                        <ComboBox ItemsSource="{StaticResource EventTypeOptions}"
-                                                  SelectedItem="{Binding EventType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  IsEnabled="{Binding CanEditEvent}"
-                                                  ToolTip="{Binding EventLockTip}"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellEditingTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="动作类型" Width="110">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding ActionTypeName}" VerticalAlignment="Center" Margin="4,0"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                                <DataGridTemplateColumn.CellEditingTemplate>
-                                    <DataTemplate>
-                                        <ComboBox ItemsSource="{StaticResource ActionTypeOptions}"
-                                                  SelectedItem="{Binding ActionType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellEditingTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="键值" Binding="{Binding CodeName}" Width="130" IsReadOnly="True"/>
-                            <DataGridTextColumn Header="修饰键" Binding="{Binding ModifierName}" Width="90" IsReadOnly="True"/>
-                            <DataGridTextColumn Header="CodeLo" Binding="{Binding CodeLo, StringFormat=X2}" Width="70"/>
-                            <DataGridTextColumn Header="CodeHi" Binding="{Binding CodeHi, StringFormat=X2}" Width="70"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
+                    <!-- 一键一卡（出厂默认整卡只读；行实例与 KeymapRows 共享，编辑即时互通） -->
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" MaxHeight="430" Margin="4">
+                        <ItemsControl ItemsSource="{Binding KeymapCards}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="#D5DBDB" BorderThickness="1" CornerRadius="4"
+                                            Margin="0,0,0,6" Background="#FDFEFE" Padding="8,6,8,8">
+                                        <StackPanel>
+                                            <!-- 卡头：键名徽章 + 只读标记 + 加事件 -->
+                                            <Grid Margin="0,0,0,4">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Border Background="#2C3E50" CornerRadius="3" Padding="6,2">
+                                                        <TextBlock Text="{Binding KeyName}" Foreground="White"
+                                                                   FontWeight="SemiBold" FontSize="12"/>
+                                                    </Border>
+                                                    <TextBlock Text="出厂默认（只读）" Foreground="#B03A2E" FontSize="11"
+                                                               Margin="8,0,0,0" VerticalAlignment="Center"
+                                                               Visibility="{Binding IsEditable, Converter={StaticResource InvertBoolConverter}}"/>
+                                                </StackPanel>
+                                                <Button Content="＋ 事件" HorizontalAlignment="Right"
+                                                        Style="{StaticResource ActionButton}" Width="64" MinWidth="64"
+                                                        IsEnabled="{Binding IsEditable}"
+                                                        ToolTip="给这个键追加一条事件映射（如双击）"
+                                                        Command="{Binding DataContext.AddKeymapRowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </Grid>
+                                            <!-- 事件行 -->
+                                            <ItemsControl ItemsSource="{Binding Rows}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Margin="0,3,0,0">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="82"/>
+                                                                <ColumnDefinition Width="96"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="30"/>
+                                                            </Grid.ColumnDefinitions>
+
+                                                            <!-- 事件：K2 行=会话边界契约锁定显示；其余可改 -->
+                                                            <Grid Grid.Column="0" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding EventTypeName}" VerticalAlignment="Center"
+                                                                           ToolTip="{Binding EventLockTip}">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsK2Row}" Value="False">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                                <ComboBox ItemsSource="{StaticResource EventTypeOptions}"
+                                                                          SelectedItem="{Binding EventType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                          IsEnabled="{Binding CanEditEvent}" Margin="0,0,6,0">
+                                                                    <ComboBox.Style>
+                                                                        <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsK2Row}" Value="False">
+                                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </ComboBox.Style>
+                                                                </ComboBox>
+                                                            </Grid>
+
+                                                            <!-- 动作类型 -->
+                                                            <ComboBox Grid.Column="1" Margin="0,0,6,0"
+                                                                      ItemsSource="{StaticResource ActionTypeOptions}"
+                                                                      SelectedItem="{Binding ActionType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                      IsEnabled="{Binding IsEditable}"/>
+
+                                                            <!-- 动作编辑区：按动作类型切换（键盘=捕获 / 消费键·鼠标键=下拉 / 其他=CLI 指路） -->
+                                                            <Grid Grid.Column="2" IsEnabled="{Binding IsEditable}">
+                                                                <!-- 键盘动作：捕获框 + 修饰键 + 专用键 -->
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <StackPanel.Style>
+                                                                        <Style TargetType="StackPanel">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding ActionType}" Value="{x:Static proto:KeyActionType.Keyboard}">
+                                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </StackPanel.Style>
+                                                                    <ctrl:KeyCaptureBox Width="190" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                                        CapturedModifier="{Binding Modifier, Mode=TwoWay}"
+                                                                        CapturedUsage="{Binding CodeLo, Mode=TwoWay}"
+                                                                        ToolTip="点击获得焦点后按下快捷键（修饰键+单主键）；Esc 清除"/>
+                                                                    <TextBlock Text="修饰键" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#555"/>
+                                                                    <CheckBox Content="Ctrl" IsChecked="{Binding HasCtrl}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                                                    <CheckBox Content="Shift" IsChecked="{Binding HasShift}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                                                    <CheckBox Content="Alt" IsChecked="{Binding HasAlt}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                                    <TextBlock Text="专用键" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#555"
+                                                                               ToolTip="物理键盘不存在的保留键（F13~F16），系统零冲突——点它即设为该键值"/>
+                                                                    <ComboBox Width="168" VerticalAlignment="Center"
+                                                                              ItemsSource="{x:Static vm:KeymapRowViewModel.DedicatedKeys}"
+                                                                              DisplayMemberPath="Name"
+                                                                              SelectedItem="{Binding SelectedDedicatedKey, Mode=TwoWay}"/>
+                                                                </StackPanel>
+                                                                <!-- 消费键：下拉预设 -->
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <StackPanel.Style>
+                                                                        <Style TargetType="StackPanel">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding ActionType}" Value="{x:Static proto:KeyActionType.Consumer}">
+                                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </StackPanel.Style>
+                                                                    <TextBlock Text="消费键" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#555"/>
+                                                                    <ComboBox Width="150" VerticalAlignment="Center"
+                                                                              ItemsSource="{x:Static vm:KeymapRowViewModel.ConsumerPresets}"
+                                                                              DisplayMemberPath="Name"
+                                                                              SelectedItem="{Binding SelectedConsumerPreset, Mode=TwoWay}"/>
+                                                                </StackPanel>
+                                                                <!-- 鼠标键：下拉预设 -->
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <StackPanel.Style>
+                                                                        <Style TargetType="StackPanel">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding ActionType}" Value="{x:Static proto:KeyActionType.MouseButton}">
+                                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </StackPanel.Style>
+                                                                    <TextBlock Text="鼠标键" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#555"/>
+                                                                    <ComboBox Width="120" VerticalAlignment="Center"
+                                                                              ItemsSource="{x:Static vm:KeymapRowViewModel.MouseButtonOptions}"
+                                                                              DisplayMemberPath="Name"
+                                                                              SelectedItem="{Binding SelectedMouseButtonPreset, Mode=TwoWay}"/>
+                                                                </StackPanel>
+                                                                <!-- 其他动作：指路 CLI -->
+                                                                <TextBlock Text="（无动作/特殊功能/应用通知：请用 CLI pencilbox keymap set 配置）"
+                                                                           VerticalAlignment="Center" Foreground="#999" FontSize="11">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding ActionType}" Value="{x:Static proto:KeyActionType.Keyboard}">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding ActionType}" Value="{x:Static proto:KeyActionType.Consumer}">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding ActionType}" Value="{x:Static proto:KeyActionType.MouseButton}">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </Grid>
+
+                                                            <!-- 删行（可编辑配置的非 K2 行） -->
+                                                            <Button Grid.Column="3" Content="✕" Width="24" MinWidth="24" Height="24"
+                                                                    Margin="6,0,0,0" VerticalAlignment="Center"
+                                                                    Style="{StaticResource ActionButton}"
+                                                                    Visibility="{Binding IsDeletable, Converter={StaticResource BoolToVis}}"
+                                                                    ToolTip="删除这条事件映射"
+                                                                    Command="{Binding DataContext.RemoveKeymapRowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
 
                     <!-- S1 档位切换快捷键（固件切换表出厂真值，只读；暂无读写协议——pc-issues/04 §4） -->
                     <StackPanel Grid.Row="3" Margin="4,2,4,4">
-                        <TextBlock Text="S1 档位切换快捷键（档位→热键，出厂真值只读；设备读写待固件 0xA0 扩展）"
+                        <TextBlock Text="S1 档位切换快捷键（档位→热键，出厂真值只读；设备读写待 0x55 提案落地，pc-issues）"
                                    Foreground="#666" FontSize="11" Margin="0,2,0,2"/>
                         <DataGrid ItemsSource="{Binding SwitchRows}"
                                   AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"

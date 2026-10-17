@@ -80,36 +80,3 @@ public class KeymapEntry
         Reserved = Reserved
     };
 }
-
-/// <summary>
-/// Keymap 元信息（GET_KEYMAP_INFO 0x15 应答）
-/// [ver_h][ver_l][entry_count][mode][max_entries]
-/// </summary>
-public class KeymapInfo
-{
-    public ushort Version { get; set; }
-    public byte EntryCount { get; set; }
-    public KeymapMode Mode { get; set; }
-    public byte MaxEntries { get; set; }
-
-    public static KeymapInfo FromBytes(ReadOnlySpan<byte> data)
-    {
-        if (data.Length < 5)
-            return new KeymapInfo();
-
-        return new KeymapInfo
-        {
-            Version = (ushort)((data[0] << 8) | data[1]),
-            EntryCount = data[2],
-            Mode = (KeymapMode)data[3],
-            MaxEntries = data[4]
-        };
-    }
-}
-
-/// <summary>Keymap 模式</summary>
-public enum KeymapMode : byte
-{
-    FactoryDefault = 0x00,
-    Custom = 0x01,
-}
