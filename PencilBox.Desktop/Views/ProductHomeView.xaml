@@ -207,6 +207,9 @@
                                    Visibility="{Binding HasPenTelemetry, Converter={StaticResource BoolToVis}}"/>
                         <TextBlock Text="{Binding PenDevStateText, StringFormat=设备状态：{0}}" FontSize="12"
                                    Foreground="#2C3E50" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                        <TextBlock Text="{Binding WorkStateText, StringFormat=工作状态：{0}}" FontSize="12"
+                                   Foreground="#2C3E50" HorizontalAlignment="Center" Margin="0,2,0,0"
+                                   ToolTip="笔端工作状态自管：凭 Keymap 触发键（出厂 F13~F16）边界事件自推导「识别×扩音」两轴；断连回「待事件」"/>
                         <TextBlock Text="未获取：点「刷新笔端状态」（0x53）" FontSize="10" Foreground="#B03A2E"
                                    HorizontalAlignment="Center" Margin="0,6,0,0" TextWrapping="Wrap"
                                    Visibility="{Binding HasPenTelemetry, Converter={StaticResource InvertBoolConverter}}"/>
@@ -292,6 +295,9 @@
                         <ComboBox ItemsSource="{Binding KeymapConfigNames}"
                                   SelectedItem="{Binding SelectedKeymapConfig}"
                                   MinWidth="150" VerticalContentAlignment="Center" Margin="0,0,8,0"/>
+                        <Button Content="新建表" Command="{Binding NewKeymapConfigCommand}"
+                                Style="{StaticResource ActionButton}"
+                                ToolTip="从出厂默认复制新建命名配置（无固件参与；改好触发键即可用键盘自测工作状态自管）"/>
                         <Button Content="另存为…" Command="{Binding SaveKeymapConfigAsCommand}"
                                 Style="{StaticResource ActionButton}"
                                 ToolTip="把当前表格内容存为新配置（可对出厂默认另存后修改）"/>
@@ -304,12 +310,15 @@
                         <Button Content="删除" Command="{Binding DeleteKeymapConfigCommand}"
                                 Style="{StaticResource ActionButton}"
                                 ToolTip="删除当前配置（出厂默认不可删）"/>
+                        <Button Content="生效" Command="{Binding ApplyKeymapConfigCommand}"
+                                Style="{StaticResource ActionButton}" Margin="8,0,0,0"
+                                ToolTip="非默认表：上位机立即生效 + 下发基站（0x55；基站未响应时仅上位机生效并提示）"/>
                         <TextBlock Text="{Binding KeymapRows.Count, StringFormat=条目数: {0}}"
                                    VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666"/>
                     </StackPanel>
 
-                    <!-- 设备读写行已摘（2026-10-17）：老 0xA0"阶段 6"死协议清退，设备同步等 0x55 立项落地
-                         （pc-issues 0x55 提案）；当前卡片仅本地配置，杜绝用户按到恒无效果的按钮 -->
+                    <!-- 设备下发回归（2026-10-18）：「生效」=上位机本地生效 + 0x55 下发基站（探测先行，
+                         旧固件无应答自动降级"仅上位机生效"并提示）；老 0xA0"阶段 6"死协议不再复活 -->
 
                     <!-- 一键一卡（出厂默认整卡只读；行实例与 KeymapRows 共享，编辑即时互通） -->
                     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" MaxHeight="430" Margin="4">

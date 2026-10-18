@@ -15,6 +15,7 @@ using PencilBox.Infrastructure.Ble;
 using PencilBox.Infrastructure.Config;
 using PencilBox.Infrastructure.Dsp;
 using PencilBox.Infrastructure.Hid;
+using PencilBox.Infrastructure.Platform;
 using PencilBox.Infrastructure.Serial;
 using PencilBox.Infrastructure.Services;
 
@@ -131,6 +132,14 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<CompanyConfig>(),
             () => OtaSessionActivity.InProgress));
         services.AddSingleton<IVpCommandService, F5EnvelopeVpCommand>();
+
+        // `0x55` 快捷键可配置会话服务（pc-issues/05；"生效"按钮的下发腿）：显式绑定 USB 基站通道（同 0x53/0x54 形态）
+        services.AddSingleton<CompanyKeymapConfigService>(sp => new CompanyKeymapConfigService(
+            sp.GetRequiredService<HidCommandChannel>(),
+            sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<CompanyConfig>()));
+        // 全局键盘钩子（笔端工作状态自管的观测腿；被动监听不吞键，钩子线程内回调）
+        services.AddSingleton<IGlobalKeyboardHook, GlobalKeyboardHook>();
 
         // 串口抓日志（05 §3.4 S2/S3；06 M1 升级：经 hub——口被命令面占用时自动旁路共享，独占开口也注册进 hub 供命令面复用）
         // 单例只持有"跑一次会话"的能力，真正的读写器在 RunAsync 内按需创建并收尾

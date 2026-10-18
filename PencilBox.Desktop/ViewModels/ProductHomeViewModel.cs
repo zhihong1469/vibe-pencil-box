@@ -33,6 +33,8 @@ public partial class ProductHomeViewModel : ObservableObject
     private readonly IDongleCommandClient _dongle;
     private readonly ISerialTransport _serialTransport;
     private readonly CompanyPenStatusService _penStatus;
+    private readonly CompanyKeymapConfigService _keymapConfig;
+    private readonly IGlobalKeyboardHook _keyboardHook;
     private readonly IVpCommandService _vpCmd;
     private readonly ILogger<ProductHomeViewModel> _logger;
 
@@ -186,6 +188,13 @@ public partial class ProductHomeViewModel : ObservableObject
     [ObservableProperty]
     private string _penStatusMetaText = "未获取（连接后点「刷新笔端状态」）";
 
+    /// <summary>笔端工作状态（自管两轴展示，产品落地 §三；"待事件"=未知，边界事件/断连自愈）</summary>
+    [ObservableProperty]
+    private string _workStateText = "待事件";
+
+    /// <summary>工作状态机（识别 × 扩音档两轴；触发键绑定从当前 Keymap 配置推导）</summary>
+    private PenWorkStateTracker _workStateTracker = null!;
+
     // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
     [ObservableProperty]
     private int _k2ModeIndex;
@@ -233,6 +242,7 @@ public partial class ProductHomeViewModel : ObservableObject
         try { _keymapConfigStore.SetCurrentName(value ?? _keymapConfigStore.FactoryName); }
         catch (Exception ex) { _logger.LogWarning(ex, "记录当前 Keymap 配置失败"); }
         LoadSelectedConfigIntoCards();
+        RebuildWorkStateTracker(value);
         NotifyKeymapMutateCommands();
     }
 
@@ -241,6 +251,7 @@ public partial class ProductHomeViewModel : ObservableObject
         SaveKeymapConfigCommand.NotifyCanExecuteChanged();
         RenameKeymapConfigCommand.NotifyCanExecuteChanged();
         DeleteKeymapConfigCommand.NotifyCanExecuteChanged();
+        ApplyKeymapConfigCommand.NotifyCanExecuteChanged();
     }
 
     public ProductHomeViewModel(
@@ -251,6 +262,8 @@ public partial class ProductHomeViewModel : ObservableObject
         IDongleCommandClient dongle,
         ISerialTransport serialTransport,
         CompanyPenStatusService penStatus,
+        CompanyKeymapConfigService keymapConfig,
+        IGlobalKeyboardHook keyboardHook,
         IVpCommandService vpCmd,
         ILogger<ProductHomeViewModel> logger)
     {
@@ -261,6 +274,8 @@ public partial class ProductHomeViewModel : ObservableObject
         _dongle = dongle;
         _serialTransport = serialTransport;
         _penStatus = penStatus;
+        _keymapConfig = keymapConfig;
+        _keyboardHook = keyboardHook;
         _vpCmd = vpCmd;
         _logger = logger;
 
@@ -281,6 +296,13 @@ public partial class ProductHomeViewModel : ObservableObject
         {
             _logger.LogWarning(ex, "Keymap 配置存储初始化失败");
         }
+
+        // 笔端工作状态自管（产品落地 §三，2026-10-18）：触发键绑定从当前 Keymap 配置推导，
+        // 全局键盘钩子被动监听（不吞键）；换配置即换绑定（OnSelectedKeymapConfigChanged 重建）。
+        _workStateTracker = BuildWorkStateTracker(SelectedKeymapConfig);
+        WorkStateText = _workStateTracker.DisplayText;
+        _keyboardHook.KeyDown += OnWorkStateKeyDown;
+        _keyboardHook.Start();
 
         // S1 档位切换表：出厂真值兜底显示（配置初始化成功后由 LoadSelectedConfigIntoCards 按配置重载）
         SwitchRows = new ObservableCollection<KeymapSwitchRowViewModel>(
@@ -958,6 +980,9 @@ public partial class ProductHomeViewModel : ObservableObject
     {
         PenChargeStateText = "—";
         GaugeChargeText = "";
+        // 断连即清零（自管口径）：回"待事件"，重连后靠 0x16 补报 + 下一次 K2 边界恢复
+        _workStateTracker.Reset();
+        WorkStateText = _workStateTracker.DisplayText;
     }
 
     // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
@@ -1144,6 +1169,115 @@ public partial class ProductHomeViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"删除失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>「新建表」：从出厂默认复制一份命名配置——无固件参与，改好触发键即可用键盘自测工作状态自管。</summary>
+    [RelayCommand]
+    private void NewKeymapConfig()
+    {
+        var name = PromptDialog.Show(Application.Current.MainWindow, "新建配置", "从出厂默认复制，新配置名：", "");
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+        if (KeymapConfigNames.Contains(name))
+        {
+            StatusMessage = $"配置「{name}」已存在——换个名字，或选中后「另存为」覆盖";
+            return;
+        }
+        try
+        {
+            _keymapConfigStore.Save(name,
+                KeymapFactoryDefault.Entries.Select(e => e.Clone()),
+                KeymapFactoryDefault.SwitchEntries.Select(e => new KeymapSwitchEntry
+                { Mode = e.Mode, Modifier = e.Modifier, CodeLo = e.CodeLo }));
+            RefreshKeymapConfigNames();
+            SelectedKeymapConfig = name;
+            StatusMessage = $"已从出厂默认复制新建「{name}」（出厂默认保持只读）";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"新建失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// 「生效」：非默认表 → ① 上位机本地生效（当前配置即触发键绑定，选中/保存时已生效）；② 下发基站 `0x55`。
+    /// 未连接基站或基站未响应（旧固件/三端未裁决）→ 照样本地生效，仅提示未下发成功（指挥官 10-18 口径）。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanMutateKeymapConfig))]
+    private async Task ApplyKeymapConfigAsync()
+    {
+        var name = SelectedKeymapConfig!;
+        if (IsKeymapDirty)
+        {
+            StatusMessage = "有未保存的修改——先「保存」再生效";
+            return;
+        }
+        var doc = _keymapConfigStore.Load(name);
+        if (doc == null)
+        {
+            StatusMessage = $"配置不存在或不可读：{name}";
+            return;
+        }
+        var entries = doc.Entries.ToList();
+        var switchEntries = (doc.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries.ToList()).ToList();
+
+        if (!_keymapConfig.IsOpen)
+        {
+            StatusMessage = "未连接基站——已仅上位机生效（连接接收器后可重新「生效」下发）";
+            return;
+        }
+
+        StatusMessage = "正在下发基站（0x55 快捷键可配置）…";
+        try
+        {
+            var report = await _keymapConfig.ApplyAsync(entries, switchEntries);
+            StatusMessage = report.AllOk
+                ? $"已下发基站（{report.Written} 条 + NVDS 提交），上位机与基站同步生效"
+                : report.ProbeResponded
+                    ? $"基站下发异常：{report.Error}——上位机已生效"
+                    : "基站未响应（0x55 未开通/旧固件）——已仅上位机生效";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"下发异常：{ex.Message}——上位机已生效";
+        }
+    }
+
+    // ============ 笔端工作状态自管（产品落地 §三：键盘钩子 + Keymap 联动） ============
+
+    private void OnWorkStateKeyDown(int vk)
+    {
+        var tracker = _workStateTracker;
+        if (!tracker.Feed(KeyboardUsageMap.FromVirtualKey(vk)))
+            return;
+        MainThreadHelper.EnsureOnMainThread(() => WorkStateText = tracker.DisplayText);
+    }
+
+    /// <summary>换 Keymap 配置即换触发键绑定（联动：改表=改触发键，无需固件参与）。</summary>
+    private void RebuildWorkStateTracker(string? name)
+    {
+        _workStateTracker = BuildWorkStateTracker(name);
+        WorkStateText = _workStateTracker.DisplayText;
+    }
+
+    private PenWorkStateTracker BuildWorkStateTracker(string? name)
+    {
+        try
+        {
+            name ??= _keymapConfigStore.GetCurrentName();
+            var doc = _keymapConfigStore.Load(name);
+            var binding = PenWorkStateBinding.FromKeymap(
+                doc?.Entries ?? [],
+                doc?.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries.ToList(),
+                name);
+            return new PenWorkStateTracker(binding);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "工作状态触发键推导失败，回落出厂默认绑定");
+            return new PenWorkStateTracker(PenWorkStateBinding.FromKeymap(
+                KeymapFactoryDefault.Entries, KeymapFactoryDefault.SwitchEntries, _keymapConfigStore.FactoryName));
         }
     }
 

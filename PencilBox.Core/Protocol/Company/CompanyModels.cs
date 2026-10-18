@@ -25,6 +25,13 @@ public static class CompanyCmd
     public const byte PairEnter = 0x52;
 
     /// <summary>
+    /// 快捷键可配置 `0x55`（pc-issues/05 §2 **帧面草案**——三端未裁决、基站未实现；
+    /// PC 发送=探测先行，无应答按"基站未响应"降级为仅上位机生效，见 CompanyKeymapConfigService）。
+    /// PARAM 01 读条目/元信息 · 02 写条目(RAM) · 03 提交(NVDS) · 05/06 切换表读/写（mode=0 内部行拒写）。
+    /// </summary>
+    public const byte KeymapConfig = 0x55;
+
+    /// <summary>
     /// 固件升级（拉模式）
     /// </summary>
     public const byte Ota = 0x16;

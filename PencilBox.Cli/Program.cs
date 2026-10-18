@@ -87,6 +87,7 @@ public class Program
         services.AddSingleton<CompanyParamCommands>();
         services.AddSingleton<CompanyStreamCommands>();
         services.AddSingleton<KeymapCommands>();
+        services.AddSingleton<WorkStateCommands>();
 
         var sp = services.BuildServiceProvider();
 
@@ -105,6 +106,7 @@ public class Program
                 "config" or "cfg" => await DispatchConfigAsync(sp, args.Skip(1).ToArray()),
                 "company" or "cmp" => await DispatchCompanyAsync(sp, args.Skip(1).ToArray()),
                 "keymap" or "km" => DispatchKeymap(sp, args.Skip(1).ToArray()),
+                "workstate" or "ws" => DispatchWorkState(sp, args.Skip(1).ToArray()),
                 "help" or "--help" or "-h" => PrintHelp(),
                 "version" or "--version" => PrintVersion(),
                 _ => UnknownCommand(area)
@@ -168,6 +170,25 @@ public class Program
                 GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap use <名>")),
 
             _ => UnknownCommand($"keymap {action}")
+        };
+    }
+
+    // === WorkState ===
+    /// <summary>`workstate binding|listen`（笔端工作状态自管：触发键联动 Keymap 配置，全局键盘钩子被动监听）</summary>
+    private static int DispatchWorkState(IServiceProvider sp, string[] args)
+    {
+        var cmd = sp.GetRequiredService<WorkStateCommands>();
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "binding";
+        var rest = args.Skip(1).ToArray();
+
+        return action switch
+        {
+            "binding" or "b" => cmd.Binding(GetOption(rest, "--config")),
+
+            // listen [--secs N]：缺省=一直监听直到 Ctrl+C
+            "listen" or "ln" => cmd.Listen(GetOption(rest, "--config"), GetOptionInt(rest, "--secs", 0)),
+
+            _ => UnknownCommand($"workstate {action}")
         };
     }
 
@@ -769,6 +790,9 @@ public class Program
             config   Configuration management (get, set, path)
             company  公司 V0.9 协议（0xFF02 命令通道；OTA 在此：company ota）
             keymap   快捷键映射配置（本地 configs/keymap/；按键表+S1 切换表；设备读写待 0x55，pc-issues/05）
+            workstate 笔端工作状态自管（全局键盘钩子监听 Keymap 触发键，识别×扩音两轴）
+                     binding [--config 名]                          从 Keymap 配置推导四键绑定
+                     listen [--config 名] [--secs N]                装钩实时打印状态转移（Ctrl+C 停）
                      list / show [配置]                            配置清单 / 表格内容（缺省当前配置）
                      new <名> [--from <配置>]                      复制创建（缺省复制出厂默认）并设为当前
                      set <名> --index N [--key K3] [--event click]
