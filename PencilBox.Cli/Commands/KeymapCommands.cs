@@ -224,6 +224,14 @@ public sealed class KeymapCommands
             return 1;
         }
 
+        // K2 边界契约行（长按=会话开始/长松=会话结束）不可删；K2 上误加的其他事件行可删（与 GUI × 同规则）
+        var victim = doc.Entries[index];
+        if (KeymapRules.IsK2(victim.KeyId) && KeymapRules.IsK2EventAllowed(victim.EventType))
+        {
+            ConsoleFormatter.Error($"第 {index} 条是 K2 语音会话边界契约行（长按=会话开始/长松=会话结束），不可删除");
+            return 1;
+        }
+
         doc.Entries.RemoveAt(index);
         _store.Save(name, doc.Entries);
         ConsoleFormatter.Success($"已删除「{name}」第 {index} 条（剩 {doc.Entries.Count} 条；已按 K1→K6 重排）");

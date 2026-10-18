@@ -79,8 +79,14 @@ public partial class KeymapRowViewModel : ObservableObject
     /// <summary>是否 K2 行（语音会话边界契约，pc-issues/04 §2A）</summary>
     public bool IsK2Row => KeymapRules.IsK2(KeyId);
 
-    /// <summary>是否显示删除按钮（可编辑配置的非 K2 行）</summary>
-    public bool IsDeletable => IsEditable && !IsK2Row;
+    /// <summary>
+    /// 是否 K2 边界契约行（长按=会话开始/长松=会话结束，不可删）。
+    /// K2 上误加的其他事件行（如 0x00 垃圾行）不属于契约，可删——加得进就要删得掉（2026-10-18）。
+    /// </summary>
+    public bool IsK2BoundaryRow => IsK2Row && KeymapRules.IsK2EventAllowed(EventType);
+
+    /// <summary>是否显示删除按钮（可编辑配置的非契约行）</summary>
+    public bool IsDeletable => IsEditable && !IsK2BoundaryRow;
 
     /// <summary>K2 行事件列锁定——UI 上 K2 行本就不出事件编辑，仅 K2 语义兜底</summary>
     public bool CanEditEvent => IsEditable && !KeymapRules.IsK2(KeyId);

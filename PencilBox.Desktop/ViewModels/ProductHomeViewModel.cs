@@ -1378,7 +1378,9 @@ public partial class ProductHomeViewModel : ObservableObject
         var nextEvent = PickNextEvent(card.KeyId, card.Rows.Select(r => r.EventType));
         if (nextEvent == null)
         {
-            StatusMessage = $"{card.KeyName} 的可用事件已全部在列（K2 事件为语音会话边界契约，不可扩展）";
+            StatusMessage = KeymapRules.IsK2(card.KeyId)
+                ? $"{card.KeyName} 事件为语音会话边界契约（长按=会话开始/长松=会话结束），不可扩展"
+                : $"{card.KeyName} 的可用事件已全部在列";
             return;
         }
 
@@ -1397,11 +1399,11 @@ public partial class ProductHomeViewModel : ObservableObject
         StatusMessage = $"已添加 {card.KeyName} {KeymapFormatter.GetEventTypeName(nextEvent.Value)}（空动作，请设置键值后保存）";
     }
 
-    /// <summary>删除一行（出厂默认拒绝；K2 行是语音会话边界契约，不可删）。</summary>
+    /// <summary>删除一行（出厂默认拒绝；K2 边界契约行=长按/长放不可删，K2 上误加的其他事件行可删）。</summary>
     [RelayCommand]
     private void RemoveKeymapRow(KeymapRowViewModel? row)
     {
-        if (row == null || !CanMutateKeymapConfig() || KeymapRules.IsK2(row.KeyId))
+        if (row == null || !CanMutateKeymapConfig() || row.IsK2BoundaryRow)
             return;
 
         var rows = KeymapRows.ToList();
@@ -1422,10 +1424,17 @@ public partial class ProductHomeViewModel : ObservableObject
     /// <summary>按键选下一个可追加的事件（K2 只允许会话边界两事件）。</summary>
     private static KeyEventType? PickNextEvent(byte keyId, IEnumerable<KeyEventType> present)
     {
+        // 勿用 FirstOrDefault：值类型枚举找不到时返回 default(=0x00 非法值)而非 null，装箱后非 null
+        // 会绕过下方守卫——K2 双边界事件齐后每次「＋事件」都塞进一行 0x00 垃圾行（2026-10-18 指挥官截图实锤）
         var candidates = KeymapRules.IsK2(keyId)
             ? new[] { KeyEventType.LongPress, KeyEventType.LongRelease }
             : new[] { KeyEventType.Click, KeyEventType.DoubleClick, KeyEventType.LongPress, KeyEventType.LongRelease };
-        return candidates.FirstOrDefault(ev => !present.Contains(ev));
+        foreach (var ev in candidates)
+        {
+            if (!present.Contains(ev))
+                return ev;
+        }
+        return null;
     }
 
     // ============ 事件处理 ============
