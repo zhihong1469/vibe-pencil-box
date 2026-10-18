@@ -330,7 +330,8 @@
                                 <DataTemplate>
                                     <Border BorderBrush="#D5DBDB" BorderThickness="1" CornerRadius="4"
                                             Margin="0,0,0,6" Background="#FDFEFE" Padding="8,6,8,8">
-                                        <StackPanel>
+                                        <!-- 内容 980 封顶左靠：宽窗下"加事件/删行"聚在内容右侧，不被 * 列推到窗框边 -->
+                                        <StackPanel MaxWidth="980" HorizontalAlignment="Left">
                                             <!-- 卡头：键名徽章 + 只读标记 + 加事件 -->
                                             <Grid Margin="0,0,0,4">
                                                 <StackPanel Orientation="Horizontal">
@@ -483,8 +484,9 @@
                                                                 </TextBlock>
                                                             </Grid>
 
-                                                            <!-- 删行（可编辑配置的非 K2 行）；"×"用 U+00D7——"✕"(U+2715) 在默认字体下不渲染成空按钮 -->
-                                                            <Button Grid.Column="3" Content="×" FontSize="14" FontWeight="Bold" Width="24" MinWidth="24" Height="24"
+                                                            <!-- 删行（可编辑配置的非 K2 行）；Padding=0 必须显式——ActionButton 样式 Padding=12,6
+                                                                 会把 24px 定宽按钮的内容区吃成 0 宽，任何字符都渲染不出来 -->
+                                                            <Button Grid.Column="3" Content="×" FontSize="14" FontWeight="Bold" Padding="0" Width="24" MinWidth="24" Height="24"
                                                                     Margin="6,0,0,0" VerticalAlignment="Center"
                                                                     Style="{StaticResource ActionButton}"
                                                                     Visibility="{Binding IsDeletable, Converter={StaticResource BoolToVis}}"
@@ -504,7 +506,8 @@
                         <!-- S1 档位开关卡（2026-10-17 起随配置可编辑；档位列锁定，键值=捕获/修饰位/专用键；设备写回待 0x55 PARAM 05/06） -->
                         <Border BorderBrush="#D5DBDB" BorderThickness="1" CornerRadius="4"
                                 Background="#FDFEFE" Padding="8,6,8,8">
-                            <StackPanel>
+                            <!-- 与按键卡同口径：内容 980 封顶左靠，宽窗不把说明文字行拉散 -->
+                            <StackPanel MaxWidth="980" HorizontalAlignment="Left">
                                 <Grid Margin="0,0,0,4">
                                     <StackPanel Orientation="Horizontal">
                                         <Border Background="#2C3E50" CornerRadius="3" Padding="6,2">
