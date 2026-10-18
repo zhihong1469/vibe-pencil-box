@@ -26,7 +26,8 @@
                 </TextBlock.Style>
             </TextBlock>
             <TextBlock x:Name="BatteryText" Text="0%" FontSize="24" FontWeight="Bold"
-                       HorizontalAlignment="Center" Foreground="#333333"/>
+                       HorizontalAlignment="Center"
+                       Foreground="{Binding ValueBrush, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
             <TextBlock Text="{Binding Title, RelativeSource={RelativeSource AncestorType=UserControl}}"
                        FontSize="12" Foreground="#888888" HorizontalAlignment="Center"/>
         </StackPanel>

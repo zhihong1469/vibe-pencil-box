@@ -150,11 +150,21 @@ public partial class ProductHomeViewModel : ObservableObject
     [ObservableProperty]
     private System.Windows.Media.Brush _gaugeChargeBrush = System.Windows.Media.Brushes.Gray;
 
+    /// <summary>电池环 % 数值颜色：充电中灰显=读数虚高仅供参考（数值保持可见），其余正常深灰</summary>
+    [ObservableProperty]
+    private System.Windows.Media.Brush _gaugeValueBrush = NormalValueBrush;
+
     private static readonly System.Windows.Media.Brush ChargingBrush =
         new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE6, 0x7E, 0x22));
 
     private static readonly System.Windows.Media.Brush ChargeFullBrush =
         new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2E, 0xCC, 0x71));
+
+    private static readonly System.Windows.Media.Brush NormalValueBrush =
+        new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x33, 0x33, 0x33));
+
+    private static readonly System.Windows.Media.Brush DimmedValueBrush =
+        new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x99, 0x99, 0x99));
 
     /// <summary>连接状态文本（A1 驱动）：已连接 / 已配对·未连接 / 未配对 / 未知</summary>
     [ObservableProperty]
@@ -913,7 +923,7 @@ public partial class ProductHomeViewModel : ObservableObject
 
         // 充电状态（BYTE2 bit1-0 充电枚举，统一TX V1.3）：0=未充电/1=充电中/2=充满。
         // 工作模式语义已退役（识别=0x13→F13/F14、扩音档=0x16→F15/F16，凭事件另行推导）；
-        // 电量 % 开发期保持可见不隐藏（充电电压虚高跳变问题观察用，见电池管理/Pencil/05）。
+        // 电量 % 充电中灰显不隐藏（数值照出+灰显=虚高仅供参考的提示，见电池管理/Pencil/05）。
         ApplyChargeDisplay(s.ChargeState);
         PencilStateText = dev?.Value == PenDevState.Sleep ? "已连接·休眠" : "已连接";
     }
@@ -935,6 +945,8 @@ public partial class ProductHomeViewModel : ObservableObject
             PenChargeState.Full => ("已充满", (System.Windows.Media.Brush)ChargeFullBrush),
             _ => ("", System.Windows.Media.Brushes.Gray)
         };
+        // 灰显语义（指挥官 10-18 定版）：仅充电中灰 %（数值照出=不可靠提示），已充满 FINISH 真判据读数近真不灰
+        GaugeValueBrush = chargeState == PenChargeState.Charging ? DimmedValueBrush : NormalValueBrush;
     }
 
     private void ClearChargeDisplay()

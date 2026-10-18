@@ -176,6 +176,8 @@
                     <StackPanel>
                         <ctrl:BatteryGaugeControl Value="{Binding BatteryLevel}" Title="电量"
                                                   ChargeText="{Binding GaugeChargeText}" ChargeBrush="{Binding GaugeChargeBrush}"
+                                                  ValueBrush="{Binding GaugeValueBrush}"
+                                                  ToolTip="充电中 % 灰显=电压虚高、读数仅供参考（数字保持可见）；拔出后笔端清窗快速回落真实值"
                                                   Width="120" Height="120" Opacity="{Binding HasPenTelemetry, Converter={StaticResource BoolToOpacityConverter}}"/>
                         <TextBlock Text="未获取：点「刷新笔端状态」（0x53）" FontSize="10" Foreground="#B03A2E"
                                    HorizontalAlignment="Center" Margin="0,4,0,0" TextWrapping="Wrap"

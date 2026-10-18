@@ -37,6 +37,11 @@ public partial class BatteryGaugeControl : UserControl
         DependencyProperty.Register(nameof(ChargeBrush), typeof(Brush), typeof(BatteryGaugeControl),
             new PropertyMetadata(new SolidColorBrush(Color.FromRgb(0xE6, 0x7E, 0x22))));
 
+    /// <summary>% 数值颜色：充电中灰显=读数虚高仅供参考（数值保持可见），其余深灰正常</summary>
+    public static readonly DependencyProperty ValueBrushProperty =
+        DependencyProperty.Register(nameof(ValueBrush), typeof(Brush), typeof(BatteryGaugeControl),
+            new PropertyMetadata(new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33))));
+
     public double Value
     {
         get => (double)GetValue(ValueProperty);
@@ -65,6 +70,12 @@ public partial class BatteryGaugeControl : UserControl
     {
         get => (Brush)GetValue(ChargeBrushProperty);
         set => SetValue(ChargeBrushProperty, value);
+    }
+
+    public Brush ValueBrush
+    {
+        get => (Brush)GetValue(ValueBrushProperty);
+        set => SetValue(ValueBrushProperty, value);
     }
 
     public BatteryGaugeControl()

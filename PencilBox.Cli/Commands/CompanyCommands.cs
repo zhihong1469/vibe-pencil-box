@@ -735,7 +735,7 @@ public class CompanyCommands
         ConsoleFormatter.Success($"[PEN_STATUS] {source}：BYTE2=0x{s.Byte2:X2}" +
                                  $"（chg={s.ChargeState} {PenStatusText.ChargeStateText(s.ChargeState)}，src={s.Src} {PenStatusText.SrcText(s.Src)}）");
         foreach (var slot in s.Slots)
-            ConsoleFormatter.Info($"  {PenStatusText.SlotText(slot)}");
+            ConsoleFormatter.Info($"  {PenStatusText.SlotText(slot, s.ChargeState)}");
 
         ConsoleFormatter.PrintObject(new
         {

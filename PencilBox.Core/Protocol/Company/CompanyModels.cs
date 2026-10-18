@@ -294,7 +294,7 @@ public static class PenStatusText
         _ => $"0x{src:X2}"
     };
 
-    public static string SlotText(PenStatusSlot slot) => slot.Id switch
+    public static string SlotText(PenStatusSlot slot, byte chargeState = PenChargeState.None) => slot.Id switch
     {
         PenStateSlotId.DevState => slot.Value switch
         {
@@ -302,7 +302,11 @@ public static class PenStatusText
             PenDevState.Sleep => "DEV_STATE=休眠",
             _ => $"DEV_STATE=0x{slot.Value:X2}（未知，前向兼容）"
         },
-        PenStateSlotId.Batt => $"BATT={slot.Value}%",
+        // 充电中读数虚高（CC 段 I×R 叠加，电池 05 号 K1）：数值照出+文字标注不可靠（灰显语义的 CLI 形态，指挥官 10-18 定版）；
+        // 已充满不标注（FINISH 真判据下读数近真值，拔出不跳）
+        PenStateSlotId.Batt => chargeState == PenChargeState.Charging
+            ? $"BATT={slot.Value}%（充电中·电压虚高，读数仅供参考）"
+            : $"BATT={slot.Value}%",
         _ => $"槽 0x{slot.Id:X2}=0x{slot.Value:X2}（未知 id，原样透传）"
     };
 }

@@ -170,4 +170,16 @@ public class CompanyPenStatusTests
         Assert.Equal("DEV_STATE=休眠", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.DevState, 1)));
         Assert.Equal("BATT=95%", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.Batt, 95)));
     }
+
+    [Fact]
+    public void SlotText_BattCharging_AnnotatedUnreliable()
+    {
+        // 充电中灰显语义（指挥官 10-18 定版）：% 数值照出 + 附虚高提示（灰显的 CLI 形态）；充满/未充电不标注
+        Assert.Equal("BATT=67%（充电中·电压虚高，读数仅供参考）",
+            PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.Batt, 67), PenChargeState.Charging));
+        Assert.Equal("BATT=100%",
+            PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.Batt, 100), PenChargeState.Full));
+        Assert.Equal("BATT=67%",
+            PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.Batt, 67), PenChargeState.None));
+    }
 }
