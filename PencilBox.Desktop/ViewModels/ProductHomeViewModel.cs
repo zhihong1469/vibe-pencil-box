@@ -140,7 +140,21 @@ public partial class ProductHomeViewModel : ObservableObject
     private bool _pencilConnected;
 
     [ObservableProperty]
-    private string _pencilModeText = "未知";
+    private string _penChargeStateText = "—";
+
+    /// <summary>电池环中心充电状态文字（"充电中"/"已充满"；空串=未充电不占位，% 保持可见）</summary>
+    [ObservableProperty]
+    private string _gaugeChargeText = "";
+
+    /// <summary>电池环中心充电状态颜色（充电中橙 / 已充满绿）</summary>
+    [ObservableProperty]
+    private System.Windows.Media.Brush _gaugeChargeBrush = System.Windows.Media.Brushes.Gray;
+
+    private static readonly System.Windows.Media.Brush ChargingBrush =
+        new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE6, 0x7E, 0x22));
+
+    private static readonly System.Windows.Media.Brush ChargeFullBrush =
+        new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2E, 0xCC, 0x71));
 
     /// <summary>连接状态文本（A1 驱动）：已连接 / 已配对·未连接 / 未配对 / 未知</summary>
     [ObservableProperty]
@@ -359,6 +373,7 @@ public partial class ProductHomeViewModel : ObservableObject
         Rssi = 0;
         HasPenTelemetry = false;
         PenDevStateText = "—";
+        ClearChargeDisplay();
         IsPenPushListening = false;
         PenStatusMetaText = "未获取（连接后点「刷新笔端状态」）";
         K2ModeResultText = "未查询：应用/查询经 0x54 信封 → 基站 → 当前连接笔端";
@@ -861,10 +876,10 @@ public partial class ProductHomeViewModel : ObservableObject
             StatusMessage = message;
     }
 
-    /// <summary>把一帧 `0x53` 快照应用到状态卡（实际数值来源：BYTE2 位表 + 状态槽）。</summary>
+    /// <summary>把一帧 `0x53` 快照应用到状态卡（实际数值来源：BYTE2 充电枚举 + 状态槽）。</summary>
     private void ApplyPenStatus(PenStatusSnapshot s, string source)
     {
-        PenStatusMetaText = $"0x53 {source}　BYTE2=0x{s.Byte2:X2}（mode={s.Mode} src={s.Src}）";
+        PenStatusMetaText = $"0x53 {source}　BYTE2=0x{s.Byte2:X2}（chg={s.ChargeState} src={s.Src}）";
         HasPenTelemetry = true;   // 0x53 已通：卡片亮起（RSSI 除外，仍待 0x42）
 
         if (s.Status == PenStatusStatus.PenNotConnected)
@@ -872,6 +887,7 @@ public partial class ProductHomeViewModel : ObservableObject
             PencilConnected = false;
             PencilStateText = "笔未连接";
             PenDevStateText = "—";
+            ClearChargeDisplay();
             return;
         }
         if (s.Status != PenStatusStatus.Ok)
@@ -895,15 +911,36 @@ public partial class ProductHomeViewModel : ObservableObject
             _ => $"未知(0x{dev.Value:X2})"
         };
 
-        // 运行模式（BYTE2 mode bit1-0）：0=待机 / 1=识别 / 2=扩音（键盘端回到待机即 mode 清零）
-        PencilModeText = s.Mode switch
-        {
-            0 => "待机",
-            1 => "识别中",
-            2 => "扩音中",
-            _ => $"未知({s.Mode})"
-        };
+        // 充电状态（BYTE2 bit1-0 充电枚举，统一TX V1.3）：0=未充电/1=充电中/2=充满。
+        // 工作模式语义已退役（识别=0x13→F13/F14、扩音档=0x16→F15/F16，凭事件另行推导）；
+        // 电量 % 开发期保持可见不隐藏（充电电压虚高跳变问题观察用，见电池管理/Pencil/05）。
+        ApplyChargeDisplay(s.ChargeState);
         PencilStateText = dev?.Value == PenDevState.Sleep ? "已连接·休眠" : "已连接";
+    }
+
+    /// <summary>充电状态 → 状态卡文字 + 电池环中心徽标（未充电时环内只留 % 数字）。</summary>
+    private void ApplyChargeDisplay(byte chargeState)
+    {
+        PenChargeStateText = chargeState switch
+        {
+            PenChargeState.None => "未充电",
+            PenChargeState.Charging => "充电中",
+            PenChargeState.Full => "已充满",
+            PenChargeState.Reserved => "保留",
+            _ => $"未知({chargeState})"
+        };
+        (GaugeChargeText, GaugeChargeBrush) = chargeState switch
+        {
+            PenChargeState.Charging => ("充电中", (System.Windows.Media.Brush)ChargingBrush),
+            PenChargeState.Full => ("已充满", (System.Windows.Media.Brush)ChargeFullBrush),
+            _ => ("", System.Windows.Media.Brushes.Gray)
+        };
+    }
+
+    private void ClearChargeDisplay()
+    {
+        PenChargeStateText = "—";
+        GaugeChargeText = "";
     }
 
     // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
@@ -1233,6 +1270,7 @@ public partial class ProductHomeViewModel : ObservableObject
                 HasPenTelemetry = false;
                 PencilStateText = "未连接";
                 PenDevStateText = "—";
+                ClearChargeDisplay();
                 PenStatusMetaText = "未获取（连接后点「刷新笔端状态」）";
                 K2ModeResultText = "未查询：应用/查询经 0x54 信封 → 基站 → 当前连接笔端";
                 DonglePairText = "未连接：配对状态不可用";
@@ -1270,13 +1308,8 @@ public partial class ProductHomeViewModel : ObservableObject
             BatteryLevel = state.Battery == 0xFF ? 0 : state.Battery;
             PencilConnected = state.IsConnected;
             Rssi = state.Rssi;
-            PencilModeText = state.Mode switch
-            {
-                Core.Protocol.PencilMode.Idle => "待机",
-                Core.Protocol.PencilMode.Capturing => "识别中",
-                Core.Protocol.PencilMode.Amplifying => "扩音中",
-                _ => "未知"
-            };
+            // 0x42 mode 字段=byte2 充电枚举副本（V1.3，与 0x53 同源）
+            ApplyChargeDisplay((byte)state.ChargeState);
         });
     }
 }

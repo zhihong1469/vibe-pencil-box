@@ -9,6 +9,22 @@
                   StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
         </Canvas>
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+            <!-- 充电状态（充电中/已充满）：语义优先级高于 % 数字；空串=未充电不占位 -->
+            <TextBlock FontSize="13" FontWeight="Bold" HorizontalAlignment="Center"
+                       Foreground="{Binding ChargeBrush, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                <TextBlock.Text>
+                    <Binding Path="ChargeText" RelativeSource="{RelativeSource AncestorType=UserControl}" FallbackValue=""/>
+                </TextBlock.Text>
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
             <TextBlock x:Name="BatteryText" Text="0%" FontSize="24" FontWeight="Bold"
                        HorizontalAlignment="Center" Foreground="#333333"/>
             <TextBlock Text="{Binding Title, RelativeSource={RelativeSource AncestorType=UserControl}}"

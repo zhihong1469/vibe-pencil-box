@@ -32,7 +32,7 @@ public class CompanyPenStatusTests
     [Fact]
     public void TryParsePenStatusResp_DocExample_DecodesSlots()
     {
-        // STATUS=00 BYTE2=0x04（src 硬件态/mode 0，统一TX §3.2：bit2=src、bit7-3 保留 0）
+        // STATUS=00 BYTE2=0x04（chg 0=未充电/src 硬件态，统一TX V1.3 §3.2：bit1-0=充电枚举、bit2=src、bit7-3 保留 0）
         // [01 00]=DEV_STATE 正常 [02 5F]=BATT 95%。
         // 勘误：补充 05 正文示例写 "BYTE2=0x40"，bit6 落保留区与 §3.2 位表矛盾——
         // 判定为 0x04 的十六进制换位笔误，PC 按规范位表解析（回填时向笔/键盘端同步）。
@@ -42,13 +42,27 @@ public class CompanyPenStatusTests
         Assert.True(ok);
         Assert.Equal(0x00, s.Status);
         Assert.Equal(0x04, s.Byte2);
-        Assert.Equal(0, s.Mode);
+        Assert.Equal(PenChargeState.None, s.ChargeState);
         Assert.Equal(1, s.Src);
         Assert.Equal(2, s.Slots.Count);
         Assert.Equal(PenStateSlotId.DevState, s.Slots[0].Id);
         Assert.Equal(PenDevState.Normal, s.Slots[0].Value);
         Assert.Equal(PenStateSlotId.Batt, s.Slots[1].Id);
         Assert.Equal(0x5F, s.Slots[1].Value);   // 95%
+    }
+
+    [Theory]
+    [InlineData(0x05, 1, PenChargeState.Charging)]   // 充电中（src 硬件态）
+    [InlineData(0x06, 1, PenChargeState.Full)]       // 已充满锁存（src 硬件态）
+    [InlineData(0x02, 0, PenChargeState.Full)]       // 已充满（src 软件态；上电默认 0x04=未充电|HW）
+    public void TryParsePenStatusResp_Byte2ChargeEnum_Decodes(byte byte2, byte src, byte expectedCharge)
+    {
+        var ok = _codec.TryParsePenStatusResp(new byte[] { 0x00, byte2 }, out var s);
+
+        Assert.True(ok);
+        Assert.Equal(expectedCharge, s.ChargeState);
+        Assert.Equal(src, s.Src);
+        Assert.Empty(s.Slots);
     }
 
     [Fact]
@@ -144,12 +158,14 @@ public class CompanyPenStatusTests
     // ================= 展示文本 =================
 
     [Fact]
-    public void PenStatusText_ModesAndSlots()
+    public void PenStatusText_ChargeStatesAndSlots()
     {
-        // 显示命名（专业叫法定版）：mode 0=待机；DEV_STATE 0x00=正常 / 0x01=休眠
-        Assert.Equal("待机(IDLE)", PenStatusText.ModeText(0));
-        Assert.Equal("识别(CAPTURING)", PenStatusText.ModeText(1));
-        Assert.Equal("扩音(AMPLIFYING)", PenStatusText.ModeText(2));
+        // 显示命名（统一TX V1.3 定版）：byte2 bit1-0=充电枚举 0=未充电/1=充电中/2=充满；
+        // DEV_STATE 0x00=正常 / 0x01=休眠（槽 0x01 回归预留、值域挂起）
+        Assert.Equal("未充电", PenStatusText.ChargeStateText(PenChargeState.None));
+        Assert.Equal("充电中", PenStatusText.ChargeStateText(PenChargeState.Charging));
+        Assert.Equal("已充满", PenStatusText.ChargeStateText(PenChargeState.Full));
+        Assert.Equal("0x03", PenStatusText.ChargeStateText(PenChargeState.Reserved));
         Assert.Equal("DEV_STATE=正常", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.DevState, 0)));
         Assert.Equal("DEV_STATE=休眠", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.DevState, 1)));
         Assert.Equal("BATT=95%", PenStatusText.SlotText(new PenStatusSlot(PenStateSlotId.Batt, 95)));

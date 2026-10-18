@@ -27,6 +27,16 @@ public partial class BatteryGaugeControl : UserControl
         DependencyProperty.Register(nameof(Title), typeof(string), typeof(BatteryGaugeControl),
             new PropertyMetadata("Battery"));
 
+    /// <summary>环中心充电状态文字（"充电中"/"已充满"）；空串=未充电，不占位（% 数字保持可见）</summary>
+    public static readonly DependencyProperty ChargeTextProperty =
+        DependencyProperty.Register(nameof(ChargeText), typeof(string), typeof(BatteryGaugeControl),
+            new PropertyMetadata(""));
+
+    /// <summary>充电状态文字颜色（充电中橙 / 已充满绿，由消费方按语义给）</summary>
+    public static readonly DependencyProperty ChargeBrushProperty =
+        DependencyProperty.Register(nameof(ChargeBrush), typeof(Brush), typeof(BatteryGaugeControl),
+            new PropertyMetadata(new SolidColorBrush(Color.FromRgb(0xE6, 0x7E, 0x22))));
+
     public double Value
     {
         get => (double)GetValue(ValueProperty);
@@ -43,6 +53,18 @@ public partial class BatteryGaugeControl : UserControl
     {
         get => (string)GetValue(TitleProperty);
         set => SetValue(TitleProperty, value);
+    }
+
+    public string ChargeText
+    {
+        get => (string)GetValue(ChargeTextProperty);
+        set => SetValue(ChargeTextProperty, value);
+    }
+
+    public Brush ChargeBrush
+    {
+        get => (Brush)GetValue(ChargeBrushProperty);
+        set => SetValue(ChargeBrushProperty, value);
     }
 
     public BatteryGaugeControl()

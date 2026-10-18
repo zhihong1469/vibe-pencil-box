@@ -9,15 +9,15 @@ namespace PencilBox.Core.Models;
 
 /// <summary>
 /// 笔端状态快照（来自 GET_PENCIL_STATE 0x42 应答）
-/// [status][mode][batt][conn_state][rssi]
+/// [status][chg][batt][conn_state][rssi]
 /// </summary>
 public class PencilState
 {
     /// <summary>应答 status（0x00=成功）</summary>
     public byte Status { get; set; }
 
-    /// <summary>当前模式</summary>
-    public PencilMode Mode { get; set; }
+    /// <summary>充电状态枚举（byte2 副本，V1.3）</summary>
+    public PencilChargeState ChargeState { get; set; }
 
     /// <summary>电量百分比（0~100，0xFF=未知）</summary>
     public byte Battery { get; set; }
@@ -40,7 +40,7 @@ public class PencilState
         return new PencilState
         {
             Status = data[0],
-            Mode = (PencilMode)data[1],
+            ChargeState = (PencilChargeState)data[1],
             Battery = data[2],
             ConnectionState = (PencilConnectionState)data[3],
             Rssi = (sbyte)data[4]

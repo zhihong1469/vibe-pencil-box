@@ -733,7 +733,7 @@ public class CompanyCommands
         }
 
         ConsoleFormatter.Success($"[PEN_STATUS] {source}：BYTE2=0x{s.Byte2:X2}" +
-                                 $"（mode={s.Mode} {PenStatusText.ModeText(s.Mode)}，src={s.Src} {PenStatusText.SrcText(s.Src)}）");
+                                 $"（chg={s.ChargeState} {PenStatusText.ChargeStateText(s.ChargeState)}，src={s.Src} {PenStatusText.SrcText(s.Src)}）");
         foreach (var slot in s.Slots)
             ConsoleFormatter.Info($"  {PenStatusText.SlotText(slot)}");
 
@@ -741,8 +741,8 @@ public class CompanyCommands
         {
             Status = $"0x{s.Status:X2}",
             Byte2 = $"0x{s.Byte2:X2}",
-            Mode = s.Mode,
-            ModeText = PenStatusText.ModeText(s.Mode),
+            ChargeState = s.ChargeState,
+            ChargeStateText = PenStatusText.ChargeStateText(s.ChargeState),
             Src = s.Src,
             DevState = s.Find(PenStateSlotId.DevState)?.Value,
             BatteryPercent = s.Find(PenStateSlotId.Batt)?.Value,

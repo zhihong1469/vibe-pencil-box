@@ -35,7 +35,7 @@ public enum PcSubCommand : byte
     // ========== 状态查询（0x40~0x4F） ==========
     QueryDeviceInfo = 0x40,     // 穿透：→[status][型号2][fw_ver4][proto_ver1]
     QueryBattery = 0x41,        // 穿透：→[status][%]
-    GetPencilState = 0x42,      // 本地（DG 缓存秒回）：→[status][mode][batt][conn][rssi]
+    GetPencilState = 0x42,      // 本地（DG 缓存秒回）：→[status][chg][batt][conn][rssi]（chg=byte2 充电枚举副本，V1.3）
     GetOtaSupport = 0x43,       // 本地：→[status][support][ota_ch]
 
     // ========== 上行事件通知（0x50~0x5F，DG→PC） ==========
@@ -71,13 +71,14 @@ public enum KeyActionType : byte
 }
 
 /// <summary>
-/// 笔端模式（mode，来自状态查询/状态槽）
+/// 笔端充电状态枚举（byte2 bit1-0，V1.3：原"工作模式"语义已退役，
+/// 识别/扩音档由上位机凭 F13~F16 事件自行推导；0x42 本地缓存与 0x53 同源）
 /// </summary>
-public enum PencilMode : byte
+public enum PencilChargeState : byte
 {
-    Idle = 0x00,
-    Capturing = 0x01,
-    Amplifying = 0x02,
+    NotCharging = 0x00,
+    Charging = 0x01,
+    Full = 0x02,
 }
 
 /// <summary>

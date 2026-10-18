@@ -237,17 +237,37 @@ public static class PenDevState
     public const byte Sleep = 0x01;
 }
 
+/// <summary>
+/// 统一TX byte2 bit1-0 充电状态枚举（V1.3 定版：byte2 语义从"工作模式/档位标签"腾挪为充电枚举，
+/// 0=未充电/1=充电中/2=充满/3=保留；bit2=src 维持硬件态；与笔端 `app_batt.c` chg 日志值域同构）。
+/// 工作模式上报已退役：识别启停权威=0x13→F13/F14、扩音档权威=0x16→F15/F16，上位机凭事件自行推导。
+/// </summary>
+public static class PenChargeState
+{
+    /// <summary>未充电</summary>
+    public const byte None = 0x00;
+
+    /// <summary>充电中</summary>
+    public const byte Charging = 0x01;
+
+    /// <summary>已充满（插着，FINISH 真判据+软件锁存）</summary>
+    public const byte Full = 0x02;
+
+    /// <summary>保留</summary>
+    public const byte Reserved = 0x03;
+}
+
 /// <summary>状态槽一条：`[state_id][value]`（mini-TLV，自描述）</summary>
 public sealed record PenStatusSlot(byte Id, byte Value);
 
 /// <summary>
-/// `0x53` 状态快照：`STATUS + BYTE2 副本（mode|src）+ 状态槽区 TLV 原样`。
+/// `0x53` 状态快照：`STATUS + BYTE2 副本（充电枚举|src，V1.3）+ 状态槽区 TLV 原样`。
 /// PC 只搬运不解析 `state_id` 语义——未知槽前向兼容（收进 <see cref="Slots"/> 不丢弃）。
 /// </summary>
 public sealed record PenStatusSnapshot(byte Status, byte Byte2, IReadOnlyList<PenStatusSlot> Slots)
 {
-    /// <summary>统一TX byte2 bit1-0：工作模式</summary>
-    public byte Mode => (byte)(Byte2 & 0x03);
+    /// <summary>统一TX byte2 bit1-0：充电状态枚举（V1.3，<see cref="PenChargeState"/>）</summary>
+    public byte ChargeState => (byte)(Byte2 & 0x03);
 
     /// <summary>统一TX byte2 bit2：状态源（0=软件态 / 1=硬件态三档开关）</summary>
     public byte Src => (byte)((Byte2 >> 2) & 0x01);
@@ -256,15 +276,15 @@ public sealed record PenStatusSnapshot(byte Status, byte Byte2, IReadOnlyList<Pe
     public PenStatusSlot? Find(byte id) => Slots.FirstOrDefault(s => s.Id == id);
 }
 
-/// <summary>`0x53` 快照的展示文本（mode/src/槽语义；未知 id 前向兼容）。</summary>
+/// <summary>`0x53` 快照的展示文本（充电枚举/src/槽语义；未知 id 前向兼容）。</summary>
 public static class PenStatusText
 {
-    public static string ModeText(byte mode) => mode switch
+    public static string ChargeStateText(byte chargeState) => chargeState switch
     {
-        0 => "待机(IDLE)",
-        1 => "识别(CAPTURING)",
-        2 => "扩音(AMPLIFYING)",
-        _ => $"0x{mode:X2}"
+        PenChargeState.None => "未充电",
+        PenChargeState.Charging => "充电中",
+        PenChargeState.Full => "已充满",
+        _ => $"0x{chargeState:X2}"
     };
 
     public static string SrcText(byte src) => src switch
