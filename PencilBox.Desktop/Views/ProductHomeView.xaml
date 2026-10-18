@@ -290,8 +290,9 @@
                     </Grid.RowDefinitions>
 
                     <!-- 命名配置行（pc-issues/04 提案 B：exe 同级 configs/keymap/，一配置一 JSON；出厂默认只读）。
-                         WrapPanel 弹性换行：窄窗按钮折行而非右裁（根 ScrollViewer 横向滚动已禁用） -->
-                    <WrapPanel Grid.Row="0" Margin="4" ItemHeight="32">
+                         WrapPanel 弹性换行：窄窗按钮折行而非右裁（根 ScrollViewer 横向滚动已禁用）。
+                         注意不得设 ItemHeight：ActionButton Height=32+Margin=4 实占 40，槽高 32 会削掉按钮底边 -->
+                    <WrapPanel Grid.Row="0" Margin="4">
                         <TextBlock Text="配置：" VerticalAlignment="Center" Foreground="#555"/>
                         <ComboBox ItemsSource="{Binding KeymapConfigNames}"
                                   SelectedItem="{Binding SelectedKeymapConfig}"
@@ -342,7 +343,7 @@
                                                                Visibility="{Binding IsEditable, Converter={StaticResource InvertBoolConverter}}"/>
                                                 </StackPanel>
                                                 <Button Content="＋ 事件" HorizontalAlignment="Right"
-                                                        Style="{StaticResource ActionButton}" Width="64" MinWidth="64"
+                                                        Style="{StaticResource ActionButton}" MinWidth="76"
                                                         IsEnabled="{Binding IsEditable}"
                                                         ToolTip="给这个键追加一条事件映射（如双击）"
                                                         Command="{Binding DataContext.AddKeymapRowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
@@ -482,8 +483,8 @@
                                                                 </TextBlock>
                                                             </Grid>
 
-                                                            <!-- 删行（可编辑配置的非 K2 行） -->
-                                                            <Button Grid.Column="3" Content="✕" Width="24" MinWidth="24" Height="24"
+                                                            <!-- 删行（可编辑配置的非 K2 行）；"×"用 U+00D7——"✕"(U+2715) 在默认字体下不渲染成空按钮 -->
+                                                            <Button Grid.Column="3" Content="×" FontSize="14" FontWeight="Bold" Width="24" MinWidth="24" Height="24"
                                                                     Margin="6,0,0,0" VerticalAlignment="Center"
                                                                     Style="{StaticResource ActionButton}"
                                                                     Visibility="{Binding IsDeletable, Converter={StaticResource BoolToVis}}"
@@ -512,7 +513,7 @@
                                         </Border>
                                         <TextBlock Text="出厂默认（只读）" Foreground="#B03A2E" FontSize="11"
                                                    Margin="8,0,0,0" VerticalAlignment="Center"
-                                                   Visibility="{Binding DataContext.IsFactoryConfigSelected, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource InvertBoolConverter}}"/>
+                                                   Visibility="{Binding DataContext.IsFactoryConfigSelected, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVis}}"/>
                                         <TextBlock Text="S1 三档开关：OFF=关机不上报；ON/SPK=扩音开关（切档上报右侧热键）" Foreground="#999"
                                                    FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"/>
                                     </StackPanel>
