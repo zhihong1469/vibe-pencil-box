@@ -12,22 +12,20 @@ using PencilBox.Core.Services;
 namespace PencilBox.Desktop.Converters;
 
 /// <summary>
-/// 布尔值反转转换器
+/// 布尔值反转转换器。<see cref="Convert"/> 必须返回 <see cref="Visibility"/> 而非 bool——
+/// bool 会被绑定管线判为类型不匹配而静默失败，目标属性回落默认值 Visible，徽标恒显示
+/// （「出厂默认（只读）」长期不消失的根因，2026-10-18 修）。
 /// </summary>
 public class InvertBooleanConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
-        if (value is bool b)
-            return !b;
-        return true;
+        return value is bool b && b ? Visibility.Collapsed : Visibility.Visible;
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
     {
-        if (value is bool b)
-            return !b;
-        return false;
+        return value is Visibility v && v != Visibility.Visible;
     }
 }
 

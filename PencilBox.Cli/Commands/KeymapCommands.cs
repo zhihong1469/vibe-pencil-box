@@ -284,9 +284,11 @@ public sealed class KeymapCommands
     }
 
     /// <summary>
-    /// `keymap apply [配置]`：`0x55` **整表下发**基站（探测→逐条写 RAM→切换表→提交 NVDS，两段式）。
-    /// 回执门控（2026-10-18 定版）：基站全链回执成功才把上位机当前配置切过去；未连接/未响应/中途失败一律保持原状。
-    /// 整表重发是有意的：设备表现状未知（可能已被其他表/来源改过），免对账；增量等 0x55 读侧落地后再议。
+    /// `keymap apply [配置]`：**本机立即生效**（当前配置即切换，K2/S1 触发键随之）+ `0x55`
+    /// **整表尽力下发**基站（探测→逐条写 RAM→切换表→提交 NVDS，两段式）。
+    /// 三改定版（2026-10-18）：回执门控会因"基站已生效但回执未上来"（终态丢失同族）造成两端不同步，
+    /// 且新表本就是出厂表备份、误切代价低——本机先切，下发仅作同步提示，未连接/未响应/失败只降级告警不回滚。
+    /// 整表重发是有意的：设备表现状未知（可能已被其他表/来源改过），免对账。
     /// 出厂默认也可 apply——语义=恢复设备默认表。
     /// </summary>
     public async Task<int> Apply(string? name)
@@ -299,30 +301,32 @@ public sealed class KeymapCommands
             ConsoleFormatter.Error($"配置不存在或不可读：{name}");
             return 1;
         }
-        if (!_keymapConfig.IsOpen)
-        {
-            ConsoleFormatter.Error("未连接基站（USB 命令通道）——生效需先连接接收器（GUI 连接或 `device connect`）");
-            return 1;
-        }
 
+        _store.SetCurrentName(name);
         var switchEntries = doc.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries.ToList();
         var userSwitchCount = switchEntries.Count(e => !KeymapRules.IsSwitchInternalRow(e.Mode));
-        ConsoleFormatter.Info($"正在下发「{name}」：全表 {doc.Entries.Count} 条 + 切换表 {userSwitchCount} 行" +
+
+        if (!_keymapConfig.IsOpen)
+        {
+            ConsoleFormatter.Warn($"已在本机生效「{name}」（识别/扩音触发键=K2/S1 行随之生效）；" +
+                                   "未连接基站（USB 命令通道）——基站未下发，连接后可再次 apply 补发");
+            return 0;
+        }
+
+        ConsoleFormatter.Info($"正在向基站下发「{name}」：全表 {doc.Entries.Count} 条 + 切换表 {userSwitchCount} 行" +
                                "（0x55 两段式：逐条写 RAM → 提交 NVDS）…");
 
         var report = await _keymapConfig.ApplyAsync(doc.Entries, switchEntries);
         if (report.AllOk)
         {
-            _store.SetCurrentName(name);
-            ConsoleFormatter.Success($"已下发并提交（{report.Written} 条）；上位机当前生效配置已切换为「{name}」" +
-                                     "（识别/扩音触发键=K2/S1 行随之生效）");
+            ConsoleFormatter.Success($"已下发并提交（{report.Written} 条）——上位机与基站均已生效「{name}」");
             return 0;
         }
         if (!report.ProbeResponded)
-            ConsoleFormatter.Error("基站未响应（0x55 未开通/旧固件）——未下发成功，上位机保持原状");
+            ConsoleFormatter.Warn($"基站未响应（0x55 未开通/旧固件）——已仅上位机生效「{name}」，可稍后补发");
         else
-            ConsoleFormatter.Error($"{report.Error}——未下发成功，上位机保持原状");
-        return 1;
+            ConsoleFormatter.Warn($"{report.Error}——已仅上位机生效「{name}」，可稍后补发");
+        return 0;
     }
 
     // ===== 解析辅助已归位 Core：KeymapTextParser（CLI/测试共用，与 KeymapFormatter 成对） =====

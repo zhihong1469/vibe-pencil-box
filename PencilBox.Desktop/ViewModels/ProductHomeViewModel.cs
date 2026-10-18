@@ -192,11 +192,8 @@ public partial class ProductHomeViewModel : ObservableObject
     [ObservableProperty]
     private string _workStateText = "待事件";
 
-    /// <summary>工作状态机（识别 × 扩音档两轴；触发键绑定跟随「已应用」配置）</summary>
+    /// <summary>工作状态机（识别 × 扩音档两轴；触发键绑定跟随当前选中配置——本机立即生效口径）</summary>
     private PenWorkStateTracker _workStateTracker = null!;
-
-    /// <summary>触发键绑定跟随的「已应用」配置（生效回执成功才推进；仅选择配置不推进——回执门控）</summary>
-    private string _appliedKeymapName = "";
 
     // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
     [ObservableProperty]
@@ -246,6 +243,7 @@ public partial class ProductHomeViewModel : ObservableObject
         try { _keymapConfigStore.SetCurrentName(value ?? _keymapConfigStore.FactoryName); }
         catch (Exception ex) { _logger.LogWarning(ex, "记录当前 Keymap 配置失败"); }
         LoadSelectedConfigIntoCards();
+        RebuildWorkStateTracker(value);   // 本机立即生效：触发键绑定跟随选中（0x55 下发仅尽力同步基站）
         NotifyKeymapMutateCommands();
     }
 
@@ -301,10 +299,9 @@ public partial class ProductHomeViewModel : ObservableObject
         }
 
         // 笔端工作状态自管（产品落地 §三，2026-10-18）：全局键盘钩子被动监听（不吞键）。
-        // 触发键绑定跟随「已下发基站且回执成功」的配置（回执门控，2026-10-18 定版）；
+        // 触发键绑定跟随当前选中配置（本机立即生效口径，2026-10-18 三改——回执会丢、门控反致两端不同步）；
         // 启动时以上次记录的当前配置为最优近似（固件真值要等 0x55 读侧落地才可对账）。
-        _appliedKeymapName = SelectedKeymapConfig ?? _keymapConfigStore.FactoryName;
-        _workStateTracker = BuildWorkStateTracker(_appliedKeymapName);
+        _workStateTracker = BuildWorkStateTracker(SelectedKeymapConfig);
         WorkStateText = _workStateTracker.DisplayText;
         _keyboardHook.KeyDown += OnWorkStateKeyDown;
         _keyboardHook.Start();
@@ -1139,7 +1136,7 @@ public partial class ProductHomeViewModel : ObservableObject
     private void RenameKeymapConfig()
     {
         var name = PromptDialog.Show(Application.Current.MainWindow, "重命名配置",
-            $"把「{SelectedKeymapConfig}」改名为：", SelectedKeymapConfig);
+            $"把「{SelectedKeymapConfig}」改名为：", SelectedKeymapConfig ?? "");
         if (string.IsNullOrWhiteSpace(name) || string.Equals(name, SelectedKeymapConfig, StringComparison.Ordinal))
             return;
 
@@ -1207,9 +1204,10 @@ public partial class ProductHomeViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 「生效」：`0x55` **整表下发**基站（两段式），**基站回执成功才在上位机生效**（2026-10-18 定版——
-    /// 未连接/未响应/中途失败一律保持原状）。选中出厂默认亦可生效=恢复设备默认表。
-    /// 整表重发是有意的：设备表现状未知，覆盖式下发免对账。
+    /// 「生效」：**本机已随选中即时生效**（K2/S1 触发键绑定跟随当前配置），此处把当前表 `0x55`
+    /// **整表尽力下发**基站（2026-10-18 三改——回执门控会因"基站已生效但回执丢失"造成两端不同步；
+    /// 新表本就是出厂表备份，误切代价低）。未连接/未响应/失败只降级提示，不回滚本机。
+    /// 选中出厂默认亦可生效=恢复设备默认表。整表重发是有意的：设备表现状未知，覆盖式下发免对账。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanApplyKeymapConfig))]
     private async Task ApplyKeymapConfigAsync()
@@ -1226,33 +1224,30 @@ public partial class ProductHomeViewModel : ObservableObject
             StatusMessage = $"配置不存在或不可读：{name}";
             return;
         }
-        if (!_keymapConfig.IsOpen)
-        {
-            StatusMessage = "未连接基站——生效需先连接接收器（基站回执成功后上位机才同步生效）";
-            return;
-        }
 
         var entries = doc.Entries.ToList();
         var switchEntries = (doc.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries.ToList()).ToList();
-        StatusMessage = $"正在下发基站（0x55 全表 {entries.Count} 条 + 提交）…";
+
+        if (!_keymapConfig.IsOpen)
+        {
+            StatusMessage = $"已在本机生效「{name}」；未连接基站——基站未下发，连接后可再按「生效」补发";
+            return;
+        }
+
+        StatusMessage = $"已在本机生效「{name}」；正在下发基站（0x55 全表 {entries.Count} 条 + 提交）…";
         try
         {
             var report = await _keymapConfig.ApplyAsync(entries, switchEntries);
             if (report.AllOk)
-            {
-                _appliedKeymapName = name;
-                RebuildWorkStateTracker(name);
-                _keymapConfigStore.SetCurrentName(name);
-                StatusMessage = $"已下发基站（{report.Written} 条 + NVDS 提交），上位机已同步生效「{name}」";
-            }
+                StatusMessage = $"已下发基站（{report.Written} 条 + NVDS 提交）——上位机与基站均已生效「{name}」";
             else if (!report.ProbeResponded)
-                StatusMessage = "基站未响应（0x55 未开通/旧固件）——本次未生效（上位机保持原状）";
+                StatusMessage = $"已在本机生效「{name}」；基站未响应（0x55 未开通/旧固件）——仅上位机生效";
             else
-                StatusMessage = $"基站下发失败：{report.Error}——本次未生效（上位机保持原状）";
+                StatusMessage = $"已在本机生效「{name}」；基站下发失败：{report.Error}（可稍后重试补发）";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"下发异常：{ex.Message}——本次未生效（上位机保持原状）";
+            StatusMessage = $"已在本机生效「{name}」；下发异常：{ex.Message}";
         }
     }
 
@@ -1269,7 +1264,7 @@ public partial class ProductHomeViewModel : ObservableObject
         MainThreadHelper.EnsureOnMainThread(() => WorkStateText = tracker.DisplayText);
     }
 
-    /// <summary>重建触发键绑定（只在「生效」回执成功后调用——绑定跟随已应用配置，不随选择切换）。</summary>
+    /// <summary>重建触发键绑定并刷新状态卡（本机立即生效口径：跟随当前选中配置，选择即生效）。</summary>
     private void RebuildWorkStateTracker(string? name)
     {
         _workStateTracker = BuildWorkStateTracker(name);

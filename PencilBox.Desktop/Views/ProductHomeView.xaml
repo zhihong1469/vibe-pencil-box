@@ -313,13 +313,13 @@
                                 ToolTip="删除当前配置（出厂默认不可删）"/>
                         <Button Content="生效" Command="{Binding ApplyKeymapConfigCommand}"
                                 Style="{StaticResource ActionButton}" Margin="8,0,0,0"
-                                ToolTip="整表下发基站（0x55 两段式），基站回执成功后上位机才同步生效；选中出厂默认=恢复设备默认表；未连接/未响应时不生效"/>
+                                ToolTip="本机已随选中即时生效（K2/S1 触发键跟随当前配置），此键再把当前表整表下发基站（0x55 两段式）尽力同步；选中出厂默认=恢复设备默认表；未连接/未响应时仅本机生效"/>
                         <TextBlock Text="{Binding KeymapRows.Count, StringFormat=条目数: {0}}"
                                    VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666"/>
                     </WrapPanel>
 
-                    <!-- 设备下发回归（2026-10-18）：「生效」=上位机本地生效 + 0x55 下发基站（探测先行，
-                         旧固件无应答自动降级"仅上位机生效"并提示）；老 0xA0"阶段 6"死协议不再复活 -->
+                    <!-- 设备下发回归（2026-10-18 三改）：选表=本机立即生效；「生效」=整表尽力下发基站 0x55，
+                         未连接/未响应/失败只降级提示不回滚（回执会丢，门控反致两端不同步）；老 0xA0"阶段 6"死协议不再复活 -->
 
                     <!-- 一键一卡（出厂默认整卡只读；行实例与 KeymapRows 共享，编辑即时互通） -->
                     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" MaxHeight="430" Margin="4">
@@ -354,7 +354,7 @@
                                                     <DataTemplate>
                                                         <Grid Margin="0,3,0,0">
                                                             <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="82"/>
+                                                                <ColumnDefinition Width="96"/>
                                                                 <ColumnDefinition Width="96"/>
                                                                 <ColumnDefinition Width="*"/>
                                                                 <ColumnDefinition Width="30"/>
