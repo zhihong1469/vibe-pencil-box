@@ -746,6 +746,7 @@ public class CompanyCommands
             Src = s.Src,
             DevState = s.Find(PenStateSlotId.DevState)?.Value,
             BatteryPercent = s.Find(PenStateSlotId.Batt)?.Value,
+            RssiDbm = s.RssiDbm,
             SlotCount = s.Slots.Count
         });
     }

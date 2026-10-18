@@ -172,6 +172,32 @@ public class CompanyPenStatusTests
     }
 
     [Fact]
+    public void TryParsePenStatusResp_RssiSlot_DecodesSignedDbm()
+    {
+        // 协议补充/05 §9 帧示例：STATUS=00 BYTE2=0x40 + [01 00][02 5F][03 C4]（S=3，RSSI -60dBm）
+        var ok = _codec.TryParsePenStatusResp(
+            new byte[] { 0x00, 0x40, 0x01, 0x00, 0x02, 0x5F, 0x03, 0xC4 }, out var s);
+
+        Assert.True(ok);
+        Assert.Equal(3, s.Slots.Count);
+        Assert.Equal(PenStateSlotId.Rssi, s.Slots[2].Id);
+        Assert.Equal((sbyte)-60, s.RssiDbm);
+        Assert.Equal("RSSI=-60dBm", PenStatusText.SlotText(s.Slots[2]));
+    }
+
+    [Fact]
+    public void TryParsePenStatusResp_NoRssiSlot_RssiDbmNull()
+    {
+        // 旧基站固件 / 0x03 未收到（TLV 动态退化）：无槽 → RssiDbm=null，消费方保持原值
+        var ok = _codec.TryParsePenStatusResp(
+            new byte[] { 0x00, 0x04, 0x01, 0x00, 0x02, 0x5F }, out var s);
+
+        Assert.True(ok);
+        Assert.Null(s.RssiDbm);
+        Assert.Equal(2, s.Slots.Count);
+    }
+
+    [Fact]
     public void SlotText_BattCharging_AnnotatedUnreliable()
     {
         // 充电中灰显语义（指挥官 10-18 定版）：% 数值照出 + 附虚高提示（灰显的 CLI 形态）；充满/未充电不标注

@@ -890,7 +890,7 @@ public partial class ProductHomeViewModel : ObservableObject
     private void ApplyPenStatus(PenStatusSnapshot s, string source)
     {
         PenStatusMetaText = $"0x53 {source}　BYTE2=0x{s.Byte2:X2}（chg={s.ChargeState} src={s.Src}）";
-        HasPenTelemetry = true;   // 0x53 已通：卡片亮起（RSSI 除外，仍待 0x42）
+        HasPenTelemetry = true;   // 0x53 已通：卡片亮起（RSSI 走 0x03 槽，旧基站固件无槽时沿 0x42 旧路）
 
         if (s.Status == PenStatusStatus.PenNotConnected)
         {
@@ -911,6 +911,11 @@ public partial class ProductHomeViewModel : ObservableObject
         var batt = s.Find(PenStateSlotId.Batt);
         if (batt != null)
             BatteryLevel = batt.Value;
+
+        // RSSI 槽 0x03（协议补充/05 §9，2026-10-18 采纳）：dBm 补码原值，触发线④ ≤5s 跟手；
+        // 旧基站固件无此槽 → 不覆盖（保留 0x42 旧路值），避免把信号条打回 0
+        if (s.RssiDbm is { } rssi)
+            Rssi = rssi;
 
         var dev = s.Find(PenStateSlotId.DevState);
         // DEV_STATE 槽：0x00=正常 / 0x01=休眠（专业叫法，随统一TX §15.2）；未知值原样露出（新态前向兼容，不误标正常）

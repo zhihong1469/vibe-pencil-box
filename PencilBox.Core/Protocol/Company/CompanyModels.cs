@@ -217,14 +217,21 @@ public static class PairClearStatus
     public const byte SessionBusy = 0xFF;
 }
 
-/// <summary>统一TX 状态槽 `state_id`（V1.2 §15.2；未知 id 前向兼容原样透传）</summary>
+/// <summary>`0x53` 状态槽 `state_id`（mini-TLV；未知 id 前向兼容原样透传）</summary>
 public static class PenStateSlotId
 {
-    /// <summary>`DEV_STATE`：笔端设备状态（0=正常 / 1=休眠，升级等后续扩展）</summary>
+    /// <summary>`DEV_STATE`：笔端设备状态（0=正常 / 1=休眠，升级等后续扩展；V1.3 值域挂起恒 0）</summary>
     public const byte DevState = 0x01;
 
     /// <summary>`BATT`：电池电量（0-100，%）</summary>
     public const byte Batt = 0x02;
+
+    /// <summary>
+    /// `RSSI`：0x53 通道自有槽（2026-10-18 采纳，协议补充/05 §9）——基站本地测量的对笔 RSSI，
+    /// value=1B dBm 补码原值（-60dBm→0xC4）。⚠️ 与统一TX 侧历史空鼠槽 0x03 字面撞号、无继承关系；
+    /// 旧基站固件无此槽（TLV 动态退化），消费方以"有槽才更新"兜底。
+    /// </summary>
+    public const byte Rssi = 0x03;
 }
 
 /// <summary>`DEV_STATE` 取值（统一TX §15.2 专业叫法；PC 显示即 正常/休眠）</summary>
@@ -274,6 +281,9 @@ public sealed record PenStatusSnapshot(byte Status, byte Byte2, IReadOnlyList<Pe
 
     /// <summary>按 id 取槽（无则 null）</summary>
     public PenStatusSlot? Find(byte id) => Slots.FirstOrDefault(s => s.Id == id);
+
+    /// <summary>0x03 槽 RSSI（dBm 负值；无槽=null——旧基站固件/连接后首次检查前，消费方保持原值）</summary>
+    public sbyte? RssiDbm => Find(PenStateSlotId.Rssi) is { } slot ? (sbyte)slot.Value : null;
 }
 
 /// <summary>`0x53` 快照的展示文本（充电枚举/src/槽语义；未知 id 前向兼容）。</summary>
@@ -307,6 +317,7 @@ public static class PenStatusText
         PenStateSlotId.Batt => chargeState == PenChargeState.Charging
             ? $"BATT={slot.Value}%（充电中·电压虚高，读数仅供参考）"
             : $"BATT={slot.Value}%",
+        PenStateSlotId.Rssi => $"RSSI={(sbyte)slot.Value}dBm",
         _ => $"槽 0x{slot.Id:X2}=0x{slot.Value:X2}（未知 id，原样透传）"
     };
 }
