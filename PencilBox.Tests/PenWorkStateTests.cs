@@ -211,8 +211,9 @@ public class PenWorkStateTests
     [Fact]
     public void TryParseMeta_ParsesStatusCountMaxVersion()
     {
+        // 6B 精确长：[PARAM=01][STATUS][count][max][ver2B]
         Assert.True(KeymapConfigFrames.TryParseMeta(
-            [0x01, 0x00, 0x03, 0x10, 0x00, 0x01, 0xFF],
+            [0x01, 0x00, 0x03, 0x10, 0x00, 0x01],
             out var status, out var count, out var max, out var version));
 
         Assert.Equal(0x00, status);
@@ -221,8 +222,8 @@ public class PenWorkStateTests
         Assert.Equal(1, version);
 
         // PARAM 不对 / 长度不足 → false
-        Assert.False(KeymapConfigFrames.TryParseMeta([0x02, 0x00, 0x03, 0x10, 0x00, 0x01, 0xFF], out _, out _, out _, out _));
-        Assert.False(KeymapConfigFrames.TryParseMeta([0x01, 0x00], out _, out _, out _, out _));
+        Assert.False(KeymapConfigFrames.TryParseMeta([0x02, 0x00, 0x03, 0x10, 0x00, 0x01], out _, out _, out _, out _));
+        Assert.False(KeymapConfigFrames.TryParseMeta([0x01, 0x00, 0x03, 0x10, 0x00], out _, out _, out _, out _));
     }
 
     [Fact]

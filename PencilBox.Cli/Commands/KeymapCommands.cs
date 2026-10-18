@@ -5,6 +5,7 @@
 // </copyright>
 using Microsoft.Extensions.Logging;
 using PencilBox.Cli.Output;
+using PencilBox.Core.Fsm;
 using PencilBox.Core.Models;
 using PencilBox.Core.Protocol;
 using PencilBox.Core.Services;
@@ -13,18 +14,20 @@ namespace PencilBox.Cli.Commands;
 
 /// <summary>
 /// `keymap` 域——命名 Keymap 配置的本地管理（pc-issues/04 提案 A/B 的 CLI-first 落地，2026-10-08）。
-/// 纯本地文件操作（`&lt;exe 同级&gt;/configs/keymap/`），不碰设备；设备读写待 0x55 三端裁决
-/// （按键表=PARAM 01/02，S1 切换表=PARAM 05/06，pc-issues/05）。
+/// 本地文件操作（`&lt;exe 同级&gt;/configs/keymap/`）；`apply` 子命令走 `0x55` 整表下发基站
+/// （回执门控：下发成功才切上位机当前配置，2026-10-18 定版）。
 /// 存储层保存/加载即按 K1→K6 规范排序（<see cref="KeymapSorting"/>），故写后索引可能与命令中给出的不同。
 /// </summary>
 public sealed class KeymapCommands
 {
     private readonly IKeymapConfigStore _store;
+    private readonly CompanyKeymapConfigService _keymapConfig;
     private readonly ILogger<KeymapCommands> _logger;
 
-    public KeymapCommands(IKeymapConfigStore store, ILogger<KeymapCommands> logger)
+    public KeymapCommands(IKeymapConfigStore store, CompanyKeymapConfigService keymapConfig, ILogger<KeymapCommands> logger)
     {
         _store = store;
+        _keymapConfig = keymapConfig;
         _logger = logger;
     }
 
@@ -278,6 +281,48 @@ public sealed class KeymapCommands
         _store.SetCurrentName(name);
         ConsoleFormatter.Success($"当前配置已切换为「{name}」");
         return 0;
+    }
+
+    /// <summary>
+    /// `keymap apply [配置]`：`0x55` **整表下发**基站（探测→逐条写 RAM→切换表→提交 NVDS，两段式）。
+    /// 回执门控（2026-10-18 定版）：基站全链回执成功才把上位机当前配置切过去；未连接/未响应/中途失败一律保持原状。
+    /// 整表重发是有意的：设备表现状未知（可能已被其他表/来源改过），免对账；增量等 0x55 读侧落地后再议。
+    /// 出厂默认也可 apply——语义=恢复设备默认表。
+    /// </summary>
+    public async Task<int> Apply(string? name)
+    {
+        _store.Initialize();
+        name = Resolve(name);
+        var doc = _store.Load(name);
+        if (doc == null)
+        {
+            ConsoleFormatter.Error($"配置不存在或不可读：{name}");
+            return 1;
+        }
+        if (!_keymapConfig.IsOpen)
+        {
+            ConsoleFormatter.Error("未连接基站（USB 命令通道）——生效需先连接接收器（GUI 连接或 `device connect`）");
+            return 1;
+        }
+
+        var switchEntries = doc.SwitchEntries ?? KeymapFactoryDefault.SwitchEntries.ToList();
+        var userSwitchCount = switchEntries.Count(e => !KeymapRules.IsSwitchInternalRow(e.Mode));
+        ConsoleFormatter.Info($"正在下发「{name}」：全表 {doc.Entries.Count} 条 + 切换表 {userSwitchCount} 行" +
+                               "（0x55 两段式：逐条写 RAM → 提交 NVDS）…");
+
+        var report = await _keymapConfig.ApplyAsync(doc.Entries, switchEntries);
+        if (report.AllOk)
+        {
+            _store.SetCurrentName(name);
+            ConsoleFormatter.Success($"已下发并提交（{report.Written} 条）；上位机当前生效配置已切换为「{name}」" +
+                                     "（识别/扩音触发键=K2/S1 行随之生效）");
+            return 0;
+        }
+        if (!report.ProbeResponded)
+            ConsoleFormatter.Error("基站未响应（0x55 未开通/旧固件）——未下发成功，上位机保持原状");
+        else
+            ConsoleFormatter.Error($"{report.Error}——未下发成功，上位机保持原状");
+        return 1;
     }
 
     // ===== 解析辅助已归位 Core：KeymapTextParser（CLI/测试共用，与 KeymapFormatter 成对） =====

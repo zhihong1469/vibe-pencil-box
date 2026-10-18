@@ -313,7 +313,7 @@
                                 ToolTip="删除当前配置（出厂默认不可删）"/>
                         <Button Content="生效" Command="{Binding ApplyKeymapConfigCommand}"
                                 Style="{StaticResource ActionButton}" Margin="8,0,0,0"
-                                ToolTip="非默认表：上位机立即生效 + 下发基站（0x55；基站未响应时仅上位机生效并提示）"/>
+                                ToolTip="整表下发基站（0x55 两段式），基站回执成功后上位机才同步生效；选中出厂默认=恢复设备默认表；未连接/未响应时不生效"/>
                         <TextBlock Text="{Binding KeymapRows.Count, StringFormat=条目数: {0}}"
                                    VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666"/>
                     </WrapPanel>

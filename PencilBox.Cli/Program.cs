@@ -105,7 +105,7 @@ public class Program
                 "dsp" => await DispatchDspAsync(sp, args.Skip(1).ToArray()),
                 "config" or "cfg" => await DispatchConfigAsync(sp, args.Skip(1).ToArray()),
                 "company" or "cmp" => await DispatchCompanyAsync(sp, args.Skip(1).ToArray()),
-                "keymap" or "km" => DispatchKeymap(sp, args.Skip(1).ToArray()),
+                "keymap" or "km" => await DispatchKeymapAsync(sp, args.Skip(1).ToArray()),
                 "workstate" or "ws" => DispatchWorkState(sp, args.Skip(1).ToArray()),
                 "help" or "--help" or "-h" => PrintHelp(),
                 "version" or "--version" => PrintVersion(),
@@ -122,7 +122,7 @@ public class Program
     }
 
     // === Keymap ===
-    private static int DispatchKeymap(IServiceProvider sp, string[] args)
+    private static async Task<int> DispatchKeymapAsync(IServiceProvider sp, string[] args)
     {
         var cmd = sp.GetRequiredService<KeymapCommands>();
         var action = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
@@ -168,6 +168,9 @@ public class Program
 
             "use" => cmd.Use(
                 GetPositional(rest, 0) ?? throw new ArgumentException("缺少配置名：keymap use <名>")),
+
+            // apply [配置名]：0x55 整表下发（回执成功才切上位机当前配置；出厂默认=恢复设备默认表）
+            "apply" => await cmd.Apply(GetPositional(rest, 0)),
 
             _ => UnknownCommand($"keymap {action}")
         };
@@ -798,6 +801,8 @@ public class Program
                      set <名> --index N [--key K3] [--event click]
                          [--action keyboard] [--code 0x4B] [--code-hi 0] [--mod alt]
                                                                    改/追加条目（存储按 K1→K6 规范排序，索引会变）
+                     apply [配置]                                  0x55 整表下发基站（回执成功才切上位机当前配置；
+                                                                   出厂默认=恢复设备默认表；需先连接接收器）
                      switch <名> --mode 1|2 [--code 0x6A] [--mod alt]
                                                                    改 S1 切换表档位热键（ON/SPK=扩音开关；IDLE 内部行拒改）
                      remove <名> --index N                         删除条目

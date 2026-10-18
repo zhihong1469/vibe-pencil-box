@@ -72,12 +72,12 @@ public static class KeymapConfigFrames
         return true;
     }
 
-    /// <summary>元信息应答：`[01][STATUS][count][max_entries][ver_hi][ver_lo]`（探测回包）。</summary>
+    /// <summary>元信息应答：`[01][STATUS][count][max_entries][ver_hi][ver_lo]`（探测回包，共 6B）。</summary>
     public static bool TryParseMeta(ReadOnlySpan<byte> data, out byte status, out int count, out int maxEntries, out int version)
     {
         status = 0;
         count = maxEntries = version = 0;
-        if (data.Length < 7 || data[0] != ParamReadEntry)
+        if (data.Length < 6 || data[0] != ParamReadEntry)
             return false;
         status = data[1];
         count = data[2];
