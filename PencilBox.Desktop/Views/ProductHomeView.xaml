@@ -354,13 +354,23 @@
                                             <ItemsControl ItemsSource="{Binding Rows}">
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate>
+                                                        <!-- 出厂默认整行 45% 透明度=不可选浅灰提示：显式声明，不依赖主题模板的禁用视觉（曾时灵时不灵），Kx/S1 同一口径 -->
                                                         <Grid Margin="0,3,0,0">
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="96"/>
-                                                                <ColumnDefinition Width="96"/>
-                                                                <ColumnDefinition Width="*"/>
-                                                                <ColumnDefinition Width="30"/>
-                                                            </Grid.ColumnDefinitions>
+                                                            <Grid.Style>
+                                                                <Style TargetType="Grid">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsEditable}" Value="False">
+                                                                            <Setter Property="Opacity" Value="0.45"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Grid.Style>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="96"/>
+                                                            <ColumnDefinition Width="96"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="30"/>
+                                                        </Grid.ColumnDefinitions>
 
                                                             <!-- 事件：K2 行=会话边界契约锁定显示；其余可改 -->
                                                             <Grid Grid.Column="0" VerticalAlignment="Center">
@@ -531,6 +541,10 @@
                                                             <!-- IDLE 行=基站内部行，不进快捷键 UI（配置内保留保真固件表，0x55 逐槽编址） -->
                                                             <DataTrigger Binding="{Binding IsInternalRow}" Value="True">
                                                                 <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                            <!-- 出厂默认整行 45% 透明度（与 Kx 行同口径的不可选浅灰提示） -->
+                                                            <DataTrigger Binding="{Binding EditorEnabled}" Value="False">
+                                                                <Setter Property="Opacity" Value="0.45"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
