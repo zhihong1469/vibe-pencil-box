@@ -289,8 +289,9 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- 命名配置行（pc-issues/04 提案 B：exe 同级 configs/keymap/，一配置一 JSON；出厂默认只读） -->
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="4">
+                    <!-- 命名配置行（pc-issues/04 提案 B：exe 同级 configs/keymap/，一配置一 JSON；出厂默认只读）。
+                         WrapPanel 弹性换行：窄窗按钮折行而非右裁（根 ScrollViewer 横向滚动已禁用） -->
+                    <WrapPanel Grid.Row="0" Margin="4" ItemHeight="32">
                         <TextBlock Text="配置：" VerticalAlignment="Center" Foreground="#555"/>
                         <ComboBox ItemsSource="{Binding KeymapConfigNames}"
                                   SelectedItem="{Binding SelectedKeymapConfig}"
@@ -303,10 +304,10 @@
                                 ToolTip="把当前表格内容存为新配置（可对出厂默认另存后修改）"/>
                         <Button Content="保存" Command="{Binding SaveKeymapConfigCommand}"
                                 Style="{StaticResource ActionButton}"
-                                ToolTip="把表格修改保存回当前配置（出厂默认只读，不可保存）"/>
+                                ToolTip="把表格修改保存回当前配置（出厂默认只读不可保存；命名配置可直接保存）"/>
                         <Button Content="改名" Command="{Binding RenameKeymapConfigCommand}"
                                 Style="{StaticResource ActionButton}" Margin="8,0,0,0"
-                                ToolTip="重命名当前配置（出厂默认只读）"/>
+                                ToolTip="重命名当前配置（出厂默认不可改名）"/>
                         <Button Content="删除" Command="{Binding DeleteKeymapConfigCommand}"
                                 Style="{StaticResource ActionButton}"
                                 ToolTip="删除当前配置（出厂默认不可删）"/>
@@ -315,7 +316,7 @@
                                 ToolTip="非默认表：上位机立即生效 + 下发基站（0x55；基站未响应时仅上位机生效并提示）"/>
                         <TextBlock Text="{Binding KeymapRows.Count, StringFormat=条目数: {0}}"
                                    VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#666"/>
-                    </StackPanel>
+                    </WrapPanel>
 
                     <!-- 设备下发回归（2026-10-18）：「生效」=上位机本地生效 + 0x55 下发基站（探测先行，
                          旧固件无应答自动降级"仅上位机生效"并提示）；老 0xA0"阶段 6"死协议不再复活 -->
@@ -397,10 +398,10 @@
 
                                                             <!-- 动作编辑区：按动作类型切换（键盘=捕获 / 消费键·鼠标键=下拉 / 其他=CLI 指路） -->
                                                             <Grid Grid.Column="2" IsEnabled="{Binding IsEditable}">
-                                                                <!-- 键盘动作：捕获框 + 修饰键 + 专用键 -->
-                                                                <StackPanel Orientation="Horizontal">
-                                                                    <StackPanel.Style>
-                                                                        <Style TargetType="StackPanel">
+                                                                <!-- 键盘动作：捕获框 + 修饰键 + 专用键（WrapPanel 弹性换行，窄窗不右裁） -->
+                                                                <WrapPanel>
+                                                                    <WrapPanel.Style>
+                                                                        <Style TargetType="WrapPanel">
                                                                             <Setter Property="Visibility" Value="Collapsed"/>
                                                                             <Style.Triggers>
                                                                                 <DataTrigger Binding="{Binding ActionType}" Value="{x:Static proto:KeyActionType.Keyboard}">
@@ -408,7 +409,7 @@
                                                                                 </DataTrigger>
                                                                             </Style.Triggers>
                                                                         </Style>
-                                                                    </StackPanel.Style>
+                                                                    </WrapPanel.Style>
                                                                     <ctrl:KeyCaptureBox Width="190" VerticalAlignment="Center" Margin="0,0,8,0"
                                                                         CapturedModifier="{Binding Modifier, Mode=TwoWay}"
                                                                         CapturedUsage="{Binding CodeLo, Mode=TwoWay}"
@@ -419,11 +420,11 @@
                                                                     <CheckBox Content="Alt" IsChecked="{Binding HasAlt}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                                                     <TextBlock Text="专用键" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#555"
                                                                                ToolTip="物理键盘不存在的保留键（F13~F16），系统零冲突——点它即设为该键值"/>
-                                                                    <ComboBox Width="168" VerticalAlignment="Center"
-                                                                              ItemsSource="{x:Static vm:KeymapRowViewModel.DedicatedKeys}"
-                                                                              DisplayMemberPath="Name"
-                                                                              SelectedItem="{Binding SelectedDedicatedKey, Mode=TwoWay}"/>
-                                                                </StackPanel>
+                                                    <ComboBox Width="168" VerticalAlignment="Center"
+                                                              ItemsSource="{x:Static vm:KeymapRowViewModel.DedicatedKeys}"
+                                                              DisplayMemberPath="Name"
+                                                              SelectedItem="{Binding SelectedDedicatedKey, Mode=TwoWay}"/>
+                                                                </WrapPanel>
                                                                 <!-- 消费键：下拉预设 -->
                                                                 <StackPanel Orientation="Horizontal">
                                                                     <StackPanel.Style>
@@ -541,8 +542,8 @@
                                                            ToolTip="{Binding InternalLockTip}"/>
                                                 <TextBlock Grid.Column="1" Text="键盘" VerticalAlignment="Center" Foreground="#555"/>
 
-                                                <!-- 键值编辑（与按键行键盘动作同交互；切换表为单码字节，无消费键/鼠标键预设） -->
-                                                <StackPanel Grid.Column="2" Orientation="Horizontal" IsEnabled="{Binding EditorEnabled}">
+                                                <!-- 键值编辑（与按键行键盘动作同交互；切换表为单码字节，无消费键/鼠标键预设；WrapPanel 弹性换行） -->
+                                                <WrapPanel Grid.Column="2" IsEnabled="{Binding EditorEnabled}">
                                                     <ctrl:KeyCaptureBox Width="190" VerticalAlignment="Center" Margin="0,0,8,0"
                                                         CapturedModifier="{Binding Modifier, Mode=TwoWay}"
                                                         CapturedUsage="{Binding CodeLo, Mode=TwoWay}"
@@ -557,7 +558,7 @@
                                                               ItemsSource="{x:Static vm:KeymapRowViewModel.DedicatedKeys}"
                                                               DisplayMemberPath="Name"
                                                               SelectedItem="{Binding SelectedDedicatedKey, Mode=TwoWay}"/>
-                                                </StackPanel>
+                                                </WrapPanel>
                                             </Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
