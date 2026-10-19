@@ -41,11 +41,12 @@ public static class FeatureCatalog
             CliDomains: ["serial"]),
 
         // 动作库键盘族（13 号，2026-10-19 落地）：纯软件域第一户——零设备依赖，
-        // "软触发单功能发行版"（指挥官愿景）将来只留此模块。
+        // "连点器单功能发行版"（指挥官愿景）将来只留此模块。
+        // UI 名 2026-10-19 指挥官定名"连点器"（键盘+鼠标族统称）；CLI 域名 softtrigger 不变。
         new FeatureDescriptor(
             Id: "softtrigger",
-            Name: "软触发（键盘动作族）",
-            Description: "专用键 F17~F24 触发键盘序列回放（连点/热键编排；纯上位机软件，不插设备也全功能）",
+            Name: "连点器（键盘族）",
+            Description: "全键盘任意键±修饰触发键盘序列回放/连发（纯上位机软件，不插设备也全功能）",
             DefaultEnabled: true,
             CliDomains: ["softtrigger"]),
     ];

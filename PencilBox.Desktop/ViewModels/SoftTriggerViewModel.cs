@@ -36,7 +36,7 @@ public partial class SoftTriggerViewModel : ObservableObject
     public ObservableCollection<SoftTriggerEvent> Events { get; } = [];
 
     [ObservableProperty]
-    private string _lastMessage = "点右上角「＋ 新建软触发」创建第一个；触发键=全键盘池±修饰（F13~F16 工作状态保留），防回环由动态预留律把关。";
+    private string _lastMessage = "点右上角「＋ 新建连点器」创建第一个；触发键=全键盘池±修饰（F13~F16 工作状态保留），防回环由动态预留律把关。";
 
     public bool FeatureEnabled => _toggles.IsEnabled("softtrigger");
 
@@ -44,7 +44,7 @@ public partial class SoftTriggerViewModel : ObservableObject
     public bool EngineRunning => FeatureEnabled && _engine.IsRunning;
 
     public string EngineStatusText =>
-        !FeatureEnabled ? "功能已停用（功能控制台或 CLI feature on softtrigger 恢复）"
+        !FeatureEnabled ? "已停用——打开页内总开关（或 CLI feature on softtrigger）恢复"
         : _engine.IsRunning ? "运行中——全键盘池监听已就位，启用定义即生效"
         : "已停机";
 
@@ -70,13 +70,13 @@ public partial class SoftTriggerViewModel : ObservableObject
 
     // ===== 新建 / 编辑（弹窗编排，v2） =====
 
-    /// <summary>右上角「＋ 新建软触发」：弹编辑对话框 → 保存落盘 → 列表顶部生长。</summary>
+    /// <summary>右上角「＋ 新建连点器」：弹编辑对话框 → 保存落盘 → 列表顶部生长。</summary>
     [RelayCommand]
     private void OpenNew()
     {
         if (!FeatureEnabled)
         {
-            LastMessage = "软触发功能已停用——先在仪表盘「功能控制台」或 CLI feature on softtrigger 恢复";
+            LastMessage = "连点器已停用——先开页内「总开关」（或功能控制台 / CLI feature on softtrigger）";
             return;
         }
         OpenDialog(editing: null);
@@ -172,9 +172,33 @@ public partial class SoftTriggerViewModel : ObservableObject
             Definitions.Add(new SoftTriggerItemViewModel(def));
 
         OnPropertyChanged(nameof(FeatureEnabled));
+        OnPropertyChanged(nameof(MasterEnabled));
         OnPropertyChanged(nameof(EngineRunning));
         OnPropertyChanged(nameof(EngineStatusText));
         OnPropertyChanged(nameof(EmptyHintVisibility));
+    }
+
+    // ===== 总开关（页上直控，2026-10-19 指挥官目验反馈） =====
+
+    /// <summary>
+    /// 总开关 = softtrigger 功能开关（与仪表盘功能控制台 / CLI feature 域同一份 features.json，
+    /// 单一事实源不分裂）：关 → 引擎即停、模块停用；页签常驻不隐藏（2026-10-19 指挥官目验反馈：
+    /// 原"随开关藏页签"会关掉后找不到页面，已废）。
+    /// 滑杆用 IsChecked TwoWay 直绑本属性——不走 Click/Command（自动化 Toggle 只翻 IsChecked
+    /// 不发 Click，Command 链会漏；TwoWay 对任何翻动路径都成立）。
+    /// </summary>
+    public bool MasterEnabled
+    {
+        get => FeatureEnabled;
+        set
+        {
+            if (value == FeatureEnabled)
+                return;
+            _toggles.SetEnabled("softtrigger", value);   // Changed → 引擎启停/控制台卡全联动
+            LastMessage = value
+                ? "连点器总开关已开——引擎监听就位，启用定义即生效"
+                : "连点器总开关已关——引擎已停；开总开关或 CLI feature on softtrigger 恢复";
+        }
     }
 
     // ===== 事件 =====

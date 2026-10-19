@@ -64,7 +64,7 @@ public partial class SoftTriggerEditDialog : Window
         ModeBox.SelectedIndex = 0;
         StepsList.ItemsSource = Steps;
 
-        Title = editing == null ? "新建软触发" : $"编辑软触发——{editing.Name}";
+        Title = editing == null ? "新建连点器" : $"编辑连点器——{editing.Name}";
         if (editing != null)
         {
             NameBox.Text = editing.Name;

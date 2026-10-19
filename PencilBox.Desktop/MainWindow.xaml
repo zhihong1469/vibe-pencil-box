@@ -55,8 +55,10 @@
             <TabItem Header="仪表盘">
                 <v:ProductHomeView DataContext="{Binding ProductHome}"/>
             </TabItem>
-            <TabItem Header="软触发" Visibility="{Binding Features.SoftTriggerTabVisibility}"
-                     ToolTip="可选功能（softtrigger）——纯上位机软件：F17~F24 触发键击回放，不插设备也全功能">
+            <!-- 连点器页签常驻（2026-10-19 指挥官目验反馈：随开关隐藏会"关掉后找不到页面"；
+                 启停走页内总开关，与功能控制台/CLI 同一份 features.json） -->
+            <TabItem Header="连点器"
+                     ToolTip="连点器（softtrigger，CLI 域名不变）——纯上位机软件：全键盘触发键击序列回放/连发，不插设备也全功能；页内右上角总开关启停">
                 <v:SoftTriggerView DataContext="{Binding SoftTrigger}"/>
             </TabItem>
             <TabItem Header="升级">

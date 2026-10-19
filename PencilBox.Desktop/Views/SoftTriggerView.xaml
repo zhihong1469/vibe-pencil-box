@@ -5,9 +5,42 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d"
              d:DesignHeight="720" d:DesignWidth="1060">
-    <!-- 软触发 v2（13 号；2026-10-19 指挥官目验反馈重排）：
-         顶部=引擎状态 + 右上「＋ 新建」；中部=定义列表（新编排的从顶部向下生长，限高滚动）；
-         底部=实时事件（沉底向上堆积）。编辑走弹窗（SoftTriggerEditDialog）——页面常态干净。 -->
+    <!-- 连点器 v2.2（13 号；2026-10-19 指挥官目验三轮反馈）：
+         ① 定名"连点器"（键盘+鼠标族统称；CLI 域名 softtrigger 不变）；
+         ② 总开关改滑杆样式（勾选框被否）+ 页签常驻——关开关不再隐藏页面（原行为"关掉后找不到页面"被否）；
+         顶部=总开关滑杆 + 引擎状态 + 右上「＋ 新建」；中部=定义列表；底部=实时事件沉底。 -->
+    <UserControl.Resources>
+        <!-- 总开关滑杆（纯 ControlTemplate，零图片素材） -->
+        <Style x:Key="SlideSwitch" TargetType="ToggleButton">
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Grid>
+                            <Border x:Name="Track" CornerRadius="11" Background="#B0B8BF"/>
+                            <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="White"
+                                     HorizontalAlignment="Left" Margin="4,0,0,0"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="#2ECC71"/>
+                                <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
+                                <Setter TargetName="Thumb" Property="Margin" Value="0,0,4,0"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Thumb" Property="Fill" Value="#F2F2F2"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <Grid Margin="8,6">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -16,15 +49,21 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ============ 标题行：引擎状态 + 新建按钮（右上角，指挥官指定） ============ -->
+        <!-- ============ 标题行：总开关滑杆 + 引擎状态 + 新建按钮（右上角） ============ -->
         <DockPanel Grid.Row="0" Margin="4,0,4,6">
-            <Button DockPanel.Dock="Right" Content="＋ 新建软触发" Command="{Binding OpenNewCommand}"
+            <Button DockPanel.Dock="Right" Content="＋ 新建连点器" Command="{Binding OpenNewCommand}"
                     Style="{StaticResource ActionButton}" MinWidth="110" Padding="12,5"
                     ToolTip="弹出编排窗口：触发键（全键盘±修饰）/ 序列步骤（可排序、步后延时）/ 连发 / 优先级"/>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="软触发" FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/>
-                <TextBlock Text="　本机键击回放——上位机纯软件，与设备连接无关" FontSize="12" Opacity="0.6"
+                <TextBlock Text="连点器" FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/>
+                <TextBlock Text="　键击序列回放与连点——上位机纯软件，与设备连接无关" FontSize="12" Opacity="0.6"
                            VerticalAlignment="Center"/>
+                <TextBlock Text="总开关" VerticalAlignment="Center" Margin="18,0,6,0" FontWeight="SemiBold"
+                           ToolTip="与仪表盘「功能控制台」/ CLI feature 域的 softtrigger 同一份开关"/>
+                <ToggleButton Style="{StaticResource SlideSwitch}"
+                              IsChecked="{Binding MasterEnabled, Mode=TwoWay}"
+                              VerticalAlignment="Center"
+                              ToolTip="关=引擎即停、模块停用（本页签常驻不隐藏）；开=恢复监听"/>
                 <TextBlock VerticalAlignment="Center" Margin="16,0,0,0" FontWeight="SemiBold">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
@@ -36,7 +75,7 @@
                                     <Setter Property="Foreground" Value="#2ECC71"/>
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding FeatureEnabled}" Value="False">
-                                    <Setter Property="Text" Value="● 功能已停用"/>
+                                    <Setter Property="Text" Value="● 已停用"/>
                                     <Setter Property="Foreground" Value="#E67E22"/>
                                 </DataTrigger>
                             </Style.Triggers>
@@ -54,7 +93,7 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" Text="（还没有软触发——点右上角「＋ 新建软触发」创建第一个：按下触发键 → 回放你编排的键序列）"
+                <TextBlock Grid.Row="0" Text="（还没有连点定义——点右上角「＋ 新建连点器」创建第一个：按下触发键 → 回放你编排的键序列）"
                            Margin="6,4" Opacity="0.6"
                            Visibility="{Binding EmptyHintVisibility}"/>
 
