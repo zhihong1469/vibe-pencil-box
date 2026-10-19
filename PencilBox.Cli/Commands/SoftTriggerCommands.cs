@@ -47,10 +47,10 @@ public class SoftTriggerCommands
         ConsoleFormatter.PrintTable(
             defs,
             ("名称", d => d.Name),
-            ("触发键", d => SoftTriggerKeys.TriggerName(d.TriggerUsageId)),
+            ("触发键", d => SoftTriggerDescriber.DescribeTrigger(d.TriggerUsageId, d.TriggerModifier)),
             ("模式", d => d.RepeatMode == SoftTriggerRepeatMode.Toggle ? $"连发/{d.RepeatIntervalMs}ms" : "单次"),
             ("序列", d => SoftTriggerDescriber.DescribeSequence(d.Steps)),
-            ("步隔", d => $"{d.StepIntervalMs}ms"),
+            ("优先级", d => d.Priority.ToString()),
             ("启用", d => d.Enabled ? "开" : "关"),
             ("备注", d => d.Note));
         ConsoleFormatter.Info("引擎寄宿于 Desktop 进程（启动即生效）；CLI 侧验证用 run（手动试射）或 selftest（全链回环）。");
@@ -59,26 +59,37 @@ public class SoftTriggerCommands
 
     public int Add(
         string name, string trigger, string keys,
-        string? mode, int stepInterval, int repeatInterval, string? note, bool disabled)
+        string? mode, int stepInterval, int repeatInterval, string? note, bool disabled, int priority)
     {
         try
         {
+            var (tUsage, tMod) = SoftTriggerTextParser.ParseTrigger(trigger);
+            var steps = SoftTriggerTextParser.ParseSequence(keys);
+            if (stepInterval > 0)
+            {
+                // 旧参数兼容：全局步隔摊给未显式 @延时 的步
+                for (var i = 0; i < steps.Count; i++)
+                    if (steps[i].DelayMsAfter == 0)
+                        steps[i] = steps[i] with { DelayMsAfter = stepInterval };
+            }
             var def = new SoftTriggerDefinition
             {
                 Name = name,
                 Enabled = !disabled,
-                TriggerUsageId = SoftTriggerKeys.ParseTriggerName(trigger),
-                Steps = SoftTriggerTextParser.ParseSequence(keys),
-                StepIntervalMs = stepInterval,
+                TriggerUsageId = tUsage,
+                TriggerModifier = tMod,
+                Steps = steps,
+                Priority = priority,
                 RepeatMode = ParseMode(mode),
                 RepeatIntervalMs = repeatInterval,
                 Note = note ?? "",
             };
-            SoftTriggerKeys.Validate(def);   // 存储还会再拦一道，这里提前给可读报错
+            SoftTriggerKeys.Validate(def);   // 存储还会再拦单定义+全局律两道，这里提前给可读报错
             _store.Save(def);
             ConsoleFormatter.Success(
-                $"已保存「{name}」：{SoftTriggerKeys.TriggerName(def.TriggerUsageId)} → {SoftTriggerDescriber.DescribeSequence(def.Steps)}" +
+                $"已保存「{name}」：{SoftTriggerDescriber.DescribeTrigger(def.TriggerUsageId, def.TriggerModifier)} → {SoftTriggerDescriber.DescribeSequence(def.Steps)}" +
                 (def.RepeatMode == SoftTriggerRepeatMode.Toggle ? $"（连发 {def.RepeatIntervalMs}ms）" : "（单次）") +
+                (priority != 0 ? $"（优先级 {priority}）" : "") +
                 (def.Enabled ? "" : "（当前停用，softtrigger on 开启）"));
             return 0;
         }
@@ -142,7 +153,7 @@ public class SoftTriggerCommands
                 await Task.Delay(Math.Max(50, def.RepeatIntervalMs));
             try
             {
-                _sender.SendSequence(def.Steps, def.StepIntervalMs);
+                _sender.SendSequence(def.Steps);
                 ConsoleFormatter.Success($"[{i + 1}/{count}] 已回放");
             }
             catch (Exception ex)
@@ -154,16 +165,29 @@ public class SoftTriggerCommands
         return 0;
     }
 
-    /// <summary>裸发送键序列（不带定义直接试手感；同样走值域守卫——专用键段拒发）。</summary>
+    /// <summary>裸发送键序列（不带定义直接试手感；工作状态保留段 F13~F16 仍拒发）。</summary>
     public int Send(string keys, int interval)
     {
         try
         {
             var steps = SoftTriggerTextParser.ParseSequence(keys);
-            foreach (var step in steps.Where(s => SoftTriggerKeys.IsReservedRange(s.Usage)))
-                throw new ArgumentException($"键值 0x{step.Usage:X2}（F{step.Usage - SoftTriggerKeys.ReservedLo + 13}）属专用键保留段，拒绝发送（防回环/防误扰工作状态）");
-            ConsoleFormatter.Info($"裸发送：{SoftTriggerDescriber.DescribeSequence(steps)}（步隔 {interval}ms；键击将进前台窗口）");
-            _sender.SendSequence(steps, interval);
+            foreach (var step in steps.Where(s => SoftTriggerKeys.IsWorkStateReserved(s.Usage)))
+                throw new ArgumentException(
+                    $"键值 0x{step.Usage:X2}（F{step.Usage - SoftTriggerKeys.WorkStateLo + 13}）属工作状态保留段（F13~F16），拒绝发送");
+            if (interval > 0)
+                for (var i = 0; i < steps.Count; i++)
+                    if (steps[i].DelayMsAfter == 0)
+                        steps[i] = steps[i] with { DelayMsAfter = interval };
+
+            // 与启用定义触发键相交 → 提示（不拦：试手感是用户主动行为，且回放触发键可能真实触发）
+            var triggers = _store.List().Where(d => d.Enabled)
+                .Select(d => (d.TriggerUsageId, d.TriggerModifier, d.Name)).ToList();
+            foreach (var step in steps)
+                foreach (var (u, m, n) in triggers.Where(t => t.TriggerUsageId == step.Usage && t.TriggerModifier == step.Modifier))
+                    ConsoleFormatter.Warn($"键 {SoftTriggerDescriber.DescribeStep(step)} 是启用定义「{n}」的触发键——本次发送会真实触发它");
+
+            ConsoleFormatter.Info($"裸发送：{SoftTriggerDescriber.DescribeSequence(steps)}（键击将进前台窗口）");
+            _sender.SendSequence(steps);
             ConsoleFormatter.Success("已发送");
             return 0;
         }
@@ -196,7 +220,7 @@ public class SoftTriggerCommands
         {
             Name = defName,
             Enabled = true,
-            TriggerUsageId = SoftTriggerKeys.ParseTriggerName("F24"),
+            TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F24").Usage,
             Steps = [SoftTriggerTextParser.ParseStep("F7")],
             StepIntervalMs = 0,
             Note = "selftest 临时定义",
@@ -210,7 +234,7 @@ public class SoftTriggerCommands
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             // 注入触发键：同一条 SendInput 发腿 → OS → 钩子 → 引擎，真实闭环
-            _sender.SendSequence([new SoftTriggerStep(SoftTriggerKeys.ParseTriggerName("F24"), 0)], 0);
+            _sender.SendSequence([new SoftTriggerStep(SoftTriggerTextParser.ParseTrigger("F24").Usage, 0)]);
 
             var seenTask = await Task.WhenAny(seenTcs.Task, Task.Delay(5000));
             if (seenTask != seenTcs.Task)

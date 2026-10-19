@@ -4,6 +4,7 @@
 //   See LICENSE file in the project root for full license information.
 // </copyright>
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using PencilBox.Core.Features;
 using PencilBox.Core.Models;
@@ -13,10 +14,11 @@ using PencilBox.Core.SoftTrigger;
 namespace PencilBox.Infrastructure.Services;
 
 /// <summary>
-/// <see cref="ISoftTriggerEngine"/> 实现（动作库键盘族 13 号，2026-10-19）。
-/// 观测腿=共享全局键盘钩子（工作状态监听共用一条 WH_KEYBOARD_LL，触发域 F17~F24 不相交）；
-/// 发腿=<see cref="ISyntheticKeyboard"/>（SendInput）。值域分离防回环：动作禁入专用键段，
-/// 钩子即使收到本引擎回放的键也不会匹配任何触发键。
+/// <see cref="ISoftTriggerEngine"/> 实现（动作库键盘族 13 号，2026-10-19；v2 同日）。
+/// 观测腿=共享全局键盘钩子（工作状态监听共用一条 WH_KEYBOARD_LL）；发腿=<see cref="ISyntheticKeyboard"/>（SendInput）。
+/// v2：触发键全键盘池 ± 修饰——钩子收到 VK 后按定义的触发修饰**精确匹配**（要求的都按着、没要求的都没按，
+/// GetAsyncKeyState 实时查询，防打字误触）；同触发键多条按 Priority 降序派发；
+/// 防回环=动态预留全局律（触发∩动作=∅）在装载处兜底：贪心装载，与已装载集冲突的定义拒载并记事件。
 /// </summary>
 public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
 {
@@ -32,7 +34,7 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
     private readonly object _gate = new();
     private readonly Queue<SoftTriggerEvent> _events = new();
     private readonly ConcurrentDictionary<string, Timer> _toggleTimers = new();
-    private Dictionary<byte, List<SoftTriggerDefinition>> _byTrigger = new();   // 触发键 usage → 启用定义
+    private Dictionary<byte, List<SoftTriggerDefinition>> _byTrigger = new();   // 触发键 usage → 启用定义（Priority 降序）
 
     private bool _subscribed;
 
@@ -71,7 +73,7 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
             _hook.Start();          // 共享钩子幂等；工作状态监听可能已拉起
             _subscribed = true;
         }
-        Log(SoftTriggerEvent.KindTriggerSeen, "引擎", "引擎已启动（钩子观测腿就位，触发域 F17~F24）");
+        Log(SoftTriggerEvent.KindTriggerSeen, "引擎", "引擎已启动（钩子观测腿就位，触发池=全键盘±修饰）");
         _logger.LogInformation("软触发引擎已启动");
     }
 
@@ -119,49 +121,74 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
 
     // ===== 内部 =====
 
-    /// <summary>装载启用定义（值域校验过的才可能在库里；防御性再验，坏定义拒载并记事件）。调用方持 _gate。</summary>
+    /// <summary>
+    /// 装载启用定义（贪心：按 Priority 降序逐条装载，每条与已装载集跑动态预留律，
+    /// 冲突者拒载并记事件——存储层已校验过，这里只兜手改文件的底）。调用方持 _gate。
+    /// </summary>
     private void ReloadCore()
     {
         var byTrigger = new Dictionary<byte, List<SoftTriggerDefinition>>();
-        foreach (var def in _store.List())
+        var loaded = new List<SoftTriggerDefinition>();
+
+        foreach (var def in _store.List().Where(d => d.Enabled).OrderByDescending(d => d.Priority))
         {
-            if (!def.Enabled)
-                continue;
             try
             {
                 SoftTriggerKeys.Validate(def);
+                SoftTriggerKeys.ValidateGlobal(loaded.Concat([def]).ToList());
             }
             catch (ArgumentException ex)
             {
-                _logger.LogWarning(ex, "软触发「{Name}」校验失败，拒载", def.Name);
+                _logger.LogWarning(ex, "软触发「{Name}」拒载", def.Name);
                 Log(SoftTriggerEvent.KindError, def.Name, $"装载被拒：{ex.Message}");
                 continue;
             }
             if (!byTrigger.TryGetValue(def.TriggerUsageId, out var list))
                 byTrigger[def.TriggerUsageId] = list = [];
-            list.Add(def);
+            list.Add(def);   // 已按 Priority 降序遍历，追加即有序
+            loaded.Add(def);
         }
         _byTrigger = byTrigger;
     }
 
-    /// <summary>钩子线程回调：只认触发键域（其余键零开销短路）；命中即转后台派发，不阻塞钩子。</summary>
+    /// <summary>钩子线程回调：usage 查表 + 触发修饰精确匹配（防打字误触）；命中转后台派发，不阻塞钩子。</summary>
     private void OnKeyDown(int vk)
     {
         var usage = KeyboardUsageMap.FromVirtualKey(vk);
-        if (!SoftTriggerKeys.IsTriggerDomain(usage))
+        if (usage == 0)
             return;
 
-        List<SoftTriggerDefinition>? matches;
+        List<SoftTriggerDefinition>? candidates;
         lock (_gate)
         {
-            _byTrigger.TryGetValue(usage, out matches);
+            _byTrigger.TryGetValue(usage, out candidates);
         }
-        if (matches is not { Count: > 0 })
+        if (candidates is not { Count: > 0 })
             return;
 
-        Log(SoftTriggerEvent.KindTriggerSeen, matches[0].Name, $"捕获触发键 {SoftTriggerKeys.TriggerName(usage)}（{matches.Count} 条定义命中）");
-        foreach (var def in matches.ToArray())
+        // 修饰精确匹配：要求的都按着、没要求的都没按（注入回放期间合成修饰也被看到，动态预留律保证那是"动作键"而非触发键）
+        var matches = candidates.Where(d => ModifierMatches(d.TriggerModifier)).ToList();
+        if (matches.Count == 0)
+            return;
+
+        Log(SoftTriggerEvent.KindTriggerSeen, matches[0].Name,
+            $"捕获触发键 {SoftTriggerDescriber.DescribeTrigger(usage, matches[0].TriggerModifier)}（{matches.Count} 条命中）");
+        foreach (var def in matches)
             Task.Run(() => Dispatch(def));
+    }
+
+    /// <summary>GetAsyncKeyState 实时查询：要求的修饰位全按下、其余修饰位全抬起。</summary>
+    private static bool ModifierMatches(byte required)
+    {
+        foreach (var (bit, vks) in new[] { ((byte)0x01, new[] { 0x11 }), ((byte)0x02, new[] { 0x10 }), ((byte)0x04, new[] { 0x12 }), ((byte)0x08, new[] { 0x5B, 0x5C }) })
+        {
+            var pressed = vks.Any(vk => (GetAsyncKeyState(vk) & 0x8000) != 0);
+            if ((required & bit) != 0 && !pressed)
+                return false;
+            if ((required & bit) == 0 && pressed)
+                return false;
+        }
+        return true;
     }
 
     private void Dispatch(SoftTriggerDefinition def)
@@ -209,7 +236,7 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
     {
         try
         {
-            _sender.SendSequence(def.Steps, def.StepIntervalMs);
+            _sender.SendSequence(def.Steps);
             Log(SoftTriggerEvent.KindReplayed, def.Name, $"已回放 {def.Steps.Count} 步：{SoftTriggerDescriber.DescribeSequence(def.Steps)}");
         }
         catch (Exception ex)
@@ -251,4 +278,7 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
         _toggles.Changed -= OnToggleChanged;
         Stop();
     }
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
 }

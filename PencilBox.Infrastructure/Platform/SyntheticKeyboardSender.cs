@@ -13,20 +13,20 @@ namespace PencilBox.Infrastructure.Platform;
 /// <summary>
 /// <see cref="ISyntheticKeyboard"/> 的 Win32 SendInput 实现（软触发回放发腿 + CLI selftest 注入）。
 /// 事件进前台窗口焦点（标准 SendInput 语义）；被钩子看到时带 LLKHF_INJECTED 位——
-/// 软触发自身靠值域分离防回环（动作禁入 F17~F24），不依赖注入位过滤。
+/// 软触发自身靠动态预留律防回环（触发键∩动作键=∅，SoftTriggerKeys.ValidateGlobal），不依赖注入位过滤。
 /// </summary>
 public sealed class SyntheticKeyboardSender : ISyntheticKeyboard
 {
     private const uint InputKeyboard = 1;
     private const uint KeyeventfKeyup = 0x0002;
 
-    public void SendSequence(IReadOnlyList<SoftTriggerStep> steps, int stepIntervalMs)
+    public void SendSequence(IReadOnlyList<SoftTriggerStep> steps)
     {
-        for (var i = 0; i < steps.Count; i++)
+        foreach (var step in steps)
         {
-            if (i > 0 && stepIntervalMs > 0)
-                Thread.Sleep(stepIntervalMs);
-            SendStep(steps[i]);
+            SendStep(step);
+            if (step.DelayMsAfter > 0)
+                Thread.Sleep(step.DelayMsAfter);   // 周期穿插在步间（v2）
         }
     }
 

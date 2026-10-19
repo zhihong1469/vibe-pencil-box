@@ -9,8 +9,9 @@ namespace PencilBox.Core.Models;
 
 /// <summary>
 /// 软触发序列文本解析（13 号；CLI --keys 与测试共用，与 <see cref="SoftTriggerDescriber"/> 成对）。
-/// 语法：逗号分步；步内 `修饰+主键`，如 `F2`、`ALT+L`、`CTRL+SHIFT+S`、`CTRL+ALT+DELETE`（DELETE 仅键名形式）。
-/// 主键：A~Z / 0~9 / F1~F24（软触发场景 F13~F24 会在校验层被拒）/ ENTER SPACE ESC TAB BACKSPACE / LEFT UP RIGHT DOWN。
+/// 语法：逗号分步；步内 `修饰+主键[@步后延时ms]`，如 `F2`、`ALT+L`、`F2@100`、`CTRL+SHIFT+S@250`。
+/// 主键：A~Z / 0~9 / F1~F24 / ENTER SPACE ESC TAB BACKSPACE DELETE INSERT HOME END PGUP PGDN 方向键。
+/// v2：触发键池=全键盘（F13~F16 工作状态保留除外，校验层拦）。
 /// </summary>
 public static class SoftTriggerTextParser
 {
@@ -29,11 +30,23 @@ public static class SoftTriggerTextParser
         return steps;
     }
 
-    /// <summary>解析单步（"ALT+L"）。</summary>
+    /// <summary>解析单步（"ALT+L" / "F2@100"——@后为步后延时 ms）。</summary>
     public static SoftTriggerStep ParseStep(string text)
     {
         byte modifier = 0;
         string main = text.Trim();
+
+        // @步后延时：主键后缀 "F2@100"
+        int delay = 0;
+        var at = main.LastIndexOf('@');
+        if (at >= 0)
+        {
+            var delayText = main[(at + 1)..].Trim();
+            if (!int.TryParse(delayText, out delay) || delay < 0)
+                throw new ArgumentException($"步后延时非法（@后须为非负整数 ms）：「{text}」");
+            main = main[..at].Trim();
+        }
+
         var parts = main.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
             throw new ArgumentException($"空键步：「{text}」");
@@ -51,7 +64,14 @@ public static class SoftTriggerTextParser
         }
 
         var usage = MainKeyUsage(parts[^1]);
-        return new SoftTriggerStep(usage, modifier);
+        return new SoftTriggerStep(usage, modifier, delay);
+    }
+
+    /// <summary>解析触发键（"ALT+F2" → (usage, modifier)；裸键修饰=0）；F13~F16 留给校验层点名拦截。</summary>
+    public static (byte Usage, byte Modifier) ParseTrigger(string text)
+    {
+        var step = ParseStep(text);
+        return (step.Usage, step.Modifier);
     }
 
     /// <summary>主键名 → HID usage（与 KeyboardUsageMap 同一张表的文字面）。</summary>
@@ -102,6 +122,19 @@ public static class SoftTriggerDescriber
         if ((step.Modifier & 0x04) != 0) parts.Add("Alt");
         if ((step.Modifier & 0x08) != 0) parts.Add("Win");
         parts.Add(MainKeyName(step.Usage));
+        var text = string.Join("+", parts);
+        return step.DelayMsAfter > 0 ? $"{text}@{step.DelayMsAfter}" : text;
+    }
+
+    /// <summary>触发键可读文本（修饰+键名，如 "Alt+F2"；与 ParseTrigger 互逆）。</summary>
+    public static string DescribeTrigger(byte usage, byte modifier)
+    {
+        var parts = new List<string>(5);
+        if ((modifier & 0x01) != 0) parts.Add("Ctrl");
+        if ((modifier & 0x02) != 0) parts.Add("Shift");
+        if ((modifier & 0x04) != 0) parts.Add("Alt");
+        if ((modifier & 0x08) != 0) parts.Add("Win");
+        parts.Add(MainKeyName(usage));
         return string.Join("+", parts);
     }
 

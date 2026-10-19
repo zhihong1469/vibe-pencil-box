@@ -15,27 +15,40 @@ public enum SoftTriggerRepeatMode
     Toggle,
 }
 
-/// <summary>序列一步 = 修饰键 + 单主键（HID usage；顺序=数组序，13 号：顺序设置）。</summary>
-public sealed record SoftTriggerStep(byte Usage, byte Modifier);
+/// <summary>
+/// 序列一步 = 修饰键 + 单主键 + 步后延时（HID usage；顺序=数组序，13 号：顺序/周期自由编排）。
+/// DelayMsAfter=本步回放完成后再等待的毫秒数（0=立即下一步）——周期穿插在步间，v2（指挥官 10-19 反馈）。
+/// </summary>
+public sealed record SoftTriggerStep(byte Usage, byte Modifier, int DelayMsAfter = 0);
 
 /// <summary>
 /// 一条软触发定义（动作库键盘族，13 号；纯软件域——零设备依赖）。
-/// 触发键只允许专用键 F17~F24（值域分离防回环：动作只允许普通键值，两值域不相交⇒天然无环，级联禁止）；
-/// F13~F16 已被笔端工作状态自管占用（Core.Models/PenWorkState）。
+///
+/// v2（指挥官 2026-10-19 目验反馈）：触发键放开到全键盘池（"软触发一定要足够自由"）——
+/// 任意可映射键 ± 修饰组合皆可做触发键（F13~F16 除外=工作状态保留）；
+/// 防回环由"固定值域分离"升级为**动态预留全局律**：所有启用定义的触发键（键+修饰精确对）
+/// 不得出现在任何启用定义的动作序列里（<see cref="SoftTriggerKeys.ValidateGlobal"/>），
+/// 两集合不相交⇒天然无环，级联禁止。
 /// </summary>
 public sealed class SoftTriggerDefinition
 {
     public string Name { get; set; } = "";
     public bool Enabled { get; set; } = true;
 
-    /// <summary>触发键（HID usage，必须在 F17~F24 专用键域；裸键无修饰——与工作状态触发同规则）</summary>
+    /// <summary>触发键（HID usage；全键盘池——可映射键、F13~F16 工作状态保留段除外）</summary>
     public byte TriggerUsageId { get; set; }
 
-    /// <summary>回放序列（普通键值；校验见 <see cref="SoftTriggerKeys.Validate"/>）</summary>
+    /// <summary>触发修饰组合（0x01=Ctrl 0x02=Shift 0x04=Alt 0x08=Win 位和；钩子侧精确匹配防误触）</summary>
+    public byte TriggerModifier { get; set; }
+
+    /// <summary>回放序列（步=修饰+主键+步后延时）</summary>
     public List<SoftTriggerStep> Steps { get; set; } = [];
 
-    /// <summary>步间隔 ms（序列内两步之间的间隔）</summary>
-    public int StepIntervalMs { get; set; } = 60;
+    /// <summary>同触发键命中多条时的执行优先级（大者先回放）</summary>
+    public int Priority { get; set; }
+
+    /// <summary>[旧版兼容] v1 全局步间隔 ms；v2 起逐步延时（DelayMsAfter），装载时摊给未显式设延时的步</summary>
+    public int StepIntervalMs { get; set; }
 
     public SoftTriggerRepeatMode RepeatMode { get; set; } = SoftTriggerRepeatMode.Once;
 

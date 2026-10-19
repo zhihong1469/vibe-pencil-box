@@ -14,8 +14,8 @@ namespace PencilBox.Core.Services;
 public interface ISyntheticKeyboard
 {
     /// <summary>
-    /// 回放键序列（每步：修饰键 DOWN → 主键 DOWN/短暂保持/UP → 修饰键逆序 UP；步间 = <paramref name="stepIntervalMs"/>）。
-    /// 同步阻塞调用（总时长≈步数×interval），调用方自行决定线程。
+    /// 回放键序列（每步：修饰键 DOWN → 主键 DOWN/短暂保持/UP → 修饰键逆序 UP → 等 <see cref="SoftTriggerStep.DelayMsAfter"/> ms）。
+    /// 周期穿插在步间（v2：每步自带延时）；同步阻塞调用，调用方自行决定线程。
     /// </summary>
-    void SendSequence(IReadOnlyList<SoftTriggerStep> steps, int stepIntervalMs);
+    void SendSequence(IReadOnlyList<SoftTriggerStep> steps);
 }

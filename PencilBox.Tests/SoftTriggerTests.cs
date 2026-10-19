@@ -63,32 +63,18 @@ public class SoftTriggerTests : IDisposable
     // ===== 值域分离（防回环硬约束） =====
 
     [Fact]
-    public void TriggerDomain_OnlyF17To24()
-    {
-        Assert.True(SoftTriggerKeys.IsTriggerDomain(0x6C));    // F17
-        Assert.True(SoftTriggerKeys.IsTriggerDomain(0x73));    // F24
-        Assert.False(SoftTriggerKeys.IsTriggerDomain(0x68));   // F13（工作状态自管占用）
-        Assert.False(SoftTriggerKeys.IsTriggerDomain(0x6B));   // F16
-        Assert.False(SoftTriggerKeys.IsTriggerDomain(0x3B));   // F2（普通键不可触发）
-        Assert.False(SoftTriggerKeys.IsTriggerDomain(0x00));   // 未知键
-    }
-
-    [Fact]
-    public void Validate_RejectsTriggerOutsideDomain()
+    public void Validate_RejectsBadTriggerAndWorkStateAction()
     {
         var def = ValidDef();
-        def.TriggerUsageId = 0x3A;                             // F1：不在触发域
+        def.TriggerUsageId = 0x00;                             // 不可映射
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
 
-        def.TriggerUsageId = 0x68;                             // F13：保留段（工作状态自管）
+        def = ValidDef();
+        def.TriggerUsageId = 0x68;                             // F13：工作状态保留段
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
-    }
 
-    [Fact]
-    public void Validate_RejectsActionInReservedRange()
-    {
-        var def = ValidDef();
-        def.Steps = [new SoftTriggerStep(0x6A, 0)];            // 动作=F15：回环风险，禁
+        def = ValidDef();
+        def.Steps = [new SoftTriggerStep(0x6A, 0)];            // 动作=F15：工作状态保留段禁
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
     }
 
@@ -100,10 +86,10 @@ public class SoftTriggerTests : IDisposable
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
 
         def.Name = "x";
-        def.StepIntervalMs = 5001;
+        def.Steps = [new SoftTriggerStep(0x04, 0, 60_001)];    // 步后延时 >60s 上限
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
 
-        def.StepIntervalMs = 0;
+        def.Steps = [new SoftTriggerStep(0x04, 0)];
         def.RepeatMode = SoftTriggerRepeatMode.Toggle;
         def.RepeatIntervalMs = 10;                             // <20ms 下限（仅 Toggle 校验——Once 无连发）
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
@@ -118,13 +104,13 @@ public class SoftTriggerTests : IDisposable
         var loaded = store.Load("连点测试");
         Assert.NotNull(loaded);
         Assert.Equal("连点测试", loaded.Name);
-        Assert.Equal(SoftTriggerKeys.ParseTriggerName("F17"), loaded.TriggerUsageId);
+        Assert.Equal(SoftTriggerTextParser.ParseTrigger("F17").Usage, loaded.TriggerUsageId);
         Assert.Equal(2, loaded.Steps.Count);
 
         Assert.Single(store.List());
 
         var bad = ValidDef();
-        bad.Steps = [new SoftTriggerStep(0x73, 0)];            // 动作落进触发域（F24）
+        bad.Steps = [new SoftTriggerStep(bad.TriggerUsageId, 0)];   // 动作含自己触发键（自环）
         Assert.Throws<ArgumentException>(() => store.Save(bad));
 
         store.Delete("连点测试");
@@ -149,8 +135,8 @@ public class SoftTriggerTests : IDisposable
     {
         public List<(IReadOnlyList<SoftTriggerStep> Steps, int Interval)> Sent = [];
 
-        public void SendSequence(IReadOnlyList<SoftTriggerStep> steps, int stepIntervalMs) =>
-            Sent.Add((steps, stepIntervalMs));
+        public void SendSequence(IReadOnlyList<SoftTriggerStep> steps) =>
+            Sent.Add((steps, 0));
     }
 
     private (SoftTriggerEngine Engine, FakeHook Hook, FakeSender Sender, FeatureToggleService Toggles) CreateEngine()
@@ -165,13 +151,134 @@ public class SoftTriggerTests : IDisposable
         return (engine, hook, sender, toggles);
     }
 
+    // ===== v2：步后延时 / 全键盘触发池 / 动态预留全局律 =====
+
+    [Fact]
+    public void ParseStep_DelaySuffix()
+    {
+        var steps = SoftTriggerTextParser.ParseSequence("F2@100,ALT+L@250,ENTER");
+
+        Assert.Equal(100, steps[0].DelayMsAfter);
+        Assert.Equal(250, steps[1].DelayMsAfter);
+        Assert.Equal(0, steps[2].DelayMsAfter);
+        Assert.Equal("F2@100 → Alt+L@250 → Enter", SoftTriggerDescriber.DescribeSequence(steps));
+    }
+
+    [Fact]
+    public void TriggerPool_FullKeyboard_ExceptWorkState()
+    {
+        Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x04));  // A
+        Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x3B));  // F2
+        Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x6C));  // F17
+        Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x28));  // Enter
+        Assert.False(SoftTriggerKeys.IsTriggerCandidate(0x68)); // F13 工作状态保留
+        Assert.False(SoftTriggerKeys.IsTriggerCandidate(0x6B)); // F16
+        Assert.False(SoftTriggerKeys.IsTriggerCandidate(0x00)); // 未知
+        Assert.False(SoftTriggerKeys.IsWorkStateReserved(0x6C));// F17 不属工作状态段
+    }
+
+    [Fact]
+    public void Validate_RejectsWorkStateTriggerAndSelfTrigger()
+    {
+        var def = ValidDef();
+        def.TriggerUsageId = 0x69;                              // F14 工作状态保留
+        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
+
+        def = ValidDef();
+        def.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F2").Usage;
+        def.Steps = [new SoftTriggerStep(0x3B, 0)];             // 动作含自己触发键 F2
+        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
+    }
+
+    [Fact]
+    public void ValidateGlobal_CrossDefinitionLoopRejected()
+    {
+        // A 触发 F2；B 动作含 F2 → 冲突（B 回放会真实触发 A → 链）
+        var a = ValidDef();
+        a.Name = "A";
+        a.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F2").Usage;
+        a.Steps = [new SoftTriggerStep(0x0F, 0)];               // L
+
+        var b = ValidDef();
+        b.Name = "B";
+        b.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F3").Usage;
+        b.Steps = [new SoftTriggerStep(0x3B, 0)];               // F2 ← 撞 A 的触发
+        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.ValidateGlobal([a, b]));
+
+        // 反向：C 触发 L（A 的动作键）→ 同样冲突
+        var c = ValidDef();
+        c.Name = "C";
+        c.TriggerUsageId = 0x0F;                                // L
+        c.Steps = [new SoftTriggerStep(0x10, 0)];               // M
+        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.ValidateGlobal([a, c]));
+
+        // 动作相同不冲突：两定义动作都含 L（不触发）合法
+        var d = ValidDef();
+        d.Name = "D";
+        d.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F5").Usage;
+        d.Steps = [new SoftTriggerStep(0x0F, 0)];               // L ← 与 A 动作同键，合法
+        SoftTriggerKeys.ValidateGlobal([a, d]);
+
+        // 修饰精确区分：E 触发 ALT+F2（A 裸 F2）不冲突
+        var e = ValidDef();
+        e.Name = "E";
+        e.TriggerUsageId = 0x3B;
+        e.TriggerModifier = 0x04;                               // ALT+F2
+        e.Steps = [new SoftTriggerStep(0x10, 0)];
+        SoftTriggerKeys.ValidateGlobal([a, e]);
+
+        // 但 F 动作含裸 F2（与 A 触发精确对相同）→ 冲突
+        var f = ValidDef();
+        f.Name = "F";
+        f.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F6").Usage;
+        f.Steps = [new SoftTriggerStep(0x3B, 0)];
+        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.ValidateGlobal([a, f]));
+    }
+
+    [Fact]
+    public void Store_MigratesLegacyStepInterval()
+    {
+        var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
+        var legacyJson = "{\"Name\":\"旧版\",\"Enabled\":true,\"TriggerUsageId\":109,\"TriggerModifier\":0," +
+            "\"Steps\":[{\"Usage\":59,\"Modifier\":0},{\"Usage\":15,\"Modifier\":4}],\"StepIntervalMs\":80," +
+            "\"RepeatMode\":0,\"RepeatIntervalMs\":200,\"Note\":\"\",\"CreatedAt\":\"2026-10-19T10:00:00\"}";
+        Directory.CreateDirectory(Path.Combine(_dir, "configs", "softtriggers"));
+        File.WriteAllText(Path.Combine(_dir, "configs", "softtriggers", "旧版.json"), legacyJson);
+
+        var def = store.Load("旧版");
+        Assert.NotNull(def);
+        Assert.Equal(0, def.StepIntervalMs);                    // 字段退役清零
+        Assert.All(def.Steps, s => Assert.Equal(80, s.DelayMsAfter));  // 摊给未显式延时步
+    }
+
+    [Fact]
+    public void Store_SaveRejectedWhenConflictsWithEnabledDef()
+    {
+        var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
+        var a = ValidDef();
+        a.Name = "甲";
+        a.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F2").Usage;
+        a.Steps = [new SoftTriggerStep(0x0F, 0)];
+        store.Save(a);
+
+        var b = ValidDef();
+        b.Name = "乙";
+        b.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F3").Usage;
+        b.Steps = [new SoftTriggerStep(0x3B, 0)];               // 动作 F2 撞甲的触发
+        Assert.Throws<ArgumentException>(() => store.Save(b));
+
+        // 停用甲后不占坑：乙可存
+        store.SetEnabled("甲", enabled: false);
+        store.Save(b);
+        Assert.NotNull(store.Load("乙"));
+    }
+
     private static SoftTriggerDefinition ValidDef() => new()
     {
         Name = "连点测试",
         Enabled = true,
-        TriggerUsageId = SoftTriggerKeys.ParseTriggerName("F17"),
+        TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F17").Usage,
         Steps = SoftTriggerTextParser.ParseSequence("F2,ALT+L"),
-        StepIntervalMs = 60,
         RepeatMode = SoftTriggerRepeatMode.Once,
         RepeatIntervalMs = 200,
     };

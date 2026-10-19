@@ -12,7 +12,10 @@ namespace PencilBox.Infrastructure.Config;
 
 /// <summary>
 /// <see cref="ISoftTriggerStore"/> 文件实现：`&lt;exe 同级&gt;/configs/softtriggers/&lt;名&gt;.json` 一条一文件。
-/// 保存前过值域校验（<see cref="SoftTriggerKeys.Validate"/>——不合规不落盘）；损坏文件告警跳过（不炸整表）。
+/// 保存前过单定义值域校验（<see cref="SoftTriggerKeys.Validate"/>——不合规不落盘）+
+/// **动态预留全局律**（<see cref="SoftTriggerKeys.ValidateGlobal"/>：模拟保存后的启用集，触发∩动作=∅，
+/// 冲突点名拒绝——防回环 v2）；装载时把 v1 旧字段 StepIntervalMs 摊给未显式设延时的步（<see cref="Migrate"/>）。
+/// 损坏文件告警跳过（不炸整表）。
 /// </summary>
 public sealed class SoftTriggerStore : ISoftTriggerStore
 {
@@ -47,7 +50,7 @@ public sealed class SoftTriggerStore : ISoftTriggerStore
                 {
                     var def = JsonSerializer.Deserialize<SoftTriggerDefinition>(File.ReadAllText(path), JsonOpts);
                     if (def != null && !string.IsNullOrWhiteSpace(def.Name))
-                        defs.Add(def);
+                        defs.Add(Migrate(def));
                 }
                 catch (Exception ex)
                 {
@@ -67,7 +70,7 @@ public sealed class SoftTriggerStore : ISoftTriggerStore
                 return null;
             try
             {
-                return JsonSerializer.Deserialize<SoftTriggerDefinition>(File.ReadAllText(path), JsonOpts);
+                return Migrate(JsonSerializer.Deserialize<SoftTriggerDefinition>(File.ReadAllText(path), JsonOpts)!);
             }
             catch (Exception ex)
             {
@@ -79,13 +82,36 @@ public sealed class SoftTriggerStore : ISoftTriggerStore
 
     public void Save(SoftTriggerDefinition definition)
     {
-        SoftTriggerKeys.Validate(definition);   // 值域分离硬约束：不合规不落盘
+        SoftTriggerKeys.Validate(definition);   // 单定义值域硬约束：不合规不落盘
 
         lock (_gate)
         {
+            // 动态预留全局律：模拟"保存后启用集"（现有启用 − 同名旧条 + 本条），触发∩动作=∅ 才落盘
+            var enabledAfterSave = List()
+                .Where(d => !string.Equals(d.Name, definition.Name, StringComparison.Ordinal) && d.Enabled)
+                .ToList();
+            if (definition.Enabled)
+                enabledAfterSave.Add(definition);
+            SoftTriggerKeys.ValidateGlobal(enabledAfterSave);
+
             Directory.CreateDirectory(_dir);
             File.WriteAllText(PathOf(definition.Name), JsonSerializer.Serialize(definition, JsonOpts));
         }
+    }
+
+    /// <summary>v1 → v2 归一：旧全局步间隔摊给未显式设延时的步（显式 @延时的步保留），字段清零退役。</summary>
+    private static SoftTriggerDefinition Migrate(SoftTriggerDefinition def)
+    {
+        if (def.StepIntervalMs > 0)
+        {
+            for (var i = 0; i < def.Steps.Count; i++)
+            {
+                if (def.Steps[i].DelayMsAfter == 0)
+                    def.Steps[i] = def.Steps[i] with { DelayMsAfter = def.StepIntervalMs };
+            }
+            def.StepIntervalMs = 0;
+        }
+        return def;
     }
 
     public void Delete(string name)
