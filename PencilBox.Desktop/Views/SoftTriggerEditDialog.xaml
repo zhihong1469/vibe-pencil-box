@@ -1,0 +1,78 @@
+<Window x:Class="PencilBox.Desktop.Views.SoftTriggerEditDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="新建软触发" Width="640" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        WindowStyle="ToolWindow" ShowInTaskbar="False">
+    <!-- 软触发编辑对话框（13 号 v2，2026-10-19 指挥官目验反馈：
+         参考仪表盘 Keymap 的编辑认知——右上角新建 → 弹窗编排（顺序/延时/优先级）→ 保存后列表从上往下放置） -->
+    <StackPanel Margin="12">
+
+        <WrapPanel Margin="0,0,0,6">
+            <TextBlock Text="名称:" VerticalAlignment="Center"/>
+            <TextBox x:Name="NameBox" Width="150" Margin="4,0,14,0"/>
+            <TextBlock Text="触发键:" VerticalAlignment="Center"/>
+            <ComboBox x:Name="TriggerModifierBox" Width="110" Margin="4,0,4,0"
+                      SelectedValuePath="Value" DisplayMemberPath="Label"
+                      ToolTip="修饰组合：回放时要求这些键都按着、其余修饰都没按（防打字误触）"/>
+            <ComboBox x:Name="TriggerKeyBox" Width="120" Margin="0,0,14,0"
+                      SelectedValuePath="Value" DisplayMemberPath="Label"
+                      ToolTip="全键盘池（F13~F16 属笔端工作状态保留，不在列）；普通字母数字键也可触发，注意误触"/>
+            <TextBlock Text="模式:" VerticalAlignment="Center"/>
+            <ComboBox x:Name="ModeBox" Width="130" Margin="4,0,14,0" SelectionChanged="OnModeChanged"
+                      ToolTip="单次=触发回放一遍；连发=立即回放并周期重复，再按触发键停止">
+                <ComboBoxItem Content="单次"/>
+                <ComboBoxItem Content="连发（再按停）"/>
+            </ComboBox>
+            <TextBlock Text="连发周期ms:" VerticalAlignment="Center"/>
+            <TextBox x:Name="RepeatIntervalBox" Width="60" Margin="4,0,0,0" Text="200"/>
+        </WrapPanel>
+
+        <WrapPanel Margin="0,0,0,6">
+            <TextBlock Text="优先级:" VerticalAlignment="Center"
+                       ToolTip="同一触发键命中多条定义时，优先级大者先回放"/>
+            <TextBox x:Name="PriorityBox" Width="50" Margin="4,0,14,0" Text="0"/>
+            <TextBlock Text="备注:" VerticalAlignment="Center"/>
+            <TextBox x:Name="NoteBox" Width="380" Margin="4,0,0,0"/>
+        </WrapPanel>
+
+        <!-- 步骤编排（顺序=行序；↑↓ 排序；@延时=步后等待） -->
+        <GroupBox Header="回放序列（顺序=行序；每步可设步后延时 ms；动作不得与任何启用定义的触发键相同）" Margin="0,0,0,6">
+            <StackPanel>
+                <ItemsControl x:Name="StepsList" AlternationCount="100">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <WrapPanel Margin="2">
+                                <ComboBox ItemsSource="{Binding ModifierOptions}" SelectedValue="{Binding Modifier}"
+                                          SelectedValuePath="Value" DisplayMemberPath="Label"
+                                          Width="110" Margin="2"/>
+                                <ComboBox ItemsSource="{Binding KeyOptions}" SelectedValue="{Binding Usage}"
+                                          SelectedValuePath="Value" DisplayMemberPath="Label"
+                                          Width="120" Margin="2"
+                                          ToolTip="动作键（F17~F24 也可用——只要没有启用定义把它当触发键，动态预留律会在保存时把关）"/>
+                                <TextBlock Text="步后延时ms:" VerticalAlignment="Center" Margin="6,0,2,0"/>
+                                <TextBox Text="{Binding DelayMsAfter, TargetNullValue=0}" Width="60" Margin="2"/>
+                                <Button Content="↑" Click="OnStepUp" Width="24" Height="24" Padding="0" Margin="6,0,2,0"
+                                        ToolTip="上移（编排顺序）"/>
+                                <Button Content="↓" Click="OnStepDown" Width="24" Height="24" Padding="0" Margin="2"
+                                        ToolTip="下移（编排顺序）"/>
+                                <Button Content="✕" Click="OnStepDelete" Width="24" Height="24" Padding="0" Margin="2"
+                                        ToolTip="删除该步"/>
+                            </WrapPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <StackPanel Orientation="Horizontal" Margin="2,6,0,2">
+                    <Button Content="＋ 步骤" Click="OnStepAdd" MinWidth="68"/>
+                    <TextBlock x:Name="ErrorText" Foreground="#C0392B" VerticalAlignment="Center"
+                               Margin="12,0,0,0" TextWrapping="Wrap" MaxWidth="440"/>
+                </StackPanel>
+            </StackPanel>
+        </GroupBox>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="保存" Click="OnSave" MinWidth="72" Padding="12,4"/>
+            <Button Content="取消" Click="OnCancel" MinWidth="72" Margin="8,0,0,0" Padding="12,4"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

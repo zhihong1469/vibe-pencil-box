@@ -4,6 +4,7 @@
 //   See LICENSE file in the project root for full license information.
 // </copyright>
 using System.Collections.ObjectModel;
+using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -12,13 +13,15 @@ using PencilBox.Core.Models;
 using PencilBox.Core.Services;
 using PencilBox.Core.SoftTrigger;
 using PencilBox.Desktop.Helpers;
+using PencilBox.Desktop.Views;
 
 namespace PencilBox.Desktop.ViewModels;
 
 /// <summary>
-/// 软触发页（13 号动作库键盘族，2026-10-19）：F17~F24 专用键触发键盘序列回放。
+/// 软触发页（13 号动作库键盘族，2026-10-19；v2 同日目验反馈重排）：
+/// 页面=标题行（右上角「＋ 新建」）+ 定义列表（新编排的从顶部向下生长）+ 底部实时事件；
+/// 编辑走 <see cref="SoftTriggerEditDialog"/> 弹窗（步骤编排 ↑↓✕ + 步后延时 + 优先级）——参考 Keymap 的编辑认知。
 /// 纯软件域——不依赖任何设备服务；引擎随宿主启动（App.OnStartup 拉起），本页只做定义管理 + 试射 + 事件观察。
-/// 值域分离防回环由存储/装载两道 <see cref="SoftTriggerKeys.Validate"/> 把关，编辑面坏输入落盘前即被拒。
 /// </summary>
 public partial class SoftTriggerViewModel : ObservableObject
 {
@@ -33,30 +36,7 @@ public partial class SoftTriggerViewModel : ObservableObject
     public ObservableCollection<SoftTriggerEvent> Events { get; } = [];
 
     [ObservableProperty]
-    private string _editorName = "";
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(EditorPreview))]
-    private string _editorTrigger = "F17";
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(EditorPreview))]
-    private string _editorKeys = "";
-
-    [ObservableProperty]
-    private int _editorModeIndex;                          // 0=单次 1=连发（ComboBox SelectedIndex 直绑）
-
-    [ObservableProperty]
-    private int _editorStepInterval = 60;
-
-    [ObservableProperty]
-    private int _editorRepeatInterval = 200;
-
-    [ObservableProperty]
-    private string _editorNote = "";
-
-    [ObservableProperty]
-    private string _lastMessage = "触发键=专用键 F17~F24；动作序列为普通键（禁入 F13~F24 保留段，防回环）。";
+    private string _lastMessage = "点右上角「＋ 新建软触发」创建第一个；触发键=全键盘池±修饰（F13~F16 工作状态保留），防回环由动态预留律把关。";
 
     public bool FeatureEnabled => _toggles.IsEnabled("softtrigger");
 
@@ -65,30 +45,12 @@ public partial class SoftTriggerViewModel : ObservableObject
 
     public string EngineStatusText =>
         !FeatureEnabled ? "功能已停用（功能控制台或 CLI feature on softtrigger 恢复）"
-        : _engine.IsRunning ? "运行中——F17~F24 监听已就位，启用定义即生效"
+        : _engine.IsRunning ? "运行中——全键盘池监听已就位，启用定义即生效"
         : "已停机";
 
     /// <summary>空列表提示显隐（VM 直出 Visibility，同上）。</summary>
     public System.Windows.Visibility EmptyHintVisibility =>
         Definitions.Count == 0 ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
-
-    public IReadOnlyList<string> TriggerKeyChoices { get; } = ["F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24"];
-
-    /// <summary>编辑器当前输入 → 序列预览（解析失败显示原因，不打断输入）。</summary>
-    public string EditorPreview
-    {
-        get
-        {
-            try
-            {
-                return SoftTriggerDescriber.DescribeSequence(SoftTriggerTextParser.ParseSequence(EditorKeys));
-            }
-            catch (ArgumentException ex)
-            {
-                return $"（待有效输入：{ex.Message}）";
-            }
-        }
-    }
 
     public SoftTriggerViewModel(
         ISoftTriggerStore store,
@@ -106,35 +68,49 @@ public partial class SoftTriggerViewModel : ObservableObject
         Refresh();
     }
 
-    // ===== 命令 =====
+    // ===== 新建 / 编辑（弹窗编排，v2） =====
+
+    /// <summary>右上角「＋ 新建软触发」：弹编辑对话框 → 保存落盘 → 列表顶部生长。</summary>
+    [RelayCommand]
+    private void OpenNew()
+    {
+        if (!FeatureEnabled)
+        {
+            LastMessage = "软触发功能已停用——先在仪表盘「功能控制台」或 CLI feature on softtrigger 恢复";
+            return;
+        }
+        OpenDialog(editing: null);
+    }
 
     [RelayCommand]
-    private void Save()
+    private void Edit(SoftTriggerItemViewModel? item)
     {
+        if (item == null)
+            return;
+        OpenDialog(item.Definition);
+    }
+
+    private void OpenDialog(SoftTriggerDefinition? editing)
+    {
+        var snapshot = _store.List().ToList();
+        var result = SoftTriggerEditDialog.Show(App.MainWindow ?? throw new InvalidOperationException("主窗未就绪"), snapshot, editing);
+        if (result == null)
+            return;
         try
         {
-            var def = new SoftTriggerDefinition
-            {
-                Name = EditorName.Trim(),
-                Enabled = true,
-                TriggerUsageId = SoftTriggerKeys.ParseTriggerName(EditorTrigger),
-                Steps = SoftTriggerTextParser.ParseSequence(EditorKeys),
-                StepIntervalMs = EditorStepInterval,
-                RepeatMode = EditorModeIndex == 1 ? SoftTriggerRepeatMode.Toggle : SoftTriggerRepeatMode.Once,
-                RepeatIntervalMs = EditorRepeatInterval,
-                Note = EditorNote.Trim(),
-            };
-            _store.Save(def);                                  // 值域不合规在此抛
+            _store.Save(result);                               // 单定义 + 动态预留全局律两道（对话框已预检，此处兜并发底）
             _engine.Reload();
             Refresh();
-            LastMessage = $"已保存「{def.Name}」：{SoftTriggerKeys.TriggerName(def.TriggerUsageId)} → {SoftTriggerDescriber.DescribeSequence(def.Steps)}";
-            _logger.LogInformation("软触发已保存：{Name}", def.Name);
+            LastMessage = $"已保存「{result.Name}」：{SoftTriggerDescriber.DescribeTrigger(result.TriggerUsageId, result.TriggerModifier)} → {SoftTriggerDescriber.DescribeSequence(result.Steps)}";
+            _logger.LogInformation("软触发已保存：{Name}", result.Name);
         }
         catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException)
         {
             LastMessage = $"保存被拒：{ex.Message}";
         }
     }
+
+    // ===== 列表行操作 =====
 
     [RelayCommand]
     private void Delete(SoftTriggerItemViewModel? item)
@@ -147,7 +123,7 @@ public partial class SoftTriggerViewModel : ObservableObject
         LastMessage = $"已删除「{item.Name}」";
     }
 
-    /// <summary>启停单条定义（引擎重载即时生效；连发中的按名终止与否由引擎 Reload 语义决定）。</summary>
+    /// <summary>启停单条定义（引擎重载即时生效）。</summary>
     [RelayCommand]
     private void SetItemEnabled(SoftTriggerItemViewModel? item)
     {
@@ -187,8 +163,12 @@ public partial class SoftTriggerViewModel : ObservableObject
     [RelayCommand]
     private void Refresh()
     {
+        var ordered = _store.List()
+            .OrderByDescending(d => d.Enabled)
+            .ThenByDescending(d => d.CreatedAt)                // v2：新编排的从顶部向下生长
+            .ToList();
         Definitions.Clear();
-        foreach (var def in _store.List())
+        foreach (var def in ordered)
             Definitions.Add(new SoftTriggerItemViewModel(def));
 
         OnPropertyChanged(nameof(FeatureEnabled));
@@ -236,26 +216,28 @@ public partial class SoftTriggerViewModel : ObservableObject
 }
 
 /// <summary>软触发列表一行。</summary>
-public partial class SoftTriggerItemViewModel : ObservableObject
+public class SoftTriggerItemViewModel
 {
     public SoftTriggerDefinition Definition { get; }
 
     public string Name { get; }
-    public string TriggerName { get; }
+    public string TriggerText { get; }
     public string SequenceText { get; }
     public string ModeText { get; }
     public string Note { get; }
+    public int Priority { get; }
 
     public SoftTriggerItemViewModel(SoftTriggerDefinition definition)
     {
         Definition = definition;
         Name = definition.Name;
-        TriggerName = SoftTriggerKeys.TriggerName(definition.TriggerUsageId);
+        TriggerText = SoftTriggerDescriber.DescribeTrigger(definition.TriggerUsageId, definition.TriggerModifier);
         SequenceText = SoftTriggerDescriber.DescribeSequence(definition.Steps);
         ModeText = definition.RepeatMode == SoftTriggerRepeatMode.Toggle
             ? $"连发 / {definition.RepeatIntervalMs}ms"
             : "单次";
         Note = definition.Note;
+        Priority = definition.Priority;
     }
 
     /// <summary>启用位（复选框两路绑定 → VM 命令持久化）。</summary>

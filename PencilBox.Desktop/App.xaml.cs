@@ -19,6 +19,9 @@ public partial class App : Application
 {
     public static IServiceProvider Services { get; private set; } = null!;
 
+    /// <summary>主窗引用（对话框 Owner 用；启动前为 null）。</summary>
+    public static Window? MainWindow { get; private set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -42,6 +45,7 @@ public partial class App : Application
         StartSoftTriggerEngine();
 
         var mainWindow = Services.GetRequiredService<MainWindow>();
+        MainWindow = mainWindow;
         mainWindow.Show();
     }
 
