@@ -18,25 +18,29 @@ namespace PencilBox.Desktop.Views;
 /// </summary>
 public partial class SoftTriggerEditDialog : Window
 {
-    /// <summary>修饰组合选项（位和 0x0F 全 16 态；触发与动作步共用）。</summary>
-    public static readonly (byte Value, string Label)[] ModifierOptions =
+    /// <summary>
+    /// 修饰组合选项（位和 0x0F 全 16 态；触发与动作步共用）。
+    /// 必须用带属性的 KeyValue——ValueTuple 的字段名是编译期糖，运行时反射取不到，
+    /// SelectedValuePath/DisplayMemberPath 会静默失效 → 下拉空白（2026-10-19 目验实锤，v2.1 修）。
+    /// </summary>
+    public static readonly KeyValue[] ModifierOptions =
     [
-        (0x00, "无"),
-        (0x01, "Ctrl"),
-        (0x02, "Shift"),
-        (0x04, "Alt"),
-        (0x08, "Win"),
-        (0x03, "Ctrl+Shift"),
-        (0x05, "Ctrl+Alt"),
-        (0x09, "Ctrl+Win"),
-        (0x06, "Shift+Alt"),
-        (0x0A, "Shift+Win"),
-        (0x0C, "Alt+Win"),
-        (0x07, "Ctrl+Shift+Alt"),
-        (0x0B, "Ctrl+Shift+Win"),
-        (0x0D, "Ctrl+Alt+Win"),
-        (0x0E, "Shift+Alt+Win"),
-        (0x0F, "Ctrl+Shift+Alt+Win"),
+        new(0x00, "无"),
+        new(0x01, "Ctrl"),
+        new(0x02, "Shift"),
+        new(0x04, "Alt"),
+        new(0x08, "Win"),
+        new(0x03, "Ctrl+Shift"),
+        new(0x05, "Ctrl+Alt"),
+        new(0x09, "Ctrl+Win"),
+        new(0x06, "Shift+Alt"),
+        new(0x0A, "Shift+Win"),
+        new(0x0C, "Alt+Win"),
+        new(0x07, "Ctrl+Shift+Alt"),
+        new(0x0B, "Ctrl+Shift+Win"),
+        new(0x0D, "Ctrl+Alt+Win"),
+        new(0x0E, "Shift+Alt+Win"),
+        new(0x0F, "Ctrl+Shift+Alt+Win"),
     ];
 
     public ObservableCollection<StepRow> Steps { get; } = [];
@@ -53,7 +57,7 @@ public partial class SoftTriggerEditDialog : Window
         _existingDefs = existingDefs;
         _editing = editing;
 
-        TriggerModifierBox.ItemsSource = ModifierOptions.Select(o => new KeyValue(o.Value, o.Label)).ToList();
+        TriggerModifierBox.ItemsSource = ModifierOptions;
         TriggerModifierBox.SelectedValue = (byte)0;
         TriggerKeyBox.ItemsSource = KeyOptionsForTrigger().ToList();
         TriggerKeyBox.SelectedValue = (byte)0x73;              // 默认 F24（物理键盘不存在，最安全的触发键）
@@ -182,7 +186,7 @@ public partial class SoftTriggerEditDialog : Window
         private int _delayMsAfter;
 
         // 绑定面用实例属性（Binding 对静态属性支持不稳，坑点速查同族）
-        public (byte Value, string Label)[] ModifierOptions { get; } = SoftTriggerEditDialog.ModifierOptions;
+        public KeyValue[] ModifierOptions { get; } = SoftTriggerEditDialog.ModifierOptions;
 
         public List<KeyValue> KeyOptions { get; } = AllKeyOptions().ToList();
 
