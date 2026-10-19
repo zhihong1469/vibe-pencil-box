@@ -174,7 +174,26 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
         Log(SoftTriggerEvent.KindTriggerSeen, matches[0].Name,
             $"捕获触发键 {SoftTriggerDescriber.DescribeTrigger(usage, matches[0].TriggerModifier)}（{matches.Count} 条命中）");
         foreach (var def in matches)
-            Task.Run(() => Dispatch(def));
+        {
+            var triggerVk = vk;                                  // 派发前捕获原始 VK（等松开判定用）
+            Task.Run(() => Dispatch(def, triggerVk));
+        }
+    }
+
+    /// <summary>测试注入口：触发键"是否仍按着"（默认 null=GetAsyncKeyState 实查；单测注假态验证等待与放行）。</summary>
+    public static Func<int, bool>? IsKeyDownOverride;
+
+    /// <summary>
+    /// 等触发键松开（上限 800ms，10ms 步进）：回放键若插在触发键仍按着时注入，目标软件
+    /// "F2 按下且无其他键"类热键判定（RegisterHotKey/轮询族）会被夹断——观感即"触发键被勾走"
+    /// （2026-10-19 指挥官 F2→Shift+Alt+L 经常失效实锤）。等松开=目标先收到干净的触发键按压，
+    /// 再收回放序列；用户主动长按触发键时 800ms 后照放（不吞动作，只隔离时序）。
+    /// </summary>
+    private static void WaitTriggerReleased(int triggerVk)
+    {
+        var isDown = IsKeyDownOverride ?? (vk => (GetAsyncKeyState(vk) & 0x8000) != 0);
+        for (var waited = 0; waited < 800 && isDown(triggerVk); waited += 10)
+            Thread.Sleep(10);
     }
 
     /// <summary>GetAsyncKeyState 实时查询：要求的修饰位全按下、其余修饰位全抬起。</summary>
@@ -191,10 +210,13 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
         return true;
     }
 
-    private void Dispatch(SoftTriggerDefinition def)
+    private void Dispatch(SoftTriggerDefinition def, int triggerVk = 0)
     {
         try
         {
+            if (triggerVk > 0)
+                WaitTriggerReleased(triggerVk);   // 键盘触发路径先等松开（定时器回放 triggerVk=0 不等）
+
             if (def.RepeatMode == SoftTriggerRepeatMode.Toggle)
             {
                 if (_toggleTimers.TryRemove(def.Name, out var running))

@@ -158,9 +158,9 @@ public class SoftTriggerTests : IDisposable
     {
         var steps = SoftTriggerTextParser.ParseSequence("F2@100,ALT+L@250,ENTER");
 
-        Assert.Equal(100, steps[0].DelayMsAfter);
-        Assert.Equal(250, steps[1].DelayMsAfter);
-        Assert.Equal(0, steps[2].DelayMsAfter);
+        Assert.Equal(100, steps[0].DelayMsBefore);
+        Assert.Equal(250, steps[1].DelayMsBefore);
+        Assert.Equal(0, steps[2].DelayMsBefore);
         Assert.Equal("F2@100 → Alt+L@250 → Enter", SoftTriggerDescriber.DescribeSequence(steps));
     }
 
@@ -248,7 +248,22 @@ public class SoftTriggerTests : IDisposable
         var def = store.Load("旧版");
         Assert.NotNull(def);
         Assert.Equal(0, def.StepIntervalMs);                    // 字段退役清零
-        Assert.All(def.Steps, s => Assert.Equal(80, s.DelayMsAfter));  // 摊给未显式延时步
+        Assert.All(def.Steps, s => Assert.Equal(80, s.DelayMsBefore));  // 摊给未显式延时步
+    }
+
+    [Fact]
+    public void Store_MigratesLegacyDelayFieldName()
+    {
+        var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
+        var legacyJson = "{\"Name\":\"旧延时\",\"Enabled\":true,\"TriggerUsageId\":109,\"TriggerModifier\":0," +
+            "\"Steps\":[{\"Usage\":59,\"Modifier\":4,\"DelayMsAfter\":250}],\"StepIntervalMs\":0," +
+            "\"RepeatMode\":0,\"RepeatIntervalMs\":200,\"Note\":\"\",\"CreatedAt\":\"2026-10-19T10:00:00\"}";
+        Directory.CreateDirectory(Path.Combine(_dir, "configs", "softtriggers"));
+        File.WriteAllText(Path.Combine(_dir, "configs", "softtriggers", "旧延时.json"), legacyJson);
+
+        var def = store.Load("旧延时");
+        Assert.NotNull(def);
+        Assert.Equal(250, def.Steps[0].DelayMsBefore);          // v2.3 旧步后字段改名入步前（值随步走）
     }
 
     [Fact]
@@ -315,6 +330,32 @@ public class SoftTriggerTests : IDisposable
         Assert.Equal("连点测试", replayed.Name);
         Assert.Single(sender.Sent);
         Assert.Equal(2, sender.Sent[0].Steps.Count);
+    }
+
+    [Fact]
+    public async Task Engine_WaitsForTriggerReleaseBeforeReplay()
+    {
+        var (engine, hook, sender, _) = CreateEngine();
+        var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
+        store.Save(ValidDef());
+        engine.Start();
+
+        var polls = 0;
+        SoftTriggerEngine.IsKeyDownOverride = _ => ++polls <= 2;   // 头两次查询=仍按着，第三次=已松开
+        try
+        {
+            hook.Press(0x80);                                      // VK F17 → usage 0x6C（命中）
+            var replayed = await WaitForAsync(
+                () => engine.RecentEvents(20).FirstOrDefault(e => e.Kind == SoftTriggerEvent.KindReplayed),
+                "Replayed 事件");
+            Assert.NotNull(replayed);
+            Assert.True(polls >= 2, $"应先轮询等触发键松开再回放（实际 polls={polls}）");
+            Assert.Single(sender.Sent);                            // 松开后照常回放（不吞动作）
+        }
+        finally
+        {
+            SoftTriggerEngine.IsKeyDownOverride = null;            // 注入口必须复原，防污染并行用例
+        }
     }
 
     [Fact]

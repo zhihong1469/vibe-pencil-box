@@ -24,7 +24,7 @@ public static class SoftTriggerKeys
     /// <summary>步数上限（防超长编排）</summary>
     public const int MaxSteps = 32;
 
-    /// <summary>步后延时上限 ms</summary>
+    /// <summary>步前延时上限 ms</summary>
     public const int MaxStepDelayMs = 60_000;
 
     /// <summary>可映射键域（与 KeyboardUsageMap / SyntheticKeyboardSender 互逆表同源的字节字典）</summary>
@@ -78,8 +78,8 @@ public static class SoftTriggerKeys
                     $"动作含本定义触发键 {Models.SoftTriggerDescriber.DescribeStep(new SoftTriggerStep(def.TriggerUsageId, def.TriggerModifier))}——按下即自触发回环——「{def.Name}」");
             if (!IsValidModifier(step.Modifier))
                 throw new ArgumentException($"序列步修饰位非法：0x{step.Modifier:X2}——「{def.Name}」");
-            if (step.DelayMsAfter is < 0 or > MaxStepDelayMs)
-                throw new ArgumentException($"步后延时越界（0~{MaxStepDelayMs}ms）：{step.DelayMsAfter}ms——「{def.Name}」");
+            if (step.DelayMsBefore is < 0 or > MaxStepDelayMs)
+                throw new ArgumentException($"步前延时越界（0~{MaxStepDelayMs}ms）：{step.DelayMsBefore}ms——「{def.Name}」");
         }
         if (def.RepeatMode == SoftTriggerRepeatMode.Toggle && def.RepeatIntervalMs is < 20 or > 60_000)
             throw new ArgumentException($"连发周期越界（20~60000ms）：{def.RepeatIntervalMs}");

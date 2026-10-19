@@ -20,7 +20,7 @@ namespace PencilBox.Desktop.ViewModels;
 /// <summary>
 /// 软触发页（13 号动作库键盘族，2026-10-19；v2 同日目验反馈重排）：
 /// 页面=标题行（右上角「＋ 新建」）+ 定义列表（新编排的从顶部向下生长）+ 底部实时事件；
-/// 编辑走 <see cref="SoftTriggerEditDialog"/> 弹窗（步骤编排 ↑↓✕ + 步后延时 + 优先级）——参考 Keymap 的编辑认知。
+/// 编辑走 <see cref="SoftTriggerEditDialog"/> 弹窗（步骤编排 ↑↓✕ + 步前延时 + 优先级）——参考 Keymap 的编辑认知。
 /// 纯软件域——不依赖任何设备服务；引擎随宿主启动（App.OnStartup 拉起），本页只做定义管理 + 试射 + 事件观察。
 /// </summary>
 public partial class SoftTriggerViewModel : ObservableObject

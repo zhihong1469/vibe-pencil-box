@@ -48,7 +48,7 @@ public sealed class SoftTriggerStore : ISoftTriggerStore
             {
                 try
                 {
-                    var def = JsonSerializer.Deserialize<SoftTriggerDefinition>(File.ReadAllText(path), JsonOpts);
+                    var def = JsonSerializer.Deserialize<SoftTriggerDefinition>(ReadMigrated(path), JsonOpts);
                     if (def != null && !string.IsNullOrWhiteSpace(def.Name))
                         defs.Add(Migrate(def));
                 }
@@ -70,7 +70,7 @@ public sealed class SoftTriggerStore : ISoftTriggerStore
                 return null;
             try
             {
-                return Migrate(JsonSerializer.Deserialize<SoftTriggerDefinition>(File.ReadAllText(path), JsonOpts)!);
+                return Migrate(JsonSerializer.Deserialize<SoftTriggerDefinition>(ReadMigrated(path), JsonOpts)!);
             }
             catch (Exception ex)
             {
@@ -99,6 +99,14 @@ public sealed class SoftTriggerStore : ISoftTriggerStore
         }
     }
 
+    /// <summary>
+    /// 读文件文本 + 旧字段名迁移：v2.3 步后延时(DelayMsAfter)→步前延时(DelayMsBefore)。
+    /// 旧"步后"语义下用户设延时几乎都是想要"本步前等待"，纯改名（值随步走）即合用；
+    /// 大小写不敏感替换，反序列化侧本来就不区分。
+    /// </summary>
+    private static string ReadMigrated(string path) =>
+        File.ReadAllText(path).Replace("DelayMsAfter", "DelayMsBefore", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>v1 → v2 归一：旧全局步间隔摊给未显式设延时的步（显式 @延时的步保留），字段清零退役。</summary>
     private static SoftTriggerDefinition Migrate(SoftTriggerDefinition def)
     {
@@ -106,8 +114,8 @@ public sealed class SoftTriggerStore : ISoftTriggerStore
         {
             for (var i = 0; i < def.Steps.Count; i++)
             {
-                if (def.Steps[i].DelayMsAfter == 0)
-                    def.Steps[i] = def.Steps[i] with { DelayMsAfter = def.StepIntervalMs };
+                if (def.Steps[i].DelayMsBefore == 0)
+                    def.Steps[i] = def.Steps[i] with { DelayMsBefore = def.StepIntervalMs };
             }
             def.StepIntervalMs = 0;
         }

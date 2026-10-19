@@ -69,8 +69,8 @@ public class SoftTriggerCommands
             {
                 // 旧参数兼容：全局步隔摊给未显式 @延时 的步
                 for (var i = 0; i < steps.Count; i++)
-                    if (steps[i].DelayMsAfter == 0)
-                        steps[i] = steps[i] with { DelayMsAfter = stepInterval };
+                    if (steps[i].DelayMsBefore == 0)
+                        steps[i] = steps[i] with { DelayMsBefore = stepInterval };
             }
             var def = new SoftTriggerDefinition
             {
@@ -176,8 +176,8 @@ public class SoftTriggerCommands
                     $"键值 0x{step.Usage:X2}（F{step.Usage - SoftTriggerKeys.WorkStateLo + 13}）属工作状态保留段（F13~F16），拒绝发送");
             if (interval > 0)
                 for (var i = 0; i < steps.Count; i++)
-                    if (steps[i].DelayMsAfter == 0)
-                        steps[i] = steps[i] with { DelayMsAfter = interval };
+                    if (steps[i].DelayMsBefore == 0)
+                        steps[i] = steps[i] with { DelayMsBefore = interval };
 
             // 与启用定义触发键相交 → 提示（不拦：试手感是用户主动行为，且回放触发键可能真实触发）
             var triggers = _store.List().Where(d => d.Enabled)

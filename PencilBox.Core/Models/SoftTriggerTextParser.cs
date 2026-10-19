@@ -9,7 +9,8 @@ namespace PencilBox.Core.Models;
 
 /// <summary>
 /// 软触发序列文本解析（13 号；CLI --keys 与测试共用，与 <see cref="SoftTriggerDescriber"/> 成对）。
-/// 语法：逗号分步；步内 `修饰+主键[@步后延时ms]`，如 `F2`、`ALT+L`、`F2@100`、`CTRL+SHIFT+S@250`。
+/// 语法：逗号分步；步内 `修饰+主键[@步前延时ms]`，如 `F2`、`ALT+L`、`F2@100`、`CTRL+SHIFT+S@250`
+/// （@ms=本步回放【前】等待，v2.3 起步前语义——触发源后第一步设延时可防回放键夹进触发键按压）。
 /// 主键：A~Z / 0~9 / F1~F24 / ENTER SPACE ESC TAB BACKSPACE DELETE INSERT HOME END PGUP PGDN 方向键。
 /// v2：触发键池=全键盘（F13~F16 工作状态保留除外，校验层拦）。
 /// </summary>
@@ -30,20 +31,20 @@ public static class SoftTriggerTextParser
         return steps;
     }
 
-    /// <summary>解析单步（"ALT+L" / "F2@100"——@后为步后延时 ms）。</summary>
+    /// <summary>解析单步（"ALT+L" / "F2@100"——@后为步前延时 ms：本步回放前等待）。</summary>
     public static SoftTriggerStep ParseStep(string text)
     {
         byte modifier = 0;
         string main = text.Trim();
 
-        // @步后延时：主键后缀 "F2@100"
+        // @步前延时：主键后缀 "F2@100"
         int delay = 0;
         var at = main.LastIndexOf('@');
         if (at >= 0)
         {
             var delayText = main[(at + 1)..].Trim();
             if (!int.TryParse(delayText, out delay) || delay < 0)
-                throw new ArgumentException($"步后延时非法（@后须为非负整数 ms）：「{text}」");
+                throw new ArgumentException($"步前延时非法（@后须为非负整数 ms）：「{text}」");
             main = main[..at].Trim();
         }
 
@@ -123,7 +124,7 @@ public static class SoftTriggerDescriber
         if ((step.Modifier & 0x08) != 0) parts.Add("Win");
         parts.Add(MainKeyName(step.Usage));
         var text = string.Join("+", parts);
-        return step.DelayMsAfter > 0 ? $"{text}@{step.DelayMsAfter}" : text;
+        return step.DelayMsBefore > 0 ? $"{text}@{step.DelayMsBefore}" : text;
     }
 
     /// <summary>触发键可读文本（修饰+键名，如 "Alt+F2"；与 ParseTrigger 互逆）。</summary>

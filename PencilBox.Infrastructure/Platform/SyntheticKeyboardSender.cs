@@ -24,9 +24,9 @@ public sealed class SyntheticKeyboardSender : ISyntheticKeyboard
     {
         foreach (var step in steps)
         {
+            if (step.DelayMsBefore > 0)
+                Thread.Sleep(step.DelayMsBefore);   // 步前延时（v2.3）：触发源→首步的间隔设这里，防回放键夹进触发键按压
             SendStep(step);
-            if (step.DelayMsAfter > 0)
-                Thread.Sleep(step.DelayMsAfter);   // 周期穿插在步间（v2）
         }
     }
 

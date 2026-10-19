@@ -16,10 +16,12 @@ public enum SoftTriggerRepeatMode
 }
 
 /// <summary>
-/// 序列一步 = 修饰键 + 单主键 + 步后延时（HID usage；顺序=数组序，13 号：顺序/周期自由编排）。
-/// DelayMsAfter=本步回放完成后再等待的毫秒数（0=立即下一步）——周期穿插在步间，v2（指挥官 10-19 反馈）。
+/// 序列一步 = 修饰键 + 单主键 + 步前延时（HID usage；顺序=数组序，13 号：顺序/周期自由编排）。
+/// DelayMsBefore=本步回放【前】等待的毫秒数（0=立即）——周期穿插在步间；
+/// 触发源后的第一步设 200~300ms 可避免回放键与触发键按压交错（v2.3，指挥官 F2→Shift+Alt+L
+/// 回放夹进 F2 按压导致目标软件热键判定经常失效的教训；引擎另有"等触发键松开再回放"双保险）。
 /// </summary>
-public sealed record SoftTriggerStep(byte Usage, byte Modifier, int DelayMsAfter = 0);
+public sealed record SoftTriggerStep(byte Usage, byte Modifier, int DelayMsBefore = 0);
 
 /// <summary>
 /// 一条软触发定义（动作库键盘族，13 号；纯软件域——零设备依赖）。
@@ -41,13 +43,13 @@ public sealed class SoftTriggerDefinition
     /// <summary>触发修饰组合（0x01=Ctrl 0x02=Shift 0x04=Alt 0x08=Win 位和；钩子侧精确匹配防误触）</summary>
     public byte TriggerModifier { get; set; }
 
-    /// <summary>回放序列（步=修饰+主键+步后延时）</summary>
+    /// <summary>回放序列（步=修饰+主键+步前延时）</summary>
     public List<SoftTriggerStep> Steps { get; set; } = [];
 
     /// <summary>同触发键命中多条时的执行优先级（大者先回放）</summary>
     public int Priority { get; set; }
 
-    /// <summary>[旧版兼容] v1 全局步间隔 ms；v2 起逐步延时（DelayMsAfter），装载时摊给未显式设延时的步</summary>
+    /// <summary>[旧版兼容] v1 全局步间隔 ms；v2 起逐步延时（DelayMsBefore），装载时摊给未显式设延时的步</summary>
     public int StepIntervalMs { get; set; }
 
     public SoftTriggerRepeatMode RepeatMode { get; set; } = SoftTriggerRepeatMode.Once;

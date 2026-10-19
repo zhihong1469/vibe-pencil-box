@@ -903,7 +903,7 @@ public class Program
                      add <名> --trigger ALT+F2 --keys "F2@100,ALT+L"
                                                                     新建：触发键=全键盘池±修饰（F13~F16 工作状态保留除外）；
                           [--mode once|toggle]                      防回环=动态预留律（启用集内触发键∩动作键=∅，冲突点名拒）
-                          [--repeat-interval 200] [--priority 0]    步语法=修饰+主键[@步后延时ms]，周期穿插步间
+                          [--repeat-interval 200] [--priority 0]    步语法=修饰+主键[@步前延时ms]，周期穿插步间
                           [--step-interval N]（旧参数：摊给未@步）
                           [--note ".."] [--disabled]
                      on/off/remove <名>                             启用/停用/删除（Desktop 引擎随重载生效；

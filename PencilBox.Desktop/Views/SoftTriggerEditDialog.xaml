@@ -57,9 +57,9 @@
             <TextBox x:Name="NoteBox" Grid.Row="4" Grid.Column="1"/>
         </Grid>
 
-        <!-- 步骤编排（顺序=行序；↑↓ 排序；列宽跨行共享=表格对齐） -->
-        <GroupBox Header="回放序列（顺序=行序，↑↓✕ 编排；步后延时=该步回放完的等待 ms）"
-                  ToolTip="动作键不得与任何启用定义的触发键相同——动态预留全局律会在保存时把关"
+        <!-- 步骤编排（顺序=行序；↑↓ 排序；@延时=本步回放前等待；列宽跨行共享=表格对齐） -->
+        <GroupBox Header="回放序列（顺序=行序，↑↓✕ 编排；步前延时=本步回放前的等待 ms）"
+                  ToolTip="动作键不得与任何启用定义的触发键相同——动态预留全局律会在保存时把关；触发源后的第一步设 200~300ms 可防回放键夹进触发键按压"
                   Margin="0,0,0,10" Padding="8">
             <StackPanel Grid.IsSharedSizeScope="True">
                 <ItemsControl x:Name="StepsList" AlternationCount="100" Margin="0,0,0,6">
@@ -86,9 +86,10 @@
                                           SelectedValuePath="Value" DisplayMemberPath="Label"
                                           MinWidth="110" VerticalAlignment="Center"
                                           ToolTip="动作键（F17~F24 也可用——只要没有启用定义把它当触发键，动态预留律会在保存时把关）"/>
-                                <TextBlock Grid.Column="4" Text="步后延时ms:" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                <TextBox Grid.Column="5" Text="{Binding DelayMsAfter, TargetNullValue=0}"
-                                         Width="56" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="4" Text="步前延时ms:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBox Grid.Column="5" Text="{Binding DelayMsBefore, TargetNullValue=0}"
+                                         Width="56" VerticalAlignment="Center"
+                                         ToolTip="本步回放【前】等待的 ms；触发源后的第一步设 200~300ms，可防回放键夹进触发键按压导致目标软件热键判定失效（引擎还会自动等触发键松开再回放，双保险）"/>
                                 <StackPanel Grid.Column="7" Orientation="Horizontal">
                                     <Button Content="↑" Click="OnStepUp" Width="24" Height="24" Padding="0"
                                             ToolTip="上移（编排顺序）"/>

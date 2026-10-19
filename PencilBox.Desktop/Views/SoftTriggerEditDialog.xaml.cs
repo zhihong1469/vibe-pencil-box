@@ -140,7 +140,7 @@ public partial class SoftTriggerEditDialog : Window
         ErrorText.Text = "";
         try
         {
-            var steps = Steps.Select(r => new SoftTriggerStep(r.Usage, r.Modifier, r.DelayMsAfter)).ToList();
+            var steps = Steps.Select(r => new SoftTriggerStep(r.Usage, r.Modifier, r.DelayMsBefore)).ToList();
             var def = new SoftTriggerDefinition
             {
                 Name = NameBox.Text.Trim(),
@@ -183,7 +183,7 @@ public partial class SoftTriggerEditDialog : Window
     {
         private byte _usage;
         private byte _modifier;
-        private int _delayMsAfter;
+        private int _delayMsBefore;
 
         // 绑定面用实例属性（Binding 对静态属性支持不稳，坑点速查同族）
         public KeyValue[] ModifierOptions { get; } = SoftTriggerEditDialog.ModifierOptions;
@@ -194,12 +194,12 @@ public partial class SoftTriggerEditDialog : Window
         {
             _usage = step.Usage;
             _modifier = step.Modifier;
-            _delayMsAfter = step.DelayMsAfter;
+            _delayMsBefore = step.DelayMsBefore;
         }
 
         public byte Usage { get => _usage; set { _usage = value; Changed(nameof(Usage)); } }
         public byte Modifier { get => _modifier; set { _modifier = value; Changed(nameof(Modifier)); } }
-        public int DelayMsAfter { get => _delayMsAfter; set { _delayMsAfter = value; Changed(nameof(DelayMsAfter)); } }
+        public int DelayMsBefore { get => _delayMsBefore; set { _delayMsBefore = value; Changed(nameof(DelayMsBefore)); } }
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
