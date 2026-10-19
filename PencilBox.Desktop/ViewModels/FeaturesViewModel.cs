@@ -57,12 +57,14 @@ public partial class FeaturesViewModel : ObservableObject
         OnPropertyChanged(nameof(AudioTabVisibility));
         OnPropertyChanged(nameof(AirMouseTabVisibility));
         OnPropertyChanged(nameof(SerialScopeTabVisibility));
+        OnPropertyChanged(nameof(SoftTriggerTabVisibility));
     }
 
     // 页签显隐直出 Visibility（坑点速查 §三：转换器返回类型≠目标属性会绑定静默失败——不设中间转换器）
     public Visibility AudioTabVisibility => ToVis("audio");
     public Visibility AirMouseTabVisibility => ToVis("airmouse");
     public Visibility SerialScopeTabVisibility => ToVis("seriallog");
+    public Visibility SoftTriggerTabVisibility => ToVis("softtrigger");
 
     private Visibility ToVis(string featureId) =>
         _toggles.IsEnabled(featureId) ? Visibility.Visible : Visibility.Collapsed;

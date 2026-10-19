@@ -39,6 +39,11 @@ public static class DesktopModuleExtensions
     public static IServiceCollection AddAirMouseModule(this IServiceCollection services) =>
         services.AddSingleton<AirMouseViewModel>();
 
+    /// <summary>可选域·软触发（FeatureCatalog: softtrigger；13 号动作库键盘族——纯软件域零设备依赖，
+    /// "软触发单功能发行版"将来只留本模块+引擎双腿，蓝牙/串口/音频依赖全可砍）。</summary>
+    public static IServiceCollection AddSoftTriggerModule(this IServiceCollection services) =>
+        services.AddSingleton<SoftTriggerViewModel>();
+
     /// <summary>功能控制台（可选功能总开关；壳与仪表盘共用同一单例）。</summary>
     public static IServiceCollection AddFeaturesModule(this IServiceCollection services) =>
         services.AddSingleton<FeaturesViewModel>();

@@ -38,8 +38,25 @@ public partial class App : Application
 
         Log.Information("PencilBox Desktop application started");
 
+        // 软触发引擎随宿主常驻（13 号寄宿形态）：启用即监听，无需打开页签；停用态保持停机（VM 负责 re-enable 拉起）
+        StartSoftTriggerEngine();
+
         var mainWindow = Services.GetRequiredService<MainWindow>();
         mainWindow.Show();
+    }
+
+    private static void StartSoftTriggerEngine()
+    {
+        try
+        {
+            var toggles = Services.GetRequiredService<PencilBox.Core.Features.IFeatureToggleService>();
+            if (toggles.IsEnabled("softtrigger"))
+                Services.GetRequiredService<PencilBox.Core.SoftTrigger.ISoftTriggerEngine>().Start();
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "软触发引擎启动失败（功能其余部分不受影响）");
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -70,6 +87,7 @@ public partial class App : Application
         services.AddSerialScopeModule();
         services.AddPassthroughModule();
         services.AddAirMouseModule();
+        services.AddSoftTriggerModule();
         services.AddDebugToolsModule();
         services.AddShellModule();
     }

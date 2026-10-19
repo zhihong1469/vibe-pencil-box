@@ -61,6 +61,23 @@ public class FeatureToggleTests : IDisposable
     }
 
     [Fact]
+    public async Task ExternalFileChange_FiresChanged_CrossProcessFollow()
+    {
+        // 跨进程跟随（10-19 E2E 实测缺口）：另一进程直写 features.json → FSW 防抖重读 → Changed 事件
+        var svc = Create();
+        var tcs = new TaskCompletionSource<FeatureToggleChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        svc.Changed += (_, e) => tcs.TrySetResult(e);
+
+        File.WriteAllText(JsonPath, """{"features": {"audio": false}}""");
+
+        var winner = await Task.WhenAny(tcs.Task, Task.Delay(4000));
+        Assert.True(winner == tcs.Task, "4s 内未收到外部文件变更的 Changed 事件");
+        Assert.Equal("audio", tcs.Task.Result.Descriptor.Id);
+        Assert.False(tcs.Task.Result.Enabled);
+        Assert.False(svc.IsEnabled("audio"));
+    }
+
+    [Fact]
     public void SetEnabled_PersistsAndRoundTripsAcrossInstances()
     {
         var svc = Create();

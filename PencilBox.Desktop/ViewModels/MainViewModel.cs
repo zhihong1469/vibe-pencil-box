@@ -43,6 +43,9 @@ public partial class MainViewModel : ObservableObject
     public ProductHomeViewModel ProductHome { get; }
     public AirMouseViewModel AirMouse { get; }
 
+    /// <summary>软触发（13 号：纯软件域，零设备依赖）</summary>
+    public SoftTriggerViewModel SoftTrigger { get; }
+
     /// <summary>功能控制台（14 号：主窗页签显隐与仪表盘控制台卡共用同一单例）</summary>
     public FeaturesViewModel Features { get; }
 
@@ -59,6 +62,7 @@ public partial class MainViewModel : ObservableObject
         OtaPageViewModel otaPage,
         ProductHomeViewModel productHome,
         AirMouseViewModel airMouse,
+        SoftTriggerViewModel softTrigger,
         FeaturesViewModel features)
     {
         _deviceService = deviceService;
@@ -74,6 +78,7 @@ public partial class MainViewModel : ObservableObject
         OtaPage = otaPage;
         ProductHome = productHome;
         AirMouse = airMouse;
+        SoftTrigger = softTrigger;
         Features = features;
 
         _deviceService.ConnectionStateChanged += OnConnectionStateChanged;

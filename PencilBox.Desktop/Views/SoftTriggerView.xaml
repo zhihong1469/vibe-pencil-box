@@ -1,0 +1,155 @@
+<UserControl x:Class="PencilBox.Desktop.Views.SoftTriggerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="720" d:DesignWidth="1060">
+    <!-- 软触发（13 号动作库键盘族；纯软件域——不插设备也全功能） -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="8,6">
+
+            <!-- ============ 引擎状态栏（状态由 VM 直出 bool，DataTrigger 变色——不走转换器） ============ -->
+            <GroupBox Header="软触发引擎（本机键击回放——上位机纯软件，与设备连接无关）" Margin="4">
+                <StackPanel Orientation="Horizontal" Margin="4">
+                    <TextBlock VerticalAlignment="Center" FontWeight="SemiBold">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="● 已停机"/>
+                                <Setter Property="Foreground" Value="Gray"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding EngineRunning}" Value="True">
+                                        <Setter Property="Text" Value="● 运行中"/>
+                                        <Setter Property="Foreground" Value="#2ECC71"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding FeatureEnabled}" Value="False">
+                                        <Setter Property="Text" Value="● 功能已停用"/>
+                                        <Setter Property="Foreground" Value="#E67E22"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <TextBlock Text="{Binding EngineStatusText}" Margin="10,0,0,0" VerticalAlignment="Center"
+                               FontSize="12" Opacity="0.75"
+                               ToolTip="引擎随宿主启动；功能总开关在仪表盘「功能控制台」或 CLI feature 域"/>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ============ 定义列表 ============ -->
+            <GroupBox Header="触发定义" Margin="4">
+                <StackPanel>
+                    <ItemsControl ItemsSource="{Binding Definitions}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="#DDD" BorderThickness="0,0,0,1" Padding="6,4" Background="Transparent">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="130"/>
+                                            <ColumnDefinition Width="46"/>
+                                            <ColumnDefinition Width="2*"/>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                                  Command="{Binding DataContext.SetItemEnabledCommand,
+                                                            RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                  CommandParameter="{Binding}"
+                                                  VerticalAlignment="Center" Margin="0,0,8,0"
+                                                  ToolTip="启用/停用该定义（勾选即时生效）"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Note}"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding TriggerName}" VerticalAlignment="Center"
+                                                   Foreground="#2980B9" FontWeight="SemiBold"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding SequenceText}" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding SequenceText}"/>
+                                        <TextBlock Grid.Column="4" Text="{Binding ModeText}" VerticalAlignment="Center"
+                                                   FontSize="11" Opacity="0.7"/>
+                                        <Button Grid.Column="5" Content="试射"
+                                                Command="{Binding DataContext.FireCommand,
+                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"
+                                                Style="{StaticResource ActionButton}" MinWidth="52" Margin="4,0"
+                                                ToolTip="不经钩子直接回放一遍（键击进当前前台窗口，请先切好焦点）"/>
+                                        <Button Grid.Column="6" Content="删除"
+                                                Command="{Binding DataContext.DeleteCommand,
+                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"
+                                                Style="{StaticResource ActionButton}" MinWidth="52" Margin="4,0"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="（暂无定义——在下方新建：专用键 F17~F24 按下 → 回放你编排的键序列）"
+                               Margin="6,4" Opacity="0.6"
+                               Visibility="{Binding EmptyHintVisibility}"/>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ============ 新建 / 编辑 ============ -->
+            <GroupBox Header="新建软触发" Margin="4">
+                <StackPanel Margin="4">
+                    <WrapPanel>
+                        <TextBlock Text="名称:" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding EditorName, UpdateSourceTrigger=PropertyChanged}" Width="140" Margin="4,0,12,0"/>
+                        <TextBlock Text="触发键:" VerticalAlignment="Center"/>
+                        <ComboBox ItemsSource="{Binding TriggerKeyChoices}" SelectedItem="{Binding EditorTrigger}"
+                                  Width="70" Margin="4,0,12,0"
+                                  ToolTip="只允许专用键 F17~F24（F13~F16 属工作状态保留；普通键会回环，双双被拒）"/>
+                        <TextBlock Text="模式:" VerticalAlignment="Center"/>
+                        <ComboBox SelectedIndex="{Binding EditorModeIndex}" Width="130" Margin="4,0,12,0"
+                                  ToolTip="单次=触发回放一遍；连发=立即回放并周期重复，再按触发键停止">
+                            <ComboBoxItem Content="单次"/>
+                            <ComboBoxItem Content="连发（再按停）"/>
+                        </ComboBox>
+                        <TextBlock Text="步间隔ms:" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding EditorStepInterval}" Width="50" Margin="4,0,12,0"
+                                 ToolTip="序列相邻两步之间的间隔（0~5000ms）"/>
+                        <TextBlock Text="连发周期ms:" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding EditorRepeatInterval}" Width="60" Margin="4,0,12,0"
+                                 ToolTip="连发模式下的重复周期（20~60000ms；单次模式忽略）"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,6,0,0">
+                        <TextBlock Text="键序列:" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding EditorKeys, UpdateSourceTrigger=PropertyChanged}" Width="330" Margin="4,0"
+                                 ToolTip="逗号分步，步内 修饰+主键。例：F2,ALT+L  /  CTRL+SHIFT+S,F7,ENTER&#x0a;主键：A~Z / 0~9 / F1~F12 / Enter / Space / 方向键 等（F13~F24 拒收）"/>
+                        <Button Content="保存" Command="{Binding SaveCommand}"
+                                Style="{StaticResource ActionButton}" MinWidth="64" Margin="10,0,4,0"/>
+                        <TextBlock Text="{Binding EditorPreview}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   FontSize="12" Opacity="0.7" TextTrimming="CharacterEllipsis"
+                                   MaxWidth="420"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,6,0,0">
+                        <TextBlock Text="备注:" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding EditorNote, UpdateSourceTrigger=PropertyChanged}" Width="360" Margin="4,0,0,0"/>
+                    </WrapPanel>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- ============ 实时事件 + 消息条 ============ -->
+            <GroupBox Header="实时事件（引擎回放流水）" Margin="4,4,4,2">
+                <ListBox ItemsSource="{Binding Events}" Height="150" FontSize="11"
+                         HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock TextTrimming="CharacterEllipsis">
+                                <Run Text="{Binding Time, Mode=OneWay, StringFormat='HH:mm:ss.fff'}"/>
+                                <Run Text="{Binding Kind, Mode=OneWay}" FontWeight="SemiBold"/>
+                                <Run Text="{Binding Name, Mode=OneWay}"/>
+                                <Run Text="{Binding Detail, Mode=OneWay}" Foreground="#777"/>
+                            </TextBlock>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </GroupBox>
+
+            <TextBlock Text="{Binding LastMessage}" Margin="10,4,10,10" FontSize="12" TextWrapping="Wrap"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

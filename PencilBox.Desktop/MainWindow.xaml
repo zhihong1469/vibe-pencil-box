@@ -55,6 +55,10 @@
             <TabItem Header="仪表盘">
                 <v:ProductHomeView DataContext="{Binding ProductHome}"/>
             </TabItem>
+            <TabItem Header="软触发" Visibility="{Binding Features.SoftTriggerTabVisibility}"
+                     ToolTip="可选功能（softtrigger）——纯上位机软件：F17~F24 触发键击回放，不插设备也全功能">
+                <v:SoftTriggerView DataContext="{Binding SoftTrigger}"/>
+            </TabItem>
             <TabItem Header="升级">
                 <v:OtaPageView DataContext="{Binding OtaPage}"/>
             </TabItem>
