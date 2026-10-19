@@ -498,6 +498,7 @@ public partial class OtaPageViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanStart))]
     [NotifyPropertyChangedFor(nameof(CanReadDeviceVersion))]
+    [NotifyPropertyChangedFor(nameof(CanReadDeviceHash))]   // 漏挂实证（2026-10-19）：升级中点过读Hash（按钮陈旧仍可点）→ 通知时重读=灰；升级结束无通知 → 永灰至重启
     private bool _isUpgrading;
 
     [ObservableProperty]
