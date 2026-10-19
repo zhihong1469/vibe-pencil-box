@@ -792,21 +792,22 @@ public class Program
             dsp      DSP signal processing (check, scripts, run, analyze)
             config   Configuration management (get, set, path)
             company  公司 V0.9 协议（0xFF02 命令通道；OTA 在此：company ota）
-            keymap   快捷键映射配置（本地 configs/keymap/；按键表+S1 切换表；设备读写待 0x55，pc-issues/05）
-            workstate 笔端工作状态自管（全局键盘钩子监听 Keymap 触发键，识别×扩音两轴）
-                     binding [--config 名]                          从 Keymap 配置推导四键绑定
-                     listen [--config 名] [--secs N]                装钩实时打印状态转移（Ctrl+C 停）
+            keymap   快捷键映射配置（本地 configs/keymap/；按键表+S1 切换表；0x55 下发=apply，pc-issues/05）
                      list / show [配置]                            配置清单 / 表格内容（缺省当前配置）
                      new <名> [--from <配置>]                      复制创建（缺省复制出厂默认）并设为当前
                      set <名> --index N [--key K3] [--event click]
                          [--action keyboard] [--code 0x4B] [--code-hi 0] [--mod alt]
                                                                    改/追加条目（存储按 K1→K6 规范排序，索引会变）
-                     apply [配置]                                  0x55 整表下发基站（回执成功才切上位机当前配置；
-                                                                   出厂默认=恢复设备默认表；需先连接接收器）
                      switch <名> --mode 1|2 [--code 0x6A] [--mod alt]
                                                                    改 S1 切换表档位热键（ON/SPK=扩音开关；IDLE 内部行拒改）
-                     remove <名> --index N                         删除条目
+                     apply [配置]                                  本机立即生效 + 0x55 整表尽力下发基站
+                                                                   （未连接/未响应=[WARN] 仅本机生效、退出码 0；
+                                                                   出厂默认=恢复设备默认表）
+                     remove <名> --index N                         删除条目（K2 长按/长放=会话边界契约行拒删）
                      rename <旧> <新> / delete <名> / use <名>     改名 / 删除 / 设为当前
+            workstate 笔端工作状态自管（全局键盘钩子监听 Keymap 触发键，识别×扩音两轴）
+                     binding [--config 名]                          从 Keymap 配置推导四键绑定
+                     listen [--config 名] [--secs N]                装钩实时打印状态转移（Ctrl+C 停）
                     identify | pair read/write/enter/factory/clear | ota | raw | status
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）
                     status [--monitor N]     0x53 状态快照（电量/设备状态，仅 USB 轨）+ 监听推送
