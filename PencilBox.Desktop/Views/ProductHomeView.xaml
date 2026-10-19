@@ -33,6 +33,7 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <!-- ========== 设备连接区（接收器 + 笔端绑定） ========== -->
@@ -589,8 +590,36 @@
                 </Grid>
             </GroupBox>
 
+            <!-- ========== 功能控制台（14 号：可选功能总开关；CLI feature 域同一份 features.json） ========== -->
+            <GroupBox Grid.Row="3" Header="功能控制台（可选功能开关）" Margin="4"
+                      ToolTip="关闭=GUI 入口隐藏 + CLI 管辖域拒绝 + 运行中引擎即停；与 CLI pencilbox feature 同一开关（configs/features.json）。核心域（连接/绑定/笔端状态/OTA/Keymap）不在此列——设备强相关，不可关">
+                <ItemsControl ItemsSource="{Binding Features.Items}" Margin="2">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- 一行=开关+名称（Auto 列）+ 管辖域与说明（* 列自动换行，窄窗不右裁） -->
+                            <Grid Margin="0,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                          Content="{Binding Name}" VerticalAlignment="Center" Margin="4,0,10,0"
+                                          MinWidth="120"
+                                          ToolTip="{Binding Id}"/>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Description}" FontSize="12" Foreground="#2C3E50"
+                                               TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding CliDomainsText, StringFormat=管辖 CLI 域：{0}}"
+                                               FontSize="10" Foreground="#7F8C8D" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </GroupBox>
+
             <!-- ========== 状态栏 ========== -->
-            <StatusBar Grid.Row="3" Background="#F0F0F0">
+            <StatusBar Grid.Row="4" Background="#F0F0F0">
                 <StatusBarItem>
                     <TextBlock Text="{Binding StatusMessage}" FontSize="12" TextTrimming="CharacterEllipsis"/>
                 </StatusBarItem>

@@ -48,7 +48,9 @@
         </Border>
 
         <!-- 一级 Tab：给人用的主流程（仪表盘 / 升级 / 串口）
-             —— Serial 与 OTA 已从"调试工具"提升到这里，日常使用无需再展开调试面板 -->
+             —— Serial 与 OTA 已从"调试工具"提升到这里，日常使用无需再展开调试面板
+             可选功能页签按总开关显隐（14 号：FeaturesViewModel 直出 Visibility；
+             核心域 仪表盘/升级 恒显——设备强相关不可关） -->
         <TabControl Grid.Row="1" Margin="6,4,6,0">
             <TabItem Header="仪表盘">
                 <v:ProductHomeView DataContext="{Binding ProductHome}"/>
@@ -56,13 +58,16 @@
             <TabItem Header="升级">
                 <v:OtaPageView DataContext="{Binding OtaPage}"/>
             </TabItem>
-            <TabItem Header="串口">
+            <TabItem Header="串口" Visibility="{Binding Features.SerialScopeTabVisibility}"
+                     ToolTip="可选功能（seriallog）——功能控制台或 CLI feature 域可关">
                 <v:SerialScopeView DataContext="{Binding SerialScope}"/>
             </TabItem>
-            <TabItem Header="扩音">
+            <TabItem Header="扩音" Visibility="{Binding Features.AudioTabVisibility}"
+                     ToolTip="可选功能（audio）——功能控制台或 CLI feature 域可关；关=直通回路即停">
                 <v:PassthroughView DataContext="{Binding Passthrough}"/>
             </TabItem>
-            <TabItem Header="空鼠">
+            <TabItem Header="空鼠" Visibility="{Binding Features.AirMouseTabVisibility}"
+                     ToolTip="可选功能（airmouse）——功能控制台或 CLI feature 域可关">
                 <v:AirMouseView DataContext="{Binding AirMouse}"/>
             </TabItem>
         </TabControl>

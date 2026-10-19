@@ -195,6 +195,9 @@ public partial class ProductHomeViewModel : ObservableObject
     /// <summary>工作状态机（识别 × 扩音档两轴；触发键绑定跟随当前选中配置——本机立即生效口径）</summary>
     private PenWorkStateTracker _workStateTracker = null!;
 
+    /// <summary>功能控制台（14 号：与主窗页签显隐共用同一单例；核心域自身不受开关影响）</summary>
+    public FeaturesViewModel Features { get; }
+
     // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
     [ObservableProperty]
     private int _k2ModeIndex;
@@ -266,6 +269,7 @@ public partial class ProductHomeViewModel : ObservableObject
         CompanyKeymapConfigService keymapConfig,
         IGlobalKeyboardHook keyboardHook,
         IVpCommandService vpCmd,
+        FeaturesViewModel features,
         ILogger<ProductHomeViewModel> logger)
     {
         _deviceService = deviceService;
@@ -278,6 +282,7 @@ public partial class ProductHomeViewModel : ObservableObject
         _keymapConfig = keymapConfig;
         _keyboardHook = keyboardHook;
         _vpCmd = vpCmd;
+        Features = features;
         _logger = logger;
 
         _deviceService.ConnectionStateChanged += OnConnectionStateChanged;

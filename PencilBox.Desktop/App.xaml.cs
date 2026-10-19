@@ -63,17 +63,14 @@ public partial class App : Application
         services.AddSingleton<Microsoft.Extensions.Logging.ILogger>(sp => sp.GetRequiredService<ILogger<LatencyProbeEngine>>());
         services.AddSingleton<LatencyProbeEngine>();
 
-        services.AddSingleton<MainViewModel>();
-        services.AddSingleton<DevicePageViewModel>();
-        services.AddSingleton<MacroEditorViewModel>();
-        services.AddSingleton<AudioRecorderViewModel>();
-        services.AddSingleton<SerialScopeViewModel>();
-        services.AddSingleton<PassthroughPageViewModel>();
-        services.AddSingleton<DspPageViewModel>();
-        services.AddSingleton<OtaPageViewModel>();
-        services.AddSingleton<ProductHomeViewModel>();
-        services.AddSingleton<AirMouseViewModel>();
-
-        services.AddTransient<MainWindow>();
+        // ===== 交互层按域注册（14 号架构提案：模块化接缝；域划分铁律见 DesktopModuleExtensions） =====
+        services.AddFeaturesModule();
+        services.AddDashboardModule();
+        services.AddOtaModule();
+        services.AddSerialScopeModule();
+        services.AddPassthroughModule();
+        services.AddAirMouseModule();
+        services.AddDebugToolsModule();
+        services.AddShellModule();
     }
 }
