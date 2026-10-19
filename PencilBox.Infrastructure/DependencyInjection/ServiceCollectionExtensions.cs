@@ -157,6 +157,9 @@ public static class ServiceCollectionExtensions
         // Configuration storage
         services.AddSingleton<IConfigStore, JsonConfigStore>();
 
+        // 功能总开关（14 号架构提案：CLI feature 域与 GUI 控制台读同一开关；configs/features.json）
+        services.AddSingleton<Core.Features.IFeatureToggleService, Config.FeatureToggleService>();
+
         // DSP service
         services.AddSingleton<IDspService>(sp =>
         {

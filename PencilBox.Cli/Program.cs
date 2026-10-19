@@ -88,6 +88,7 @@ public class Program
         services.AddSingleton<CompanyStreamCommands>();
         services.AddSingleton<KeymapCommands>();
         services.AddSingleton<WorkStateCommands>();
+        services.AddSingleton<FeatureCommands>();
 
         var sp = services.BuildServiceProvider();
 
@@ -99,14 +100,17 @@ public class Program
             {
                 "device" or "dev" => await DispatchDeviceAsync(sp, args.Skip(1).ToArray()),
                 "ble" => await DispatchBleAsync(sp, args.Skip(1).ToArray()),
-                "audio" or "aud" => await DispatchAudioAsync(sp, args.Skip(1).ToArray()),
-                "serial" or "ser" => await DispatchSerialAsync(sp, args.Skip(1).ToArray()),
+
+                // 门禁（14 号）：可选功能被 feature off 后整域拒绝并指路；核心域（device/ble/company/keymap/workstate）不受管
+                "audio" or "aud" => await GateAsync(sp, "audio", () => DispatchAudioAsync(sp, args.Skip(1).ToArray())),
+                "serial" or "ser" => await GateAsync(sp, "seriallog", () => DispatchSerialAsync(sp, args.Skip(1).ToArray())),
                 "macro" => await DispatchMacroAsync(sp, args.Skip(1).ToArray()),
                 "dsp" => await DispatchDspAsync(sp, args.Skip(1).ToArray()),
                 "config" or "cfg" => await DispatchConfigAsync(sp, args.Skip(1).ToArray()),
                 "company" or "cmp" => await DispatchCompanyAsync(sp, args.Skip(1).ToArray()),
                 "keymap" or "km" => await DispatchKeymapAsync(sp, args.Skip(1).ToArray()),
                 "workstate" or "ws" => DispatchWorkState(sp, args.Skip(1).ToArray()),
+                "feature" or "features" => DispatchFeature(sp, args.Skip(1).ToArray()),
                 "help" or "--help" or "-h" => PrintHelp(),
                 "version" or "--version" => PrintVersion(),
                 _ => UnknownCommand(area)
@@ -192,6 +196,30 @@ public class Program
             "listen" or "ln" => cmd.Listen(GetOption(rest, "--config"), GetOptionInt(rest, "--secs", 0)),
 
             _ => UnknownCommand($"workstate {action}")
+        };
+    }
+
+    // === Feature（14 号架构提案：功能模块总开关，CLI 与 GUI 控制台同一开关） ===
+    private static int DispatchFeature(IServiceProvider sp, string[] args)
+    {
+        var cmd = sp.GetRequiredService<FeatureCommands>();
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
+        var rest = args.Skip(1).ToArray();
+
+        return action switch
+        {
+            "list" or "ls" => cmd.List(),
+
+            // on/off <id>：立即持久化 configs/features.json；停用域入口拒绝并指路
+            "on" or "enable" => cmd.Set(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少功能 id：feature on <airmouse|audio|seriallog>"),
+                enabled: true),
+
+            "off" or "disable" => cmd.Set(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少功能 id：feature off <airmouse|audio|seriallog>"),
+                enabled: false),
+
+            _ => UnknownCommand($"feature {action}")
         };
     }
 
@@ -594,18 +622,19 @@ public class Program
 
             // 0x61 内部调参（issues-pencil/01/02/03；仅串口轨笔端直连）：
             // list 全表 / get 单参 / set 单参写 / reset 恢复出厂 / export 导出宏片段 / snapshot 方案快照 A/B
-            "param" => await DispatchCompanyParamAsync(sp, rest),
+            // —— 空鼠域（14 号 feature airmouse 门禁）
+            "param" => await GateAsync(sp, "airmouse", () => DispatchCompanyParamAsync(sp, rest)),
 
             // 0x62 空鼠遥测流（笔端 06 卷；仅串口轨）：on/off 测帧率、record 录波落 CSV
-            "stream" => await DispatchCompanyStreamAsync(sp, rest),
-            "record" => await sp.GetRequiredService<CompanyStreamCommands>().RecordAsync(
+            "stream" => await GateAsync(sp, "airmouse", () => DispatchCompanyStreamAsync(sp, rest)),
+            "record" => await GateAsync(sp, "airmouse", () => sp.GetRequiredService<CompanyStreamCommands>().RecordAsync(
                 GetOption(rest, "--port"),
                 GetOptionInt(rest, "--secs", 30),
                 (byte)Math.Clamp(GetOptionInt(rest, "--div", 1), 1, 255),
-                GetOption(rest, "--out")),
+                GetOption(rest, "--out"))),
 
             // 0x62 零漂统计模式（对齐卷 06 §4.1 stillsurvey）：静置开统计→分布报告；--csv 离线分析已有录波
-            "stillstats" => await sp.GetRequiredService<CompanyStreamCommands>().StillStatsAsync(
+            "stillstats" => await GateAsync(sp, "airmouse", () => sp.GetRequiredService<CompanyStreamCommands>().StillStatsAsync(
                 GetOption(rest, "--port"),
                 GetOptionInt(rest, "--secs", 60),
                 (byte)Math.Clamp(GetOptionInt(rest, "--div", 1), 1, 255),
@@ -613,7 +642,7 @@ public class Program
                 Math.Max(1, GetOptionInt(rest, "--stages", 4)),
                 GetOptionDouble(rest, "--gate", 0.5),
                 HasFlag(rest, "--json"),
-                GetOption(rest, "--csv")),
+                GetOption(rest, "--csv"))),
 
             // 0x53 状态上行（基站把统一TX 状态槽原样搬运上行；仅 USB 轨）：
             // 拉取快照一次，--monitor N 继续监听基站主动推送 N 秒（电量/休眠等实时变化）
@@ -738,6 +767,17 @@ public class Program
         };
     }
 
+    // === Feature gate helpers（14 号：可选功能停用 → 域入口拒绝并指路，退出码 1） ===
+    private static async Task<int> GateAsync(IServiceProvider sp, string featureId, Func<Task<int>> run) =>
+        FeatureCommands.EnsureEnabled(sp.GetRequiredService<PencilBox.Core.Features.IFeatureToggleService>(), featureId)
+            ? await run()
+            : 1;
+
+    private static int Gate(IServiceProvider sp, string featureId, Func<int> run) =>
+        FeatureCommands.EnsureEnabled(sp.GetRequiredService<PencilBox.Core.Features.IFeatureToggleService>(), featureId)
+            ? run()
+            : 1;
+
     // === Help / Version ===
     private static int PrintHelp()
     {
@@ -760,7 +800,7 @@ public class Program
                      stress --rounds 10 [--pair-cycle] [--no-discover] [--allow-fail 0]
                                                                    反复重连/配对压测（GAP/SMP 稳定性）
                      专项手册：_share/issues/0-待处理/命令行操作与OTA技能化/03
-            audio    USB Audio capture (devices, capture, monitor)
+            audio    USB Audio capture (devices, capture, monitor)【可选功能：feature off audio 可整域关】
                      renders   列播放设备（扩音渲染端）
                      volume    端点音量自检/设置（--set 35 --unmute / --mic-set 80 --mic-unmute）
                                "跑了没声"先看这里：多半是端点静音或音量 0
@@ -779,7 +819,7 @@ public class Program
                                [--save-capture out.wav] [--report-out report.json]  数值=物理闭环原值（不扣减）
                      envelope  WAV 包络分析：整体电平/逐块信封/首声时刻/尾音（--file x.wav [--csv]）
                      tickstats P2 tick 统计：--file ticks.csv → 漂移扣除/p50/p95/重传率（[--json]）
-            serial   串口：设备日志 + F5 协议帧 → 统一时间轴
+            serial   串口：设备日志 + F5 协议帧 → 统一时间轴【可选功能：feature off seriallog 可整域关】
                     list    列端口（带类型标注，避开调试器虚拟口/蓝牙口）
                     probe   试读 N 秒：有没有数据 / 能不能解出 F5
                     log     抓日志（双口可同时；三份文件；按大小轮转）
@@ -808,12 +848,16 @@ public class Program
             workstate 笔端工作状态自管（全局键盘钩子监听 Keymap 触发键，识别×扩音两轴）
                      binding [--config 名]                          从 Keymap 配置推导四键绑定
                      listen [--config 名] [--secs N]                装钩实时打印状态转移（Ctrl+C 停）
+            feature 功能模块总开关（14 号架构提案；GUI 功能控制台同一开关，configs/features.json）
+                     list                                           功能清单（ID/默认/当前/管辖域）
+                     on <id> / off <id>                             启用/停用（id 见 list；停用后 GUI 入口隐藏、
+                                                                    管辖 CLI 域拒绝并指路；核心域不受管）
                     identify | pair read/write/enter/factory/clear | ota | raw | status
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）
                     status [--monitor N]     0x53 状态快照（电量/设备状态，仅 USB 轨）+ 监听推送
                     pencmd   统一TX 信封 0x54（无 --port = BLE 中转经基站；--port = 串口直连）：
                              set-k2 <1|2> | query-k2 | send --hex
-                    param    0x61 内部调参（issues-pencil/01/02/03，仅串口轨 --port COMx 笔端直连）：
+                    param    0x61 内部调参（issues-pencil/01/02/03，仅串口轨 --port COMx 笔端直连）【可关：feature off airmouse】：
                              list | get --id N | set --id N --value F     [--raw 显 VALUE4 hex]
                                                                           （11 参=01 卷 §5+§5.1；0x09/0x0A 只读、0x0B 写1=固化/写2=清除）
                              reset [--only 1,3,5]                         可写 8 参（0x01~0x08）写回出厂宏值（逐参回显校验）
