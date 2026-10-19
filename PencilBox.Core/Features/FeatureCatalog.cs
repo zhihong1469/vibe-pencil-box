@@ -39,6 +39,15 @@ public static class FeatureCatalog
             Description: "设备日志 + F5 帧统一时间轴、遥测解析、对拍摘要（研发向工具；GUI 串口页）",
             DefaultEnabled: true,
             CliDomains: ["serial"]),
+
+        // 动作库键盘族（13 号，2026-10-19 落地）：纯软件域第一户——零设备依赖，
+        // "软触发单功能发行版"（指挥官愿景）将来只留此模块。
+        new FeatureDescriptor(
+            Id: "softtrigger",
+            Name: "软触发（键盘动作族）",
+            Description: "专用键 F17~F24 触发键盘序列回放（连点/热键编排；纯上位机软件，不插设备也全功能）",
+            DefaultEnabled: true,
+            CliDomains: ["softtrigger"]),
     ];
 
     public static FeatureDescriptor? Find(string featureId) =>

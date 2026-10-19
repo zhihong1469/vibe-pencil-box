@@ -89,6 +89,7 @@ public class Program
         services.AddSingleton<KeymapCommands>();
         services.AddSingleton<WorkStateCommands>();
         services.AddSingleton<FeatureCommands>();
+        services.AddSingleton<SoftTriggerCommands>();
 
         var sp = services.BuildServiceProvider();
 
@@ -111,6 +112,7 @@ public class Program
                 "keymap" or "km" => await DispatchKeymapAsync(sp, args.Skip(1).ToArray()),
                 "workstate" or "ws" => DispatchWorkState(sp, args.Skip(1).ToArray()),
                 "feature" or "features" => DispatchFeature(sp, args.Skip(1).ToArray()),
+                "softtrigger" or "st" => await GateAsync(sp, "softtrigger", () => DispatchSoftTriggerAsync(sp, args.Skip(1).ToArray())),
                 "help" or "--help" or "-h" => PrintHelp(),
                 "version" or "--version" => PrintVersion(),
                 _ => UnknownCommand(area)
@@ -767,6 +769,49 @@ public class Program
         };
     }
 
+    // === SoftTrigger（13 号动作库键盘族；纯软件域零设备依赖；门禁=feature softtrigger） ===
+    private static async Task<int> DispatchSoftTriggerAsync(IServiceProvider sp, string[] args)
+    {
+        var cmd = sp.GetRequiredService<SoftTriggerCommands>();
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
+        var rest = args.Skip(1).ToArray();
+
+        return action switch
+        {
+            "list" or "ls" => cmd.List(),
+
+            "add" => cmd.Add(
+                GetPositional(rest, 0) ?? throw new ArgumentException("缺少名称：softtrigger add <名> --trigger F17 --keys \"F2,ALT+L\""),
+                GetOption(rest, "--trigger") ?? "F17",
+                GetOption(rest, "--keys") ?? throw new ArgumentException("缺少序列：--keys \"F2,ALT+L\""),
+                GetOption(rest, "--mode"),
+                GetOptionInt(rest, "--step-interval", 60),
+                GetOptionInt(rest, "--repeat-interval", 200),
+                GetOption(rest, "--note"),
+                rest.Contains("--disabled")),
+
+            "remove" or "rm" or "delete" => cmd.Remove(
+                GetPositional(rest, 0) ?? throw new ArgumentException("用法：softtrigger remove <名>")),
+
+            "on" => cmd.SetEnabled(GetPositional(rest, 0) ?? throw new ArgumentException("用法：softtrigger on <名>"), true),
+            "off" => cmd.SetEnabled(GetPositional(rest, 0) ?? throw new ArgumentException("用法：softtrigger off <名>"), false),
+
+            // run：不经钩子直接回放（无 F17 物理键时的验证路径；键击进前台窗口）
+            "run" or "fire" => await cmd.RunAsync(
+                GetPositional(rest, 0) ?? throw new ArgumentException("用法：softtrigger run <名> [--count N]"),
+                GetOptionInt(rest, "--count", 1)),
+
+            // send：裸发送键序列（不带定义试手感；保留段 F13~F24 拒发防回环）
+            "send" => cmd.Send(
+                GetOption(rest, "--keys") ?? throw new ArgumentException("缺少序列：send --keys \"CTRL+SHIFT+S\""),
+                GetOptionInt(rest, "--interval", 60)),
+
+            // selftest：进程内拉引擎 → 注入 F24 → 钩子捕获 → 回放 F7 → 事件断言（CLI-first 零设备验收路径）
+            "selftest" or "test" => await cmd.Selftest(),
+            _ => UnknownCommand($"softtrigger {action}")
+        };
+    }
+
     // === Feature gate helpers（14 号：可选功能停用 → 域入口拒绝并指路，退出码 1） ===
     private static async Task<int> GateAsync(IServiceProvider sp, string featureId, Func<Task<int>> run) =>
         FeatureCommands.EnsureEnabled(sp.GetRequiredService<PencilBox.Core.Features.IFeatureToggleService>(), featureId)
@@ -852,6 +897,17 @@ public class Program
                      list                                           功能清单（ID/默认/当前/管辖域）
                      on <id> / off <id>                             启用/停用（id 见 list；停用后 GUI 入口隐藏、
                                                                     管辖 CLI 域拒绝并指路；核心域不受管）
+            softtrigger 软触发（13 号动作库键盘族；纯软件域零设备依赖，本机键击回放）【可关：feature off softtrigger】
+                     list                                           定义清单（触发键→序列/模式/启用/备注）
+                     add <名> --trigger F17 --keys "F2,ALT+L"       新建：触发键只许专用键 F17~F24；
+                          [--mode once|toggle]                      动作禁入 F13~F24 保留段（值域分离防回环）
+                          [--step-interval 60] [--repeat-interval 200]
+                          [--note ".."] [--disabled]
+                     on/off/remove <名>                             启用/停用/删除（Desktop 引擎随重载生效）
+                     run <名> [--count N]                           手动试射：不经钩子直接回放（键击进前台窗口）
+                     send --keys "CTRL+SHIFT+S" [--interval 60]     裸发送键序列（不带定义试手感；保留段拒发）
+                     selftest                                       回环自证：注入 F24→钩子捕获→回放 F7→事件断言
+                                                                    （零设备零人工，CLI-first 验收路径）
                     identify | pair read/write/enter/factory/clear | ota | raw | status
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）
                     status [--monitor N]     0x53 状态快照（电量/设备状态，仅 USB 轨）+ 监听推送

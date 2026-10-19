@@ -10,6 +10,7 @@ using PencilBox.Core.Configuration;
 using PencilBox.Core.Fsm;
 using PencilBox.Core.Protocol.Company;
 using PencilBox.Core.Services;
+using PencilBox.Core.SoftTrigger;
 using PencilBox.Infrastructure.Audio;
 using PencilBox.Infrastructure.Ble;
 using PencilBox.Infrastructure.Config;
@@ -159,6 +160,12 @@ public static class ServiceCollectionExtensions
 
         // 功能总开关（14 号架构提案：CLI feature 域与 GUI 控制台读同一开关；configs/features.json）
         services.AddSingleton<Core.Features.IFeatureToggleService, Config.FeatureToggleService>();
+
+        // ===== 软触发（动作库键盘族 13 号；纯软件域——零设备依赖，红线见 14 号）=====
+        // 存储：configs/softtriggers/ 一条一 JSON；发腿：SendInput 合成键盘；引擎：共享键盘钩子观测（触发域 F17~F24）
+        services.AddSingleton<Core.Services.ISyntheticKeyboard, Platform.SyntheticKeyboardSender>();
+        services.AddSingleton<ISoftTriggerStore, Config.SoftTriggerStore>();
+        services.AddSingleton<ISoftTriggerEngine, Services.SoftTriggerEngine>();
 
         // DSP service
         services.AddSingleton<IDspService>(sp =>
