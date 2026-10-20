@@ -195,6 +195,19 @@ public partial class ProductHomeViewModel : ObservableObject
     /// <summary>工作状态机（识别 × 扩音档两轴；触发键绑定跟随当前选中配置——本机立即生效口径）</summary>
     private PenWorkStateTracker _workStateTracker = null!;
 
+    /// <summary>充电/放电计时（指挥官 2026-10-20 需求：充电双口径位+放电位；观测驱动、断连走表、重启清零）</summary>
+    private readonly ChargeTimingTracker _chargeTiming = new();
+
+    private readonly System.Windows.Threading.DispatcherTimer _timingUiTimer;
+
+    /// <summary>充电计时位（双口径并排：到100% 显示口径 / PMU 寄存器充满口径——产品选型对比）</summary>
+    [ObservableProperty]
+    private string _chargeTimingText = "充电 —";
+
+    /// <summary>放电计时位（一次离电运行时长）</summary>
+    [ObservableProperty]
+    private string _dischargeTimingText = "放电 —";
+
     /// <summary>功能控制台（14 号：与主窗页签显隐共用同一单例；核心域自身不受开关影响）</summary>
     public FeaturesViewModel Features { get; }
 
@@ -310,6 +323,11 @@ public partial class ProductHomeViewModel : ObservableObject
         WorkStateText = _workStateTracker.DisplayText;
         _keyboardHook.KeyDown += OnWorkStateKeyDown;
         _keyboardHook.Start();
+
+        // 计时位 1s 走表刷新（观测喂点即时刷新；仅走表中才写文本，静止周期不空转）
+        _timingUiTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _timingUiTimer.Tick += (_, _) => { if (_chargeTiming.IsTicking) RefreshChargeTimingTexts(); };
+        _timingUiTimer.Start();
 
         // S1 档位切换表：出厂真值兜底显示（配置初始化成功后由 LoadSelectedConfigIntoCards 按配置重载）
         SwitchRows = new ObservableCollection<KeymapSwitchRowViewModel>(
@@ -941,6 +959,12 @@ public partial class ProductHomeViewModel : ObservableObject
         if (batt != null)
             BatteryLevel = batt.Value;
 
+        // 充电/放电计时喂点（0x53 拉/推共用汇点）：仅真实观测推进；
+        // 笔未连接（STATUS=02）不喂——"未知"≠"未充电"，放电表按墙钟继续走
+        _chargeTiming.Feed(DateTimeOffset.Now, s.ChargeState,
+            batt is { Value: not 0xFF and var pct } ? pct : null);
+        RefreshChargeTimingTexts();
+
         // RSSI 槽 0x03（协议补充/05 §9，2026-10-18 采纳）：dBm 补码原值，触发线④ ≤5s 跟手；
         // 旧基站固件无此槽 → 不覆盖（保留 0x42 旧路值），避免把信号条打回 0
         if (s.RssiDbm is { } rssi)
@@ -990,6 +1014,14 @@ public partial class ProductHomeViewModel : ObservableObject
         // 断连即清零（自管口径）：回"待事件"，重连后靠 0x16 补报 + 下一次 K2 边界恢复
         _workStateTracker.Reset();
         WorkStateText = _workStateTracker.DisplayText;
+    }
+
+    /// <summary>刷新充电/放电两个计时位文本（观测喂点与 1s 走表刷新共用）。</summary>
+    private void RefreshChargeTimingTexts()
+    {
+        var r = _chargeTiming.Report(DateTimeOffset.Now);
+        ChargeTimingText = ChargeTimingFormat.ChargeText(r);
+        DischargeTimingText = ChargeTimingFormat.DischargeText(r);
     }
 
     // ============ K2 启动方式（0x54 信封 0x21/0x42，issues/08 M4 UI）============
@@ -1498,6 +1530,10 @@ public partial class ProductHomeViewModel : ObservableObject
             Rssi = state.Rssi;
             // 0x42 mode 字段=byte2 充电枚举副本（V1.3，与 0x53 同源）
             ApplyChargeDisplay((byte)state.ChargeState);
+            // 充电/放电计时喂点（0x42 旧路兜底；0xFF=未知电量不参与 100% 判定）
+            _chargeTiming.Feed(DateTimeOffset.Now, (byte)state.ChargeState,
+                state.Battery == 0xFF ? null : state.Battery);
+            RefreshChargeTimingTexts();
         });
     }
 }

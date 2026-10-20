@@ -183,6 +183,12 @@
                         <TextBlock Text="未获取：点「刷新笔端状态」（0x53）" FontSize="10" Foreground="#B03A2E"
                                    HorizontalAlignment="Center" Margin="0,4,0,0" TextWrapping="Wrap"
                                    Visibility="{Binding HasPenTelemetry, Converter={StaticResource InvertBoolConverter}}"/>
+                        <TextBlock Text="{Binding ChargeTimingText}" FontSize="10" Foreground="#5D6D7E"
+                                   HorizontalAlignment="Center" Margin="0,6,0,0" TextWrapping="Wrap"
+                                   ToolTip="充电计时（最近一个周期，重启清零）：非充电→充电中起表；「到100%」=电量显示口径，「PMU充满」=芯片寄存器 FINISH 真判据（含涓流补饱和段，通常更晚）——双口径并排供产品选型。观测驱动，断连继续走表。"/>
+                        <TextBlock Text="{Binding DischargeTimingText}" FontSize="10" Foreground="#5D6D7E"
+                                   HorizontalAlignment="Center" Margin="0,2,0,0" TextWrapping="Wrap"
+                                   ToolTip="放电计时：充电路径终结（充满/100%/中止）转入非充电起表，到下次进入充电态定格=一次离电运行时长；断连不清表（墙钟走表），重启清零。"/>
                     </StackPanel>
                 </GroupBox>
 

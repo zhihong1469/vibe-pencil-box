@@ -11,6 +11,9 @@ using PencilBox.Core.Protocol;
 using PencilBox.Core.Protocol.Company;
 using PencilBox.Infrastructure.Hid;
 using PencilBox.Infrastructure.Serial;
+// 别名引入（Core.Fsm 与 Core.Models 都有 OtaProgress，整命名空间 using 会二义）
+using ChargeTimingTracker = PencilBox.Core.Models.ChargeTimingTracker;
+using ChargeTimingFormat = PencilBox.Core.Models.ChargeTimingFormat;
 
 namespace PencilBox.Cli.Commands;
 
@@ -622,7 +625,13 @@ public class CompanyCommands
         // 拉取 STATUS=02（笔未连接）不提前退出：--monitor 的场景恰是"笔稍后上电/重连"，
         // 建立连接的推送带全量快照自愈（补充 05 §4：推管实时、拉管对齐）。
         if (monitorSec > 0)
-            return await MonitorPenStatusAsync(monitorSec, snapshot.Status == PenStatusStatus.Ok);
+        {
+            // 充电/放电计时（指挥官 2026-10-20 需求）：监测期内按观测推进，收尾打印两个时间位
+            var timing = new ChargeTimingTracker();
+            if (snapshot.Status == PenStatusStatus.Ok)
+                timing.Feed(DateTimeOffset.Now, snapshot.ChargeState, BattPercentOrNull(snapshot));
+            return await MonitorPenStatusAsync(monitorSec, snapshot.Status == PenStatusStatus.Ok, timing);
+        }
 
         return snapshot.Status == PenStatusStatus.Ok ? 0 : 1;
     }
@@ -687,8 +696,10 @@ public class CompanyCommands
     /// 监听 `0x53` 主动推送 N 秒（每帧一报告；Ctrl+C 提前结束）。
     /// <paramref name="sawOk"/>：拉取是否已得有效快照——与推送期任一 STATUS=00 帧合并定退出码
     /// （全程未见过有效快照 → 1，供脚本判读；收到过即 0）。
+    /// <paramref name="timing"/>：充电/放电计时器——每条 STATUS=00 快照按观测推进，
+    /// 逐帧打印两时间位（充电双口径/放电），监测收尾打印摘要（指挥官 2026-10-20 需求）。
     /// </summary>
-    private async Task<int> MonitorPenStatusAsync(int monitorSec, bool sawOk)
+    private async Task<int> MonitorPenStatusAsync(int monitorSec, bool sawOk, ChargeTimingTracker? timing = null)
     {
         ConsoleFormatter.Info($"[COMPANY] 监听 0x53 推送 {monitorSec}s（推管实时；Ctrl+C 提前结束）…");
         var requester = new CommandRequester(_clock, _config);
@@ -709,14 +720,32 @@ public class CompanyCommands
             {
                 pushes++;
                 if (snapshot.Status == PenStatusStatus.Ok)
+                {
                     sawOk = true;
+                    timing?.Feed(DateTimeOffset.Now, snapshot.ChargeState, BattPercentOrNull(snapshot));
+                }
                 PrintPenStatus(snapshot, source: $"推送 #{pushes} [{DateTime.Now:HH:mm:ss.fff}]");
+                if (timing != null && snapshot.Status == PenStatusStatus.Ok)
+                {
+                    var r = timing.Report(DateTimeOffset.Now);
+                    ConsoleFormatter.Info($"[CHG_TIMER] {ChargeTimingFormat.ChargeText(r)} ｜ {ChargeTimingFormat.DischargeText(r)}");
+                }
             }
         }
 
         ConsoleFormatter.Info($"监听结束：共 {pushes} 条推送");
+        if (timing != null)
+        {
+            var r = timing.Report(DateTimeOffset.Now);
+            ConsoleFormatter.Info($"[CHG_TIMER 摘要] {ChargeTimingFormat.ChargeText(r)}");
+            ConsoleFormatter.Info($"[CHG_TIMER 摘要] {ChargeTimingFormat.DischargeText(r)}");
+        }
         return sawOk ? 0 : 1;
     }
+
+    /// <summary>电量槽取值：无槽或 0xFF（未知）→ null（不参与 100% 判定）。</summary>
+    private static byte? BattPercentOrNull(PenStatusSnapshot s) =>
+        s.Find(PenStateSlotId.Batt) is { } batt && batt.Value != 0xFF ? batt.Value : null;
 
     private static void PrintPenStatus(PenStatusSnapshot s, string source)
     {

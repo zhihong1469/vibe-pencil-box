@@ -647,7 +647,8 @@ public class Program
                 GetOption(rest, "--csv"))),
 
             // 0x53 状态上行（基站把统一TX 状态槽原样搬运上行；仅 USB 轨）：
-            // 拉取快照一次，--monitor N 继续监听基站主动推送 N 秒（电量/休眠等实时变化）
+            // 拉取快照一次，--monitor N 继续监听基站主动推送 N 秒（电量/休眠等实时变化）；
+            // 监测期内同步打印充电/放电计时位（充电双口径=到100%/PMU充满，产品选型对比）
             "status" => await cmd.StatusAsync(port, GetOptionInt(rest, "--monitor", 0)),
 
             // 0x54 统一TX 转发信封（产品级运行时命令；无 --port = BLE 中转经基站，--port = 串口直连）。
