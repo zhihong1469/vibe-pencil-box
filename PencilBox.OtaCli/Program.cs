@@ -276,8 +276,14 @@ internal static class Program
     }
 
     /// <summary>日志路径：--log 优先；未给则定为 exe 旁 ota-log_时间戳.txt（解析即写回，汇总行与落盘同路径）。</summary>
-    private static string EffectiveLogPath() => _logPath ??= Path.Combine(AppContext.BaseDirectory,
-        $"ota-log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+    private static string EffectiveLogPath()
+    {
+        if (_logPath != null)
+            return _logPath;
+        var dir = Path.Combine(AppContext.BaseDirectory, "log");
+        Directory.CreateDirectory(dir);
+        return _logPath = Path.Combine(dir, $"ota-log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+    }
 
     private static string? GetOption(string[] args, string name)
     {

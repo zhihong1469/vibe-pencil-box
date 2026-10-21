@@ -401,7 +401,9 @@ internal sealed class MainForm : Form
             return;
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, $"ota-gui-log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            var logDir = Path.Combine(AppContext.BaseDirectory, "log");
+            Directory.CreateDirectory(logDir);
+            var path = Path.Combine(logDir, $"ota-gui-log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
             File.WriteAllLines(path, _logLines, new System.Text.UTF8Encoding(true));
             _logBox.AppendText($"—— 日志已保存：{path}{Environment.NewLine}");
             _logLines.Clear();

@@ -83,9 +83,7 @@ public sealed class OtaToolEngine
     public const int RecheckTimeoutMs = 120_000;
 
     /// <summary>对拍宽限：5×10s。3×5s 在"旧实例存活 30s+"形态下不够（2026-10-21 双台实测第③形态）。</summary>
-    private const int GraceRetries = 5;
-    private const int GraceDelayMs = 10_000;
-    private const int PathGoneTimeoutS = 30;
+    private const int ProbeIntervalMs = 1_000;
 
     private readonly CompanyConfig _config = new();
     private readonly ICompanyCodec _codec = new CompanyCodec();
@@ -168,7 +166,7 @@ public sealed class OtaToolEngine
 
     // ================= 单支升级 =================
 
-    /// <summary>单支升级全流程：连接 → 读版本判重 → OTA 会话 → 等复位重枚举 → 宽限回读对拍。</summary>
+    /// <summary>单支升级全流程：连接 → 读版本判重 → OTA 会话 → 主动探测回读对拍（开句柄读版本即终态判据）。</summary>
     public async Task<OtaDeviceResult> UpgradeOneAsync(
         HidDeviceInfo device,
         OtaFirmwarePackage firmware,
@@ -203,6 +201,8 @@ public sealed class OtaToolEngine
             Say("info", $"SN={Show(sn)} 已是目标版本 {sverText}，跳过不重刷");
             return Make(OtaDeviceOutcome.Skip, beforeText, "已是目标版本，跳过不重刷");
         }
+
+        Say("info", $"SN={Show(sn)} 当前版本 {beforeText} → 目标 {sverText}，开始升级");
 
         // OTA 会话（与主线 CLI 同一 FSM：R1/R2/终态窗/终态丢失判定零漂移）
         Phase("传输固件");
@@ -263,25 +263,32 @@ public sealed class OtaToolEngine
         }
 
         CloseChannel();
-        Phase("等设备复位回来");
-        await WaitPathGoneAsync(device.DevicePath, cancellationToken);
-        var waited = await WaitDeviceBackAsync(device, cancellationToken);
-        if (waited == null)
-        {
-            return Make(OtaDeviceOutcome.Unconfirmed, beforeText,
-                $"升级会话成功（{result.Message}），但 {RecheckTimeoutMs / 1000}s 内设备未重新上线——请重插后复核");
-        }
-
-        // 版本对拍带宽限重试（复位/枚举抖动期偶发无应答或读到旧实例）
-        Phase("回读版本");
+        Phase("等设备复位回来（主动探测读版本）");
+        // 复位重枚举通常一瞬间；Windows 枚举缓存却可让旧实例长存、句柄随时失效（10-21 真机两形态）——
+        // "等路径消失→等重现"被动证据不可信，主动开句柄读版本对拍才是终态判据（指挥官 10-21 反馈）
         string? afterText = null;
         string? lastErr = null;
-        for (var attempt = 1; attempt <= GraceRetries; attempt++)
+        var groupKey = HidDeviceSelection.DeviceGroupKey(device);
+        var deadline = DateTime.UtcNow.AddMilliseconds(RecheckTimeoutMs);
+        var probes = 0;
+        while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
         {
-            if (!await OpenChannelAsync(waited))
+            await SleepAsync(ProbeIntervalMs, cancellationToken);
+            probes++;
+
+            // 候选=原路径优先；重枚举换了路径按位置组键找回（组键含位置主体，同号双台勿串）
+            var candidates = await EnumerateCandidatesAsync();
+            var probe = candidates.FirstOrDefault(d =>
+                    string.Equals(d.DevicePath, device.DevicePath, StringComparison.OrdinalIgnoreCase))
+                ?? candidates.FirstOrDefault(d => HidDeviceSelection.DeviceGroupKey(d) == groupKey);
+            if (probe == null)
             {
-                lastErr = "重连失败";
-                await SleepAsync(GraceDelayMs, cancellationToken);
+                lastErr = "枚举中暂无该设备";
+                continue;
+            }
+            if (!await OpenChannelAsync(probe))
+            {
+                lastErr = "重连失败（复位中）";
                 continue;
             }
 
@@ -292,17 +299,16 @@ public sealed class OtaToolEngine
                 afterText = $"{after.SverMajor}.{after.SverMinor}.{after.SverPatch}";
                 if (afterText == sverText)
                 {
+                    Say("info", $"设备已回来（第 {probes} 次探测）");
                     Say("ok", $"SN={Show(sn)} 成功：{beforeText} → {afterText}");
                     return Make(OtaDeviceOutcome.Success, beforeText, $"成功：{beforeText} → {afterText}");
                 }
-                lastErr = $"回读 {afterText} ≠ 目标 {sverText}";
+                lastErr = $"回读 {afterText} ≠ 目标 {sverText}（旧实例仍在应答，继续等它刷新）";
             }
             else
             {
                 lastErr = $"回读版本失败：{err2}";
             }
-
-            await SleepAsync(GraceDelayMs, cancellationToken);
         }
 
         if (afterText != null)
@@ -348,48 +354,6 @@ public sealed class OtaToolEngine
             return (null, $"STATUS=0x{info.Status:X2}（设备未定义型号/版本）");
 
         return (info, null);
-    }
-
-    /// <summary>等原路径从枚举里消失（= 设备已复位离线；上限 30s，未消失仅告警继续——也许复位快到来不及观测）。</summary>
-    private async Task WaitPathGoneAsync(string devicePath, CancellationToken cancellationToken)
-    {
-        for (var i = 0; i < PathGoneTimeoutS; i++)
-        {
-            var still = (await EnumerateCandidatesAsync()).Any(d =>
-                string.Equals(d.DevicePath, devicePath, StringComparison.OrdinalIgnoreCase));
-            if (!still)
-                return;
-            await SleepAsync(1000, cancellationToken);
-        }
-        Say("warn", "旧枚举实例 30s 未消失（复位延迟或枚举缓存）——继续等重现后按宽限重试对拍");
-    }
-
-    private async Task<HidDeviceInfo?> WaitDeviceBackAsync(HidDeviceInfo original, CancellationToken cancellationToken)
-    {
-        Say("info", "正在等待设备回来（升级后复位，重枚举可慢达 2 分钟）...");
-        var deadline = DateTime.UtcNow.AddMilliseconds(RecheckTimeoutMs);
-        while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
-        {
-            await SleepAsync(1000, cancellationToken);
-            var candidates = await EnumerateCandidatesAsync();
-            // 优先按原路径找回（同端口复位重枚举路径不变）；序列号在多台同号时不可作唯一依据（10-21 实测同号双台）
-            var back = candidates.FirstOrDefault(d =>
-                string.Equals(d.DevicePath, original.DevicePath, StringComparison.OrdinalIgnoreCase));
-            if (back == null)
-            {
-                var sameSerial = candidates
-                    .Where(d => string.Equals(d.SerialNumber, original.SerialNumber, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                if (sameSerial.Count == 1)
-                    back = sameSerial[0];
-            }
-            if (back != null)
-            {
-                Say("info", "设备已重新上线");
-                return back;
-            }
-        }
-        return null;
     }
 
     /// <summary>可取消的延时（取消不当失败——吞 OCE，调用方下一拍自查）。</summary>
