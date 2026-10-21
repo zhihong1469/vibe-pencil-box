@@ -41,39 +41,38 @@ public class OtaToolEngineTests
     }
 
     [Fact]
-    public void LoadFirmware_rejects_pen_package()
+    public void LoadFirmware_accepts_pen_package()
     {
-        // 旧口径（R1P 硬拒）已退役：目标轨由包名前缀声明，R1P_=键盘·经基站无线（2026-10-21 无线轨入裁剪版）
+        // 目标端=用户显式选择（指挥官 10-21 晚裁决，不靠包名推断）；R1P_ 前缀只是合法包名，装载不再硬拒
         var path = WriteTempBin(new byte[1024], "R1P_1.0.1_win_380191b.bin");
 
         var fw = Engine.LoadFirmware(path);
 
         Assert.Null(fw.Warning);
-        Assert.Equal(OtaUpgradeTarget.PenWireless, fw.Target);
         Assert.Equal("1.0.1", fw.SverText);
     }
 
     [Fact]
-    public void LoadFirmware_derives_target_from_prefix()
+    public void LoadFirmware_prefix_does_not_decide_target()
     {
+        // R1D_/R1P_ 均合法且无警告；升级对象由 CLI --target / GUI 升级端开关显式选择
         var r1d = Engine.LoadFirmware(WriteTempBin(new byte[1024], "R1D_1.0.2_rc.1_win_4f245b6.bin"));
         var r1p = Engine.LoadFirmware(WriteTempBin(new byte[1024], "R1P_0.13.21_release_gcc_e2466ab.bin"));
 
-        Assert.Equal(OtaUpgradeTarget.BaseStation, r1d.Target);
         Assert.Null(r1d.Warning);
-        Assert.Equal(OtaUpgradeTarget.PenWireless, r1p.Target);
         Assert.Null(r1p.Warning);
+        Assert.Equal("1.0.2", r1d.SverText);
+        Assert.Equal("0.13.21", r1p.SverText);
     }
 
     [Fact]
-    public void LoadFirmware_unknown_prefix_defaults_to_base_station_with_warning()
+    public void LoadFirmware_unknown_prefix_warns_but_loads()
     {
         var path = WriteTempBin(new byte[1024], "XYZ_1.0.1_win_deadbeef.bin");
 
         var fw = Engine.LoadFirmware(path);
 
         Assert.NotNull(fw.Warning);
-        Assert.Equal(OtaUpgradeTarget.BaseStation, fw.Target);
         Assert.Equal("1.0.1", fw.SverText);
     }
 

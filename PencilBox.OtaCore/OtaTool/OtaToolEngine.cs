@@ -56,16 +56,17 @@ public abstract record OtaToolUpdate
 }
 
 /// <summary>
-/// 升级目标轨（由固件包名前缀声明，命名规范即目标：R1D_=基站、R1P_=键盘）。
+/// 升级目标轨（**由用户在 CLI/GUI 显式选择**，指挥官 10-21 晚裁决：不靠包名推断）。
 /// 两轨同一 FSM 同一 USB 命令通道——键盘轨只多一层"B1 透传"（PC → USB → 基站 BLE 中转 → 键盘），
 /// PC 对链路无感、块语义不变（主线 2026-10-12 无线轨六轮真机同款语义）。
+/// 包名前缀只做错配提示（FirmwareNaming.TargetMismatchNotice，WARN 不拦截）。
 /// </summary>
 public enum OtaUpgradeTarget
 {
-    /// <summary>基站固件（丙 · USB 自升级轨，R1D_ 包）。</summary>
+    /// <summary>基站固件（丙 · USB 自升级轨）。</summary>
     BaseStation,
 
-    /// <summary>键盘/笔端固件（乙 · 无线轨 B1 透传，R1P_ 包；键盘须已与该基站配对，否则不进 DFU）。</summary>
+    /// <summary>键盘/笔端固件（乙 · 无线轨 B1 透传；键盘须已与该基站配对，否则不进 DFU）。</summary>
     PenWireless,
 }
 
@@ -74,8 +75,8 @@ public static class OtaUpgradeTargetText
 {
     public static string For(OtaUpgradeTarget target) => target switch
     {
-        OtaUpgradeTarget.PenWireless => "键盘（R1P_ · 经基站无线中转）",
-        _ => "基站（R1D_ · USB 直升）",
+        OtaUpgradeTarget.PenWireless => "键盘（经基站无线中转）",
+        _ => "基站（USB 直升）",
     };
 }
 
@@ -88,7 +89,6 @@ public sealed record OtaFirmwarePackage(
     byte SverMinor,
     byte SverPatch,
     int Crc16,
-    OtaUpgradeTarget Target,
     string? Warning);
 
 public sealed class OtaFirmwareLoadException : Exception
@@ -158,14 +158,13 @@ public sealed class OtaToolEngine
     // ================= 固件包装载 =================
 
     /// <summary>
-    /// 包校验 + 装载：目标轨由包名前缀声明（R1D_=基站 / R1P_=键盘·无线），尺寸上限、
-    /// 目标版本 = --sver 显式 &gt; 包名解析。无法识别的前缀按基站处理并提示（防呆不防傻）。
+    /// 包校验 + 装载：目标轨由用户显式选择（不在装载层判定）；尺寸上限、
+    /// 目标版本 = --sver 显式 &gt; 包名解析。无法识别的前缀提示不拦截（防呆不防傻）。
     /// </summary>
     public OtaFirmwarePackage LoadFirmware(string path, string? sverOverride = null)
     {
         var name = Path.GetFileName(path);
         var prefix = name.Length >= 4 && name[3] == '_' ? name[..3].ToUpperInvariant() : null;
-        var target = prefix == "R1P" ? OtaUpgradeTarget.PenWireless : OtaUpgradeTarget.BaseStation;
 
         byte[] image;
         try
@@ -185,25 +184,27 @@ public sealed class OtaToolEngine
         if (sverText == null || ParseSver(sverText) is not { } sver)
             throw new OtaFirmwareLoadException($"无法确定目标版本：包名解析失败（{name}）——命名规范 R1D_M.m.p_… / R1P_M.m.p_…，或显式指定版本");
 
-        // R1D_/R1P_ 之外的杂前缀：目标轨按基站处理，提示不拦截——防呆不防傻
+        // R1D_/R1P_ 之外的杂前缀：提示不拦截——防呆不防傻（前缀与升级对象的错配由壳层 WARN，主线同款）
         string? warning = prefix is "R1D" or "R1P"
             ? null
-            : $"包名前缀异常（{name}）——命名规范 R1D_（基站）/R1P_（键盘），无法识别目标，按基站处理，请确认包选对了";
+            : $"包名前缀异常（{name}）——命名规范 R1D_（基站）/R1P_（键盘），无法识别包类别，请确认这是本产品固件包";
 
         return new OtaFirmwarePackage(name, image, sverText, sver.Item1, sver.Item2, sver.Item3,
-            Crc16CcittFalse.Compute(image), target, warning);
+            Crc16CcittFalse.Compute(image), warning);
     }
 
     // ================= 单支升级 =================
 
     /// <summary>
     /// 单支升级全流程：连接 → 读当前版本（仅展示，同版本不拦截）→ OTA 会话 → 主动探测回读对拍。
-    /// 目标轨由固件包决定（fw.Target）：基站=USB 直升；键盘=同一 USB 通道、FSM 传 Downtype.Pen
-    /// 经基站 B1 透传（须已配对），回读走 0x03 笔端类别 + G14 冒充闸。
+    /// 目标轨由调用方显式传入（CLI --target / GUI 升级端切换，指挥官 10-21 晚裁决）：
+    /// 基站=USB 直升；键盘=同一 USB 通道、FSM 传 Downtype.Pen 经基站 B1 透传（须已配对），
+    /// 回读走 0x03 笔端类别 + G14 冒充闸。
     /// </summary>
     public async Task<OtaDeviceResult> UpgradeOneAsync(
         HidDeviceInfo device,
         OtaFirmwarePackage firmware,
+        OtaUpgradeTarget target,
         int abortAfterBlock = -1,
         int chunkGapMs = -1,
         bool skipRecheck = false,
@@ -211,7 +212,7 @@ public sealed class OtaToolEngine
     {
         var sn = device.SerialNumber;
         var sverText = firmware.SverText;
-        var penTrack = firmware.Target == OtaUpgradeTarget.PenWireless;
+        var penTrack = target == OtaUpgradeTarget.PenWireless;
         var (downtype, hver) = penTrack
             ? (Downtype.Pen, _config.HverPen)
             : (Downtype.BaseStation, _config.HverHid);
@@ -225,7 +226,7 @@ public sealed class OtaToolEngine
             return Make(OtaDeviceOutcome.Fail, null, "连接 USB 命令通道失败");
 
         Phase(penTrack ? "读键盘当前版本" : "读当前版本");
-        var (before, err) = await ReadVersionOpenAsync(firmware.Target, cancellationToken);
+        var (before, err) = await ReadVersionOpenAsync(target, cancellationToken);
         if (before == null)
         {
             CloseChannel();
@@ -333,7 +334,7 @@ public sealed class OtaToolEngine
             }
             else
             {
-                var (after, err2) = await ReadVersionOpenAsync(firmware.Target, cancellationToken);
+                var (after, err2) = await ReadVersionOpenAsync(target, cancellationToken);
                 CloseChannel();
                 if (after != null)
                 {

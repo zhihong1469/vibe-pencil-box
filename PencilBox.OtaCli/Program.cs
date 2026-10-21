@@ -5,6 +5,7 @@
 // </copyright>
 using PencilBox.Core.Communication;
 using PencilBox.Core.OtaTool;
+using PencilBox.Core.Protocol.Company;
 
 namespace PencilBox.OtaCli;
 
@@ -18,7 +19,7 @@ namespace PencilBox.OtaCli;
 internal static class Program
 {
     /// <summary>带值选项（位置参数解析时须连同其值一起跳过）。</summary>
-    private static readonly string[] ValueOptions = { "--serial", "--sver", "--chunk-gap-ms", "--abort-after-block", "--log", "--fw", "--parallel" };
+    private static readonly string[] ValueOptions = { "--serial", "--sver", "--chunk-gap-ms", "--abort-after-block", "--log", "--fw", "--parallel", "--target" };
 
     /// <summary>控制台走内联回调（引擎事件在哪个线程发生就同步打印——与旧 CLI 行为一致）。</summary>
     private static readonly OtaToolEngine Engine = new(new InlineProgress(OnUpdate));
@@ -149,6 +150,13 @@ internal static class Program
         var noRecheck = rest.Contains("--no-recheck");
         var parallelRaw = GetOptionInt(rest, "--parallel", 1);
         var parallel = parallelRaw < 1 ? 1 : (parallelRaw > 8 ? 8 : parallelRaw);   // net48 无 Math.Clamp
+        var targetRaw = (GetOption(rest, "--target") ?? "bs").ToLowerInvariant();
+        if (targetRaw is not ("bs" or "base" or "pen" or "pencil"))
+        {
+            Out.Error($"--target 非法：{targetRaw}（bs=基站 / pen=键盘·经基站无线）");
+            return 1;
+        }
+        var target = targetRaw is "pen" or "pencil" ? OtaUpgradeTarget.PenWireless : OtaUpgradeTarget.BaseStation;
 
         if (fwPath is null || !File.Exists(fwPath))
         {
@@ -168,9 +176,12 @@ internal static class Program
             return 1;
         }
 
-        Out.Info($"固件 {fw.FileName}：{fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）CRC16=0x{fw.Crc16:X4} 目标版本 {fw.SverText} · 升级对象 {OtaUpgradeTargetText.For(fw.Target)}");
+        Out.Info($"固件 {fw.FileName}：{fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）CRC16=0x{fw.Crc16:X4} 目标版本 {fw.SverText} · 升级对象 {OtaUpgradeTargetText.For(target)}");
         if (fw.Warning != null)
             Out.Warn(fw.Warning);
+        // 包名×升级对象错配：注意级不拦截（防呆不防傻——设备侧指纹/容量判据才是真闸；主线同款 FirmwareNaming）
+        if (FirmwareNaming.TargetMismatchNotice(fw.FileName, target == OtaUpgradeTarget.PenWireless ? Downtype.Pen : Downtype.BaseStation) is { } mismatch)
+            Out.Warn(mismatch);
 
         // 设备集合：--all = 全部命令通道实例；否则 1 台自动 / 多台要求 --serial（禁静默取第一台）
         var candidates = await Engine.EnumerateCandidatesAsync();
@@ -196,7 +207,7 @@ internal static class Program
             queue = new List<HidDeviceInfo> { selection.Selected };
         }
 
-        BeginLog(fw, queue, parallel);
+        BeginLog(fw, queue, parallel, target);
         if (parallel > 1 && queue.Count > 1)
             Out.Warn($"共 {queue.Count} 台并行升级（并发 {Math.Min(parallel, queue.Count)}）——升级全程请勿拔下任何设备");
         else
@@ -207,7 +218,7 @@ internal static class Program
         var results = new List<OtaDeviceResult>();
         if (parallel > 1 && queue.Count > 1)
         {
-            results = await RunParallelAsync(queue, fw, parallel, abortAfterBlock, chunkGapMs, noRecheck);
+            results = await RunParallelAsync(queue, fw, target, parallel, abortAfterBlock, chunkGapMs, noRecheck);
         }
         else
         {
@@ -217,7 +228,7 @@ internal static class Program
                     break;
                 Out.Info($"—— [{index + 1}/{queue.Count}] SN {Show(device.SerialNumber)}（位置 {device.LocationToken}）——");
                 _lastPercent = -100;
-                var result = await Engine.UpgradeOneAsync(device, fw, abortAfterBlock, chunkGapMs, noRecheck, Cts.Token);
+                var result = await Engine.UpgradeOneAsync(device, fw, target, abortAfterBlock, chunkGapMs, noRecheck, Cts.Token);
                 results.Add(result);
                 Log(result.SummaryLine);
                 Out.Info(result.SummaryLine);
@@ -241,7 +252,7 @@ internal static class Program
     /// 失败单支标记不阻塞其余；Ctrl+C 经由同一 Cts 优雅收敛所有在途会话。
     /// </summary>
     private static async Task<List<OtaDeviceResult>> RunParallelAsync(
-        List<HidDeviceInfo> queue, OtaFirmwarePackage fw, int parallel,
+        List<HidDeviceInfo> queue, OtaFirmwarePackage fw, OtaUpgradeTarget target, int parallel,
         int abortAfterBlock, int chunkGapMs, bool noRecheck)
     {
         var total = queue.Count;
@@ -270,7 +281,7 @@ internal static class Program
 
                 var engine = new OtaToolEngine(new InlineProgress(u => OnUpdateTagged(tag, lastPcts, index, u)));
                 Out.Info($"{tag} —— SN {Show(device.SerialNumber)}（位置 {device.LocationToken}）开始升级");
-                var result = await engine.UpgradeOneAsync(device, fw, abortAfterBlock, chunkGapMs, noRecheck, Cts.Token);
+                var result = await engine.UpgradeOneAsync(device, fw, target, abortAfterBlock, chunkGapMs, noRecheck, Cts.Token);
                 Log(result.SummaryLine);
                 return result;
             }
@@ -366,11 +377,11 @@ internal static class Program
 
     private static string Show(string s) => string.IsNullOrEmpty(s) ? "(无序列号)" : s;
 
-    private static void BeginLog(OtaFirmwarePackage fw, List<HidDeviceInfo> queue, int parallel = 1)
+    private static void BeginLog(OtaFirmwarePackage fw, List<HidDeviceInfo> queue, int parallel, OtaUpgradeTarget target)
     {
         _logLines = new List<string>();
         Log($"PencilBox 裁剪版升级小工具（CLI）  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        Log($"机器：{Environment.MachineName}    固件包：{fw.FileName}    目标版本：{fw.SverText}    升级对象：{OtaUpgradeTargetText.For(fw.Target)}    并发：{parallel}");
+        Log($"机器：{Environment.MachineName}    固件包：{fw.FileName}    目标版本：{fw.SverText}    升级对象：{OtaUpgradeTargetText.For(target)}    并发：{parallel}");
         Log($"队列 {queue.Count} 台：{string.Join("、", queue.Select(d => Show(d.SerialNumber) + "/位置" + d.LocationToken))}");
     }
 
@@ -440,8 +451,9 @@ internal static class Program
         Console.WriteLine("""
             PencilBox 裁剪版升级小工具（基站 USB 直升 + 键盘经基站无线中转，多支同插按设备分组）
 
-            升级对象由固件包名自动识别：R1D_ 开头=基站（USB 直升）；R1P_ 开头=键盘
-            （走同一 USB 通道，经基站 BLE 无线中转，键盘须已与对应基站配对）。
+            升级对象由 `--target` 显式选择（指挥官定版：不靠包名推断）：
+              bs（缺省）=基站 USB 直升；pen=键盘，走同一 USB 通道经基站 BLE 无线中转（键盘须已与对应基站配对）。
+            包名前缀与升级对象错配时仅提示不拦截（防呆不防傻）。
 
             用法：
               ota-tool scan                                  列出在插的全部可升级设备（按设备体系分组，一台一行，附当前版本）
@@ -449,6 +461,7 @@ internal static class Program
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
             ota 选项：
+              --target bs|pen        升级对象：bs=基站（缺省）/ pen=键盘（经基站无线中转）
               --serial SN|位置       选台：序列号（支持唯一前缀）；多台同号时用路径位置片段（如 "9&168367ac&0"，须加引号）
               --all                  逐支升级全部在插设备（失败单支标记，不阻塞其余）
               --parallel N           并行升级：N 台同时刷（滑动窗口 1~8，缺省 1=逐台；每台独立通道互不干扰）
@@ -463,7 +476,7 @@ internal static class Program
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --all
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --all --parallel 4
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --serial CD71
-              ota-tool ota R1P_1.0.1_dev_gcc_b718f8e.bin --all        （键盘固件，经各基站无线下发到已配对键盘）
+              ota-tool ota R1P_1.0.1_dev_gcc_b718f8e.bin --all --target pen    （键盘固件，经各基站无线下发到已配对键盘）
             """);
         return 0;
     }

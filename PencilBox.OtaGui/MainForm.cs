@@ -5,6 +5,7 @@
 // </copyright>
 using PencilBox.Core.Communication;
 using PencilBox.Core.OtaTool;
+using PencilBox.Core.Protocol.Company;
 using System.Windows.Forms;
 
 namespace PencilBox.OtaGui;
@@ -33,6 +34,10 @@ internal sealed class MainForm : Form
     private readonly TextBox _logBox;
 
     private OtaFirmwarePackage? _fw;
+    // 升级对象：用户显式切换（指挥官 10-21 晚裁决，不靠包名推断）；缺省=基站 R1D
+    private OtaUpgradeTarget _target = OtaUpgradeTarget.BaseStation;
+    private RadioButton _targetBs = null!;
+    private RadioButton _targetPen = null!;
     private CancellationTokenSource? _cts;
     private ListViewItem? _current;   // 正在升级的行（进度/阶段写它的状态列）
     private readonly List<string> _logLines = new();
@@ -71,6 +76,31 @@ internal sealed class MainForm : Form
         _refreshBtn = new Button { Text = "刷新设备", AutoSize = true };
         _refreshBtn.Click += (_, _) => _ = RefreshDevicesAsync();
         fwRow.Controls.Add(_refreshBtn);
+
+        // 升级端切换（指挥官 10-21 晚：手动选择，不靠包名推断）——切换即按新端重读版本列
+        fwRow.Controls.Add(new Label
+        {
+            Text = "升级对象：",
+            AutoSize = true,
+            Margin = new Padding(14, 8, 0, 0),
+        });
+        _targetBs = new RadioButton
+        {
+            Text = "基站（R1D）",
+            AutoSize = true,
+            Checked = true,
+            Margin = new Padding(3, 7, 0, 0),
+        };
+        _targetPen = new RadioButton
+        {
+            Text = "键盘（R1P·经基站无线）",
+            AutoSize = true,
+            Margin = new Padding(3, 7, 0, 0),
+        };
+        _targetBs.CheckedChanged += (_, _) => OnTargetChanged();
+        _targetPen.CheckedChanged += (_, _) => OnTargetChanged();
+        fwRow.Controls.Add(_targetBs);
+        fwRow.Controls.Add(_targetPen);
 
         var actionRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, WrapContents = false };
         _upgradeAllBtn = new Button { Text = "升级全部", AutoSize = true };
@@ -111,7 +141,7 @@ internal sealed class MainForm : Form
         });
         _fwInfo = new Label
         {
-            Text = "未加载固件——R1D_（基站·USB 直升）/ R1P_（键盘·经基站无线）",
+            Text = "未加载固件——升级对象用上方开关选择：基站（R1D·缺省）/ 键盘（R1P·经基站无线）",
             AutoSize = true,
             Margin = new Padding(12, 10, 0, 0),
             ForeColor = System.Drawing.Color.DimGray,
@@ -176,12 +206,36 @@ internal sealed class MainForm : Form
             FlushLog();
         };
 
-        LogLine("就绪。步骤：① 选固件包（R1D_=基站直升 / R1P_=键盘经基站无线）→ ② 刷新设备（自动读每台当前版本）→ ③ 勾选/全部升级。");
+        LogLine("就绪。步骤：① 选固件包 → ② 选升级对象（缺省=基站；升键盘先切到「键盘」再刷新设备）→ ③ 勾选/全部升级。");
         LogLine("同一固件可升多台；同版本也照常重刷（软件层不拦截，拦截与否由固件侧决定）。");
-        LogLine("键盘固件（R1P_）经各基站无线中转下发到其已配对键盘——键盘须开机且已配对，升级中勿关键盘电源。");
+        LogLine("键盘升级走同一 USB 口，由各基站无线中转给其已配对键盘——键盘须开机且已配对，升级中勿关键盘电源。");
     }
 
     // ================= 设备扫描 =================
+
+    /// <summary>
+    /// 升级端切换（指挥官 10-21 晚裁决：手动选择不靠包名推断）。缺省=基站；
+    /// 切到「键盘」即整链按键盘走（读版本/升级/回读），设备列表已在位时自动按新对象重读版本列。
+    /// </summary>
+    private void OnTargetChanged()
+    {
+        var newTarget = _targetPen.Checked ? OtaUpgradeTarget.PenWireless : OtaUpgradeTarget.BaseStation;
+        if (newTarget == _target)
+            return;
+        _target = newTarget;
+        if (_fw != null)
+            UpdateFwInfo(_fw);
+        if (_busy || _list.Items.Count == 0)
+            return;
+        LogLine($"升级对象已切换：{OtaUpgradeTargetText.For(_target)}——按新对象重读每台当前版本");
+        _ = RefreshDevicesAsync();
+    }
+
+    private void UpdateFwInfo(OtaFirmwarePackage fw)
+    {
+        _fwInfo.ForeColor = System.Drawing.Color.DimGray;
+        _fwInfo.Text = $"{fw.FileName} · {fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）· CRC16 0x{fw.Crc16:X4} · 目标版本 {fw.SverText} · 升级对象 {OtaUpgradeTargetText.For(_target)}";
+    }
 
     private async Task RefreshDevicesAsync()
     {
@@ -198,8 +252,8 @@ internal sealed class MainForm : Form
                 ? "未发现可升级设备——确认接收器已插入且此电脑能识别"
                 : $"发现 {groups.Count} 台设备";
 
-            // 版本列跟随已加载固件的目标轨：加载了 R1P_ 就读键盘版本（经基站透读），否则读基站自身
-            var verTarget = _fw?.Target ?? OtaUpgradeTarget.BaseStation;
+            // 版本列跟随升级对象开关：切到「键盘」读各基站所配键盘的版本（经基站透读），缺省读基站自身
+            var verTarget = _target;
             var verNote = verTarget == OtaUpgradeTarget.PenWireless ? "（键盘·经基站透读）" : "（基站）";
             foreach (ListViewItem item in _list.Items)
             {
@@ -280,14 +334,16 @@ internal sealed class MainForm : Form
         }
 
         _fw = fw;
-            _fwInfo.ForeColor = System.Drawing.Color.DimGray;
-            _fwInfo.Text = $"{fw.FileName} · {fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）· CRC16 0x{fw.Crc16:X4} · 目标版本 {fw.SverText} · 升级对象 {OtaUpgradeTargetText.For(fw.Target)}";
+        UpdateFwInfo(fw);
         LogLine("已加载固件：" + _fwInfo.Text);
         if (fw.Warning != null)
         {
             LogLine("注意：" + fw.Warning);
             MessageBox.Show(this, fw.Warning, "包名前缀异常", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
+        // 包名×升级对象错配：提示不拦截（防呆不防傻——设备侧指纹/容量判据才是真闸；主线同款 FirmwareNaming）
+        if (FirmwareNaming.TargetMismatchNotice(fw.FileName, _target == OtaUpgradeTarget.PenWireless ? Downtype.Pen : Downtype.BaseStation) is { } mismatch)
+            LogLine("注意：" + mismatch);
     }
 
     // ================= 升级 =================
@@ -312,7 +368,7 @@ internal sealed class MainForm : Form
         _cts = new CancellationTokenSource();
         SetBusy(true);
         BeginLog();
-        LogLine($"开始升级：{queue.Count} 台，固件 {_fw.FileName}（目标 {_fw.SverText} · {OtaUpgradeTargetText.For(_fw.Target)}）——升级全程请勿拔下任何设备");
+        LogLine($"开始升级：{queue.Count} 台，固件 {_fw.FileName}（目标 {_fw.SverText} · {OtaUpgradeTargetText.For(_target)}）——升级全程请勿拔下任何设备");
 
         var ok = 0;
         var bad = 0;
@@ -346,7 +402,7 @@ internal sealed class MainForm : Form
                 _progressBar.Value = 0;
                 LogLine($"—— {Show(g.CommandChannel.SerialNumber)}（位置 {g.CommandChannel.LocationToken}）——");
 
-                var r = await _engine.UpgradeOneAsync(g.CommandChannel, _fw, cancellationToken: _cts.Token);
+                var r = await _engine.UpgradeOneAsync(g.CommandChannel, _fw, _target, cancellationToken: _cts.Token);
                 SetItemStatus(item, $"{r.OutcomeText}：{r.Detail}");
                 if (r.Outcome is OtaDeviceOutcome.Success)
                 {
@@ -432,7 +488,7 @@ internal sealed class MainForm : Form
                     LogLine($"{tag} —— {Show(g.CommandChannel.SerialNumber)}（位置 {g.CommandChannel.LocationToken}）开始升级");
                 }));
 
-                var r = await engine.UpgradeOneAsync(g.CommandChannel, _fw!, cancellationToken: _cts.Token);
+                var r = await engine.UpgradeOneAsync(g.CommandChannel, _fw!, _target, cancellationToken: _cts.Token);
                 return (Item: item, Tag: tag, Result: (OtaDeviceResult?)r);
             }
             finally
@@ -531,6 +587,8 @@ internal sealed class MainForm : Form
         _upgradeCheckedBtn.Enabled = !busy;
         _cancelBtn.Enabled = busy;
         _concurrency.Enabled = !busy;
+        _targetBs.Enabled = !busy;
+        _targetPen.Enabled = !busy;
     }
 
     private void SetItemStatus(ListViewItem item, string text) => Cell(item, "status").Text = text;
