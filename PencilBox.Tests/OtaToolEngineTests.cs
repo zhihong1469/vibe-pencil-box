@@ -10,7 +10,7 @@ using OtaCore::PencilBox.Core.Protocol.Company;
 namespace PencilBox.Tests;
 
 /// <summary>
-/// 外发小工具引擎的固件装载校验（外发口径：R1P_ 硬拒、尺寸上限、版本解析——无跳过校验入口）。
+/// 外发小工具引擎的固件装载校验（外发口径：目标轨=包名前缀声明、尺寸上限、版本解析——无跳过校验入口）。
 /// 纯装载/解析逻辑，不碰真机。
 /// </summary>
 public class OtaToolEngineTests
@@ -43,10 +43,38 @@ public class OtaToolEngineTests
     [Fact]
     public void LoadFirmware_rejects_pen_package()
     {
+        // 旧口径（R1P 硬拒）已退役：目标轨由包名前缀声明，R1P_=键盘·经基站无线（2026-10-21 无线轨入裁剪版）
         var path = WriteTempBin(new byte[1024], "R1P_1.0.1_win_380191b.bin");
 
-        var ex = Assert.Throws<OtaFirmwareLoadException>(() => Engine.LoadFirmware(path));
-        Assert.Contains("R1P", ex.Message);
+        var fw = Engine.LoadFirmware(path);
+
+        Assert.Null(fw.Warning);
+        Assert.Equal(OtaUpgradeTarget.PenWireless, fw.Target);
+        Assert.Equal("1.0.1", fw.SverText);
+    }
+
+    [Fact]
+    public void LoadFirmware_derives_target_from_prefix()
+    {
+        var r1d = Engine.LoadFirmware(WriteTempBin(new byte[1024], "R1D_1.0.2_rc.1_win_4f245b6.bin"));
+        var r1p = Engine.LoadFirmware(WriteTempBin(new byte[1024], "R1P_0.13.21_release_gcc_e2466ab.bin"));
+
+        Assert.Equal(OtaUpgradeTarget.BaseStation, r1d.Target);
+        Assert.Null(r1d.Warning);
+        Assert.Equal(OtaUpgradeTarget.PenWireless, r1p.Target);
+        Assert.Null(r1p.Warning);
+    }
+
+    [Fact]
+    public void LoadFirmware_unknown_prefix_defaults_to_base_station_with_warning()
+    {
+        var path = WriteTempBin(new byte[1024], "XYZ_1.0.1_win_deadbeef.bin");
+
+        var fw = Engine.LoadFirmware(path);
+
+        Assert.NotNull(fw.Warning);
+        Assert.Equal(OtaUpgradeTarget.BaseStation, fw.Target);
+        Assert.Equal("1.0.1", fw.SverText);
     }
 
     [Fact]
@@ -56,17 +84,6 @@ public class OtaToolEngineTests
 
         var ex = Assert.Throws<OtaFirmwareLoadException>(() => Engine.LoadFirmware(path));
         Assert.Contains("上限", ex.Message);
-    }
-
-    [Fact]
-    public void LoadFirmware_unknown_prefix_warns_but_loads()
-    {
-        var path = WriteTempBin(new byte[1024], "XYZ_1.0.1_win_deadbeef.bin");
-
-        var fw = Engine.LoadFirmware(path);
-
-        Assert.NotNull(fw.Warning);
-        Assert.Equal("1.0.1", fw.SverText);
     }
 
     [Fact]

@@ -53,7 +53,7 @@ internal static class Program
             return action switch
             {
                 "scan" or "list" => ScanAsync().GetAwaiter().GetResult(),
-                "identify" or "id" => IdentifyAsync(GetOption(rest, "--serial")).GetAwaiter().GetResult(),
+                "identify" or "id" => IdentifyAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "ota" or "upgrade" => OtaAsync(rest).GetAwaiter().GetResult(),
                 "help" or "--help" or "-h" => Usage(),
                 _ => UnknownCommand(action)
@@ -87,7 +87,7 @@ internal static class Program
             }
             try
             {
-                var (info, _) = await new OtaToolEngine().ReadVersionAsync(g.CommandChannel, Cts.Token);
+                var (info, _) = await new OtaToolEngine().ReadVersionAsync(g.CommandChannel, OtaUpgradeTarget.BaseStation, Cts.Token);
                 versions[i] = info == null ? null : $"{info.SverMajor}.{info.SverMinor}.{info.SverPatch}";
             }
             finally
@@ -110,7 +110,7 @@ internal static class Program
 
     // ================= identify =================
 
-    private static async Task<int> IdentifyAsync(string? serial)
+    private static async Task<int> IdentifyAsync(string? serial, bool pen = false)
     {
         var candidates = await Engine.EnumerateCandidatesAsync();
         var selection = HidDeviceSelection.Select(candidates, serial);
@@ -122,8 +122,9 @@ internal static class Program
         }
 
         var device = selection.Selected;
-        Out.Info($"读取版本 ← {device.InterfaceLabel}（SN {Show(device.SerialNumber)}）");
-        var (info, err) = await Engine.ReadVersionAsync(device, Cts.Token);
+        var target = pen ? OtaUpgradeTarget.PenWireless : OtaUpgradeTarget.BaseStation;
+        Out.Info($"读取版本（{OtaUpgradeTargetText.For(target)}）← {device.InterfaceLabel}（SN {Show(device.SerialNumber)}）");
+        var (info, err) = await Engine.ReadVersionAsync(device, target, Cts.Token);
         if (info == null)
         {
             Out.Error(err ?? "0x03 无应答");
@@ -167,7 +168,7 @@ internal static class Program
             return 1;
         }
 
-        Out.Info($"固件 {fw.FileName}：{fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）CRC16=0x{fw.Crc16:X4} 目标版本 {fw.SverText}");
+        Out.Info($"固件 {fw.FileName}：{fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）CRC16=0x{fw.Crc16:X4} 目标版本 {fw.SverText} · 升级对象 {OtaUpgradeTargetText.For(fw.Target)}");
         if (fw.Warning != null)
             Out.Warn(fw.Warning);
 
@@ -369,7 +370,7 @@ internal static class Program
     {
         _logLines = new List<string>();
         Log($"PencilBox 裁剪版升级小工具（CLI）  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        Log($"机器：{Environment.MachineName}    固件包：{fw.FileName}    目标版本：{fw.SverText}    并发：{parallel}");
+        Log($"机器：{Environment.MachineName}    固件包：{fw.FileName}    目标版本：{fw.SverText}    升级对象：{OtaUpgradeTargetText.For(fw.Target)}    并发：{parallel}");
         Log($"队列 {queue.Count} 台：{string.Join("、", queue.Select(d => Show(d.SerialNumber) + "/位置" + d.LocationToken))}");
     }
 
@@ -437,11 +438,14 @@ internal static class Program
     private static int Usage()
     {
         Console.WriteLine("""
-            PencilBox 裁剪版升级小工具（基站/dongle USB 升级，多支同插按设备分组区分）
+            PencilBox 裁剪版升级小工具（基站 USB 直升 + 键盘经基站无线中转，多支同插按设备分组）
+
+            升级对象由固件包名自动识别：R1D_ 开头=基站（USB 直升）；R1P_ 开头=键盘
+            （走同一 USB 通道，经基站 BLE 无线中转，键盘须已与对应基站配对）。
 
             用法：
               ota-tool scan                                  列出在插的全部可升级设备（按设备体系分组，一台一行，附当前版本）
-              ota-tool identify [--serial SN|位置]           读基站版本（0x03；一台自动，多台需 --serial/位置）
+              ota-tool identify [--pen] [--serial SN|位置]   读版本（0x03；缺省读基站，--pen 经基站透读键盘）
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
             ota 选项：
@@ -459,6 +463,7 @@ internal static class Program
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --all
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --all --parallel 4
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --serial CD71
+              ota-tool ota R1P_1.0.1_dev_gcc_b718f8e.bin --all        （键盘固件，经各基站无线下发到已配对键盘）
             """);
         return 0;
     }

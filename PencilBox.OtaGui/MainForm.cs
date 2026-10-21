@@ -111,7 +111,7 @@ internal sealed class MainForm : Form
         });
         _fwInfo = new Label
         {
-            Text = "未加载固件——请选择 R1D_ 开头的基站固件包",
+            Text = "未加载固件——R1D_（基站·USB 直升）/ R1P_（键盘·经基站无线）",
             AutoSize = true,
             Margin = new Padding(12, 10, 0, 0),
             ForeColor = System.Drawing.Color.DimGray,
@@ -176,8 +176,9 @@ internal sealed class MainForm : Form
             FlushLog();
         };
 
-        LogLine("就绪。步骤：① 选固件包 → ② 刷新设备（自动读每台当前版本）→ ③ 勾选/全部升级。");
+        LogLine("就绪。步骤：① 选固件包（R1D_=基站直升 / R1P_=键盘经基站无线）→ ② 刷新设备（自动读每台当前版本）→ ③ 勾选/全部升级。");
         LogLine("同一固件可升多台；同版本也照常重刷（软件层不拦截，拦截与否由固件侧决定）。");
+        LogLine("键盘固件（R1P_）经各基站无线中转下发到其已配对键盘——键盘须开机且已配对，升级中勿关键盘电源。");
     }
 
     // ================= 设备扫描 =================
@@ -197,20 +198,23 @@ internal sealed class MainForm : Form
                 ? "未发现可升级设备——确认接收器已插入且此电脑能识别"
                 : $"发现 {groups.Count} 台设备";
 
+            // 版本列跟随已加载固件的目标轨：加载了 R1P_ 就读键盘版本（经基站透读），否则读基站自身
+            var verTarget = _fw?.Target ?? OtaUpgradeTarget.BaseStation;
+            var verNote = verTarget == OtaUpgradeTarget.PenWireless ? "（键盘·经基站透读）" : "（基站）";
             foreach (ListViewItem item in _list.Items)
             {
                 var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
                 Cell(item, "ver").Text = "读取中…";
-                var (info, err) = await _engine.ReadVersionAsync(dev);
+                var (info, err) = await _engine.ReadVersionAsync(dev, verTarget);
                 if (info == null)
                 {
                     Cell(item, "ver").Text = "读取失败";
-                    LogLine($"SN {Show(dev.SerialNumber)} 读版本失败：{err}");
+                    LogLine($"SN {Show(dev.SerialNumber)} 读版本失败{verNote}：{err}");
                 }
                 else
                 {
                     Cell(item, "ver").Text = $"{info.SverMajor}.{info.SverMinor}.{info.SverPatch}";
-                    LogLine($"SN {Show(dev.SerialNumber)} 当前版本 {info.SverMajor}.{info.SverMinor}.{info.SverPatch}");
+                    LogLine($"SN {Show(dev.SerialNumber)} 当前版本{verNote} {info.SverMajor}.{info.SverMinor}.{info.SverPatch}");
                 }
             }
         }
@@ -243,7 +247,7 @@ internal sealed class MainForm : Form
     {
         using var dlg = new OpenFileDialog
         {
-            Title = "选择基站固件包（R1D_ 开头）",
+            Title = "选择固件包（R1D_=基站 / R1P_=键盘·经基站无线）",
             Filter = "固件包 (*.bin)|*.bin|所有文件 (*.*)|*.*",
         };
         if (dlg.ShowDialog(this) == DialogResult.OK)
@@ -276,8 +280,8 @@ internal sealed class MainForm : Form
         }
 
         _fw = fw;
-        _fwInfo.ForeColor = System.Drawing.Color.DimGray;
-        _fwInfo.Text = $"{fw.FileName} · {fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）· CRC16 0x{fw.Crc16:X4} · 目标版本 {fw.SverText}";
+            _fwInfo.ForeColor = System.Drawing.Color.DimGray;
+            _fwInfo.Text = $"{fw.FileName} · {fw.Image.Length}B（{(fw.Image.Length + 1023) / 1024} 块）· CRC16 0x{fw.Crc16:X4} · 目标版本 {fw.SverText} · 升级对象 {OtaUpgradeTargetText.For(fw.Target)}";
         LogLine("已加载固件：" + _fwInfo.Text);
         if (fw.Warning != null)
         {
@@ -294,7 +298,7 @@ internal sealed class MainForm : Form
             return;
         if (_fw == null)
         {
-            MessageBox.Show(this, "请先选择固件包（R1D_ 开头的基站固件）。", "提示",
+            MessageBox.Show(this, "请先选择固件包（R1D_=基站 / R1P_=键盘·经基站无线）。", "提示",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -308,7 +312,7 @@ internal sealed class MainForm : Form
         _cts = new CancellationTokenSource();
         SetBusy(true);
         BeginLog();
-        LogLine($"开始升级：{queue.Count} 台，固件 {_fw.FileName}（目标 {_fw.SverText}）——升级全程请勿拔下任何设备");
+        LogLine($"开始升级：{queue.Count} 台，固件 {_fw.FileName}（目标 {_fw.SverText} · {OtaUpgradeTargetText.For(_fw.Target)}）——升级全程请勿拔下任何设备");
 
         var ok = 0;
         var bad = 0;
