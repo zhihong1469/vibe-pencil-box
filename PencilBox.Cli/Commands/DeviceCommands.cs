@@ -33,7 +33,7 @@ public class DeviceCommands
     public async Task<int> ScanAsync(ushort? vid, ushort? pid)
     {
         var devices = await _hidTransport.EnumerateDevicesAsync();
-        
+
         var filtered = devices.AsEnumerable();
         if (vid.HasValue)
             filtered = filtered.Where(d => d.VendorId == vid.Value);
@@ -41,32 +41,49 @@ public class DeviceCommands
             filtered = filtered.Where(d => d.ProductId == pid.Value);
 
         var list = filtered.ToList();
-        ConsoleFormatter.Info($"Found {list.Count} HID device(s)");
+        var ours = list.Where(d => d.IsOurDevice).ToList();
 
-        ConsoleFormatter.PrintTable(list,
-            ("O", d => d.IsOurDevice ? "本" : ""),
-            ("T", d => d.IsCommandChannel ? "★" : ""),
-            ("VID", d => $"0x{d.VendorId:X4}"),
-            ("PID", d => $"0x{d.ProductId:X4}"),
-            ("序列号", d => string.IsNullOrEmpty(d.SerialNumber) ? "-" : d.SerialNumber),
-            ("接口", d => d.InterfaceLabel),
-            ("UsagePg", d => d.IsCommandChannel ? $"0x{d.UsagePage:X4}" : "-"),
-            ("IN/OUT", d => $"{d.InputReportLength}/{d.OutputReportLength}"),
-            ("Path", d => TruncatePath(d.DevicePath)));
-
-        var ourCmd = list.Count(d => d.IsOurDevice && d.IsCommandChannel);
-        var ourDev = list.Count(d => d.IsOurDevice);
-        if (ourCmd > 0)
+        // 定向过滤（--vid/--pid 调试）= 平铺全表（通道级排查视图）
+        if (vid.HasValue || pid.HasValue)
         {
-            // 多实例差异化：命令通道按序列号逐台列出（同插多支时个体可辨，02 号）
-            var serials = list.Where(d => d.IsOurDevice && d.IsCommandChannel)
-                .Select((d, i) => $"[{i + 1}]{(string.IsNullOrEmpty(d.SerialNumber) ? "(无序列号)" : d.SerialNumber)}");
-            ConsoleFormatter.Success($"本产品 EP4 命令通道(0xFF02)接口: {ourCmd} 台：{string.Join("、", serials)}；本产品设备接口共 {ourDev} 个");
-            if (ourCmd > 1)
-                ConsoleFormatter.Warn("多台同插：company 域请用 --serial <SN> 选台（缺省会拒绝执行避免刷错设备）");
+            ConsoleFormatter.Info($"Found {list.Count} HID device(s) (filtered)");
+            ConsoleFormatter.PrintTable(list,
+                ("O", d => d.IsOurDevice ? "本" : ""),
+                ("T", d => d.IsCommandChannel ? "★" : ""),
+                ("VID", d => $"0x{d.VendorId:X4}"),
+                ("PID", d => $"0x{d.ProductId:X4}"),
+                ("序列号", d => string.IsNullOrEmpty(d.SerialNumber) ? "-" : d.SerialNumber),
+                ("接口", d => d.InterfaceLabel),
+                ("UsagePg", d => d.IsCommandChannel ? $"0x{d.UsagePage:X4}" : "-"),
+                ("IN/OUT", d => $"{d.InputReportLength}/{d.OutputReportLength}"),
+                ("Path", d => TruncatePath(d.DevicePath)));
+            return 0;
         }
-        else
-            ConsoleFormatter.Info("本产品设备无 EP4 命令通道(0xFF02)接口");
+
+        // 默认 = 按设备分类（2026-10-21）：一台一块、组内挂全部通道；不再按通道平铺
+        ConsoleFormatter.Info($"在插 HID 设备 {list.Count} 个，其中本产品 {ours.Count} 个接口、{HidDeviceSelection.DeviceGroups(ours).Count} 台");
+        var groups = HidDeviceSelection.DeviceGroups(ours);
+        for (var i = 0; i < groups.Count; i++)
+        {
+            var g = groups[i];
+            var sn = string.IsNullOrEmpty(g.CommandChannel.SerialNumber) ? "(无序列号)" : g.CommandChannel.SerialNumber;
+            ConsoleFormatter.Success($"[{i + 1}] SN {sn}    位置 {g.CommandChannel.LocationToken}    {g.Channels.Count} 通道");
+            foreach (var ch in g.Channels)
+                ConsoleFormatter.Info($"      · {(ch.IsCommandChannel ? "★ " : "  ")}{ch.InterfaceLabel}");
+        }
+
+        var others = list.Count - ours.Count;
+        if (others > 0)
+            ConsoleFormatter.Info($"（另有非本产品 HID 设备 {others} 个，已折叠；--vid/--pid 过滤可查看明细）");
+
+        if (groups.Count == 0)
+        {
+            ConsoleFormatter.Info("未发现本产品设备（VID 0x2F70/0xEA11 或过渡期 0x5553/0x4155）");
+        }
+        else if (groups.Count > 1)
+        {
+            ConsoleFormatter.Warn("多台同插：company 域请用 --serial <SN|位置片段> 选台（缺省会拒绝执行避免刷错设备）");
+        }
 
         return 0;
     }

@@ -83,6 +83,45 @@ public class HidDeviceSelectionTests
     }
 
     [Fact]
+    public void DeviceGroups_serial_supplement_merges_cross_interface_channels()
+    {
+        // mi_02 与 mi_03 的 Windows 实例主体哈希互异（2026-10-21 实证）——位置键归不进，
+        // 锚序列号唯一时按序列号补充并入（正常固件序列号不撞号）
+        var cmd = Dev("9&2bb83262&0&0000", sn: "CD71134331353930");
+        var kbd = new HidDeviceInfo
+        {
+            DevicePath = $"\\\\?\\hid#vid_2f70&pid_ea11&mi_03#8&5810db6&0&0000{GuidSeg}",
+            SerialNumber = "CD71134331353930",
+            IsOurDevice = true,
+        };
+
+        var groups = HidDeviceSelection.DeviceGroups(new[] { cmd, kbd });
+
+        var group = Assert.Single(groups);
+        Assert.Equal(2, group.Channels.Count);
+        Assert.Contains(kbd, group.Channels);
+    }
+
+    [Fact]
+    public void DeviceGroups_same_serial_falls_back_to_position_only()
+    {
+        // 同号双台：序列号补充归组必须停用（宁缺勿串），只按位置键
+        var a = Dev("9&168367ac&0&0000", sn: "CD71134331353930");
+        var b = Dev("9&2d4f1a3b&0&0000", sn: "CD71134331353930");
+        var kbdOfB = new HidDeviceInfo
+        {
+            DevicePath = $"\\\\?\\hid#vid_2f70&pid_ea11&mi_03#8&5810db6&0&0000{GuidSeg}",
+            SerialNumber = "CD71134331353930",
+            IsOurDevice = true,
+        };
+
+        var groups = HidDeviceSelection.DeviceGroups(new[] { a, b, kbdOfB });
+
+        Assert.Equal(2, groups.Count);
+        Assert.All(groups, g => Assert.Single(g.Channels));   // kbd 归不进任何一台（无法判属）
+    }
+
+    [Fact]
     public void Select_by_path_fragment_resolves_same_serial_dongles()
     {
         var a = Dev("9&168367ac&0&0000", sn: "CD71134331353930");

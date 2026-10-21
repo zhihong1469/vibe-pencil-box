@@ -126,6 +126,9 @@ public static class HidDeviceSelection
 
     /// <summary>
     /// 按设备体系归组：以命令通道为锚（每支一台），组内挂同一实体设备的全部通道。
+    /// 归组两级：① 位置片段键（USB 实例主体——同接口各集合必同组；**但 mi_02/mi_03 的
+    /// Windows 实例主体哈希互异**，跨接口归不进，2026-10-21 实证）；② 序列号补充——仅当
+    /// 序列号在锚中**唯一**（同号双台时序列号不可靠，退回①，宁缺勿串）。
     /// 产物：扫描列表一行=一台设备（多支各占一行），展开可见其名下通道——
     /// 替代"全部命令通道平铺一列"的同貌列表（2026-10-21 指挥官截图问题）。
     /// </summary>
@@ -139,6 +142,23 @@ public static class HidDeviceSelection
             var key = DeviceGroupKey(anchor);
             var channels = list.Where(d => DeviceGroupKey(d) == key).ToList();
             groups.Add(new HidDeviceGroup(key, anchor, channels));
+        }
+
+        // 序列号补充归组：锚序列号唯一（无同号）时，把同序列号的未归组通道并入
+        var serialOfAnchors = anchors.Select(a => a.SerialNumber).Where(s => !string.IsNullOrEmpty(s)).ToList();
+        if (serialOfAnchors.Distinct(StringComparer.OrdinalIgnoreCase).Count() == serialOfAnchors.Count)
+        {
+            foreach (var g in groups)
+            {
+                if (string.IsNullOrEmpty(g.CommandChannel.SerialNumber))
+                    continue;
+                var extra = list.Where(d =>
+                    !g.Channels.Contains(d) &&
+                    groups.All(other => other == g || !other.Channels.Contains(d)) &&
+                    string.Equals(d.SerialNumber, g.CommandChannel.SerialNumber, StringComparison.OrdinalIgnoreCase));
+                foreach (var d in extra.ToList())
+                    g.Channels.Add(d);
+            }
         }
         return groups;
     }
@@ -166,6 +186,6 @@ public sealed record HidDeviceSelectionResult(
 
 /// <summary>
 /// 一台实体设备的归组：锚=命令通道（升级走它），<see cref="Channels"/>=该实体名下全部通道
-/// （命令通道/键盘/HID 输入集合…，供界面展示"这是一个设备体系"）。
+/// （命令通道/键盘/HID 输入集合…，供界面展示"这是一个设备体系"；序列号补充归组会继续并入）。
 /// </summary>
-public sealed record HidDeviceGroup(string Key, HidDeviceInfo CommandChannel, IReadOnlyList<HidDeviceInfo> Channels);
+public sealed record HidDeviceGroup(string Key, HidDeviceInfo CommandChannel, List<HidDeviceInfo> Channels);

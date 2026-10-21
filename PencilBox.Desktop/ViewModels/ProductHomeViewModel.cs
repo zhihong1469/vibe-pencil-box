@@ -353,31 +353,29 @@ public partial class ProductHomeViewModel : ObservableObject
             var devices = await _deviceService.ScanDevicesAsync();
             MainThreadHelper.EnsureOnMainThread(() =>
             {
-                // 三层：无关设备过滤掉 → 只留本产品设备（浅黄底）→ 命令接口 0xFF02（★）排最前并选中
+                // 按设备分类（不按通道平铺，2026-10-21）：下拉一行 = 一台实体设备（行即其 0xFF02 命令通道，
+                // 选中即连该台）；组内其余通道（键盘/HID 集合）不再进下拉。同号多台靠位置片段可辨。
                 var ours = devices.Where(d => d.IsOurDevice).ToList();
-                var ordered = ours.OrderByDescending(d => d.IsCommandChannel).ToList();
-                AvailableDevices = new ObservableCollection<HidDeviceInfo>(ordered);
+                var groups = HidDeviceSelection.DeviceGroups(ours);
+                var deviceRows = groups.Select(g => g.CommandChannel).ToList();
+                AvailableDevices = new ObservableCollection<HidDeviceInfo>(deviceRows);
 
-                // 多实例差异化（02 号多笔同升）：命令通道按序列号逐台可辨；
-                // 多台时仍预选第一台但明示台数与名单，连接哪台由用户在下拉框定夺（禁静默唯一化）
-                var cmdDevs = ordered.Where(d => d.IsCommandChannel).ToList();
-                var target = cmdDevs.FirstOrDefault();
-                if (cmdDevs.Count > 1)
+                var target = deviceRows.FirstOrDefault();
+                if (deviceRows.Count > 1)
                 {
                     SelectedDevice = target;
-                    var names = string.Join("、", cmdDevs.Select((d, i) =>
-                        $"[{i + 1}]{(string.IsNullOrEmpty(d.SerialNumber) ? "(无序列号)" : d.SerialNumber)}"));
-                    StatusMessage = $"识别到 {cmdDevs.Count} 台命令通道设备（{names}）——请在下拉框选择要连接的一台";
+                    var names = string.Join("、", groups.Select((g, i) =>
+                        $"[{i + 1}]{(string.IsNullOrEmpty(g.CommandChannel.SerialNumber) ? "(无序列号)" : g.CommandChannel.SerialNumber)}/位置 {g.CommandChannel.LocationToken}（{g.Channels.Count} 通道）"));
+                    StatusMessage = $"识别到 {deviceRows.Count} 台设备（{names}）——请在下拉框选择要连接的一台";
                 }
                 else if (target != null)
                 {
                     SelectedDevice = target;
-                    StatusMessage = $"已识别接收器命令通道：{target.ProductName}（VID_0x{target.VendorId:X4} PID_0x{target.ProductId:X4}，SN {OrDash(target.SerialNumber)}）";
+                    StatusMessage = $"已识别接收器：{target.ProductName}（VID_0x{target.VendorId:X4} PID_0x{target.ProductId:X4}，SN {OrDash(target.SerialNumber)}，位置 {target.LocationToken}）";
                 }
-                else if (ordered.Count > 0)
+                else if (ours.Count > 0)
                 {
-                    SelectedDevice = ordered[0];
-                    StatusMessage = "已发现本产品设备，但未识别到 0xFF02 命令通道接口";
+                    StatusMessage = $"已发现本产品设备 {ours.Count} 个接口，但未识别到命令通道——无法连接（确认固件为带 0xFF02 通道的版本）";
                 }
                 else
                 {
