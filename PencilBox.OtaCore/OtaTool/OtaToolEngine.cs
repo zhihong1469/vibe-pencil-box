@@ -166,7 +166,7 @@ public sealed class OtaToolEngine
 
     // ================= 单支升级 =================
 
-    /// <summary>单支升级全流程：连接 → 读版本判重 → OTA 会话 → 主动探测回读对拍（开句柄读版本即终态判据）。</summary>
+    /// <summary>单支升级全流程：连接 → 读版本（仅展示，同版本不拦截）→ OTA 会话 → 主动探测回读对拍。</summary>
     public async Task<OtaDeviceResult> UpgradeOneAsync(
         HidDeviceInfo device,
         OtaFirmwarePackage firmware,
@@ -195,13 +195,8 @@ public sealed class OtaToolEngine
         }
 
         var beforeText = $"{before.SverMajor}.{before.SverMinor}.{before.SverPatch}";
-        if (beforeText == sverText && abortAfterBlock < 0)
-        {
-            CloseChannel();
-            Say("info", $"SN={Show(sn)} 已是目标版本 {sverText}，跳过不重刷");
-            return Make(OtaDeviceOutcome.Skip, beforeText, "已是目标版本，跳过不重刷");
-        }
-
+        // 同版本不做软件层拦截（指挥官 10-21 裁决）：照常重刷，拦截与否由固件侧决定——
+        // 固件真有拦截会话会自然报错，那才是真实口径；FSM 内 R2 同版本应答=协议语义不受此影响
         Say("info", $"SN={Show(sn)} 当前版本 {beforeText} → 目标 {sverText}，开始升级");
 
         // OTA 会话（与主线 CLI 同一 FSM：R1/R2/终态窗/终态丢失判定零漂移）
