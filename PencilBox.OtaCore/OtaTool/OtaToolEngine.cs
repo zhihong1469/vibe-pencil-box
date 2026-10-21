@@ -84,6 +84,7 @@ public sealed class OtaToolEngine
 
     /// <summary>对拍宽限：5×10s。3×5s 在"旧实例存活 30s+"形态下不够（2026-10-21 双台实测第③形态）。</summary>
     private const int ProbeIntervalMs = 1_000;
+    private const int ProbeHeartbeatEvery = 10;   // 静默等待期心跳节拍（10-21 目验：长期无输出像卡死）
 
     private readonly CompanyConfig _config = new();
     private readonly ICompanyCodec _codec = new CompanyCodec();
@@ -278,32 +279,43 @@ public sealed class OtaToolEngine
                 ?? candidates.FirstOrDefault(d => HidDeviceSelection.DeviceGroupKey(d) == groupKey);
             if (probe == null)
             {
-                lastErr = "枚举中暂无该设备";
-                continue;
+                lastErr = "枚举中暂无该设备（疑似复位后掉线，稍候自动复核）";
             }
-            if (!await OpenChannelAsync(probe))
+            else if (!await OpenChannelAsync(probe))
             {
                 lastErr = "重连失败（复位中）";
-                continue;
-            }
-
-            var (after, err2) = await ReadVersionOpenAsync(cancellationToken);
-            CloseChannel();
-            if (after != null)
-            {
-                afterText = $"{after.SverMajor}.{after.SverMinor}.{after.SverPatch}";
-                if (afterText == sverText)
-                {
-                    Say("info", $"设备已回来（第 {probes} 次探测）");
-                    Say("ok", $"SN={Show(sn)} 成功：{beforeText} → {afterText}");
-                    return Make(OtaDeviceOutcome.Success, beforeText, $"成功：{beforeText} → {afterText}");
-                }
-                lastErr = $"回读 {afterText} ≠ 目标 {sverText}（旧实例仍在应答，继续等它刷新）";
             }
             else
             {
-                lastErr = $"回读版本失败：{err2}";
+                var (after, err2) = await ReadVersionOpenAsync(cancellationToken);
+                CloseChannel();
+                if (after != null)
+                {
+                    afterText = $"{after.SverMajor}.{after.SverMinor}.{after.SverPatch}";
+                    if (afterText == sverText)
+                    {
+                        Say("info", $"设备已回来（第 {probes} 次探测）");
+                        Say("ok", $"SN={Show(sn)} 成功：{beforeText} → {afterText}");
+                        return Make(OtaDeviceOutcome.Success, beforeText, $"成功：{beforeText} → {afterText}");
+                    }
+                    lastErr = $"回读 {afterText} ≠ 目标 {sverText}（旧实例仍在应答）";
+                }
+                else
+                {
+                    lastErr = $"回读版本失败：{err2}";
+                }
             }
+
+            // 心跳：静默期每 10 拍报一次，GUI 行状态列同步跳动（CLI 日志可见、GUI 日志区可见）
+            Phase($"等设备复位回来（第 {probes} 次探测）");
+            if (probes == 1 || probes % ProbeHeartbeatEvery == 0)
+                Say("warn", $"SN={Show(sn)} 等待设备回来：第 {probes} 次探测——{lastErr}");
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Make(OtaDeviceOutcome.Unconfirmed, beforeText,
+                $"升级会话成功，等待复核被取消（最后状态：{lastErr}）——请稍后重新识别复核");
         }
 
         if (afterText != null)
