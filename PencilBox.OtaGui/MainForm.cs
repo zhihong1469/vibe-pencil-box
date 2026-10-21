@@ -414,16 +414,12 @@ internal sealed class MainForm : Form
             }
             catch (OperationCanceledException)
             {
-                BeginInvoke(new Action(() => SetItemStatus(item, "已跳过（取消）")));
-                return;
+                return (Item: item, Tag: tag, Result: (OtaDeviceResult?)null);
             }
             try
             {
                 if (_cts.IsCancellationRequested)
-                {
-                    BeginInvoke(new Action(() => SetItemStatus(item, "已跳过（取消）")));
-                    return;
-                }
+                    return (Item: item, Tag: tag, Result: (OtaDeviceResult?)null);
 
                 var engine = new OtaToolEngine(slotProgress[index]);
                 BeginInvoke(new Action(() =>
@@ -433,7 +429,7 @@ internal sealed class MainForm : Form
                 }));
 
                 var r = await engine.UpgradeOneAsync(g.CommandChannel, _fw!, cancellationToken: _cts.Token);
-                BeginInvoke(new Action(() => ApplyResult(tag, item, r, counts, sverText)));
+                return (Item: item, Tag: tag, Result: (OtaDeviceResult?)r);
             }
             finally
             {
@@ -441,7 +437,19 @@ internal sealed class MainForm : Form
             }
         })).ToArray();
 
-        await Task.WhenAll(tasks);
+        var outcomes = await Task.WhenAll(tasks);
+
+        // 统一回收：结果在汇总之前于 UI 线程同步应用——fire-and-forget BeginInvoke 会与
+        // 汇总弹窗竞争消息队列顺序（10-21 指挥官目验：2 台成功弹"1 台成功"即此因）
+        foreach (var o in outcomes)
+        {
+            if (o.Result == null)
+            {
+                SetItemStatus(o.Item, "已跳过（取消）");
+                continue;
+            }
+            ApplyResult(o.Tag, o.Item, o.Result, counts, sverText);
+        }
     }
 
     /// <summary>槽位引擎更新（Progress&lt;T&gt; 已回 UI 线程）：日志带台标，行级状态/百分比。</summary>
