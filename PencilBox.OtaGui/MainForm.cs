@@ -11,7 +11,7 @@ namespace PencilBox.OtaGui;
 
 /// <summary>
 /// 多支同升主界面（03 号 §5 定稿）：**顶层选固件**（固件一对多），**下方设备列表**
-/// 按设备体系一台一行（勾选要升的台），逐支顺序升级（v1 裁决）。
+/// 按设备体系一台一行（勾选要升的台）；并发数可选（1=逐台，N=同时刷 N 台，03 号 §10）。
 /// 业务全在 OtaToolEngine——界面只做状态呈现与按钮，升级语义与 CLI 零漂移。
 /// </summary>
 internal sealed class MainForm : Form
@@ -28,6 +28,7 @@ internal sealed class MainForm : Form
     private readonly Button _upgradeCheckedBtn;
     private readonly Button _cancelBtn;
     private readonly ProgressBar _progressBar;
+    private readonly NumericUpDown _concurrency;
     private readonly ListView _list;
     private readonly TextBox _logBox;
 
@@ -85,6 +86,29 @@ internal sealed class MainForm : Form
         actionRow.Controls.Add(_upgradeAllBtn);
         actionRow.Controls.Add(_upgradeCheckedBtn);
         actionRow.Controls.Add(_cancelBtn);
+        actionRow.Controls.Add(new Label
+        {
+            Text = "并发数：",
+            AutoSize = true,
+            Margin = new Padding(12, 9, 0, 0),
+        });
+        _concurrency = new NumericUpDown
+        {
+            Minimum = 1,
+            Maximum = 8,
+            Value = 4,
+            Width = 44,
+            Margin = new Padding(3, 6, 0, 0),
+        };
+        _concurrency.Increment = 1;
+        actionRow.Controls.Add(_concurrency);
+        actionRow.Controls.Add(new Label
+        {
+            Text = "（1=逐台；N=同时刷 N 台）",
+            AutoSize = true,
+            Margin = new Padding(2, 9, 0, 0),
+            ForeColor = System.Drawing.Color.DimGray,
+        });
         _fwInfo = new Label
         {
             Text = "未加载固件——请选择 R1D_ 开头的基站固件包",
@@ -290,6 +314,20 @@ internal sealed class MainForm : Form
         var bad = 0;
         try
         {
+            var parallel = (int)_concurrency.Value;
+            if (parallel > 1 && queue.Count > 1)
+            {
+                // 并行（03 号 §10）：每台独立引擎实例；行操作全部经 Progress/BeginInvoke 钉 UI 线程
+                var counts = new int[2];   // [0]=成功含跳过 [1]=失败/待确认
+                _progressBar.Value = 0;
+                _phaseLabel.Text = $"并行升级中（并发 {Math.Min(parallel, queue.Count)}）…";
+                LogLine($"并发 {Math.Min(parallel, queue.Count)} 台同时升级");
+                await RunParallelUpgradeAsync(queue, parallel, counts, _fw.SverText);
+                ok = counts[0];
+                bad = counts[1];
+            }
+            else
+            {
             foreach (var item in queue)
             {
                 if (_cts.IsCancellationRequested)
@@ -321,6 +359,7 @@ internal sealed class MainForm : Form
                 }
                 _current = null;
             }
+            }
 
             var summary = $"升级结束：{ok} 台成功（含跳过），{bad} 台失败/待确认";
             LogLine(summary);
@@ -340,6 +379,110 @@ internal sealed class MainForm : Form
             FlushLog();
             SetBusy(false);
             _phaseLabel.Text = "就绪";
+        }
+    }
+
+    /// <summary>
+    /// GUI 并行升级（03 号 §10）：每台独立引擎实例，滑动窗口排队；行/日志/进度条全部
+    /// 经 Progress&lt;T&gt;（自动回 UI 线程）或 BeginInvoke 操作，禁止在槽位线程碰控件。
+    /// </summary>
+    private async Task RunParallelUpgradeAsync(IReadOnlyList<ListViewItem> queue, int parallel, int[] counts, string sverText)
+    {
+        var total = queue.Count;
+        var slotPct = new int[total];
+        for (var i = 0; i < total; i++)
+            slotPct[i] = 0;
+        using var gate = new SemaphoreSlim(parallel);
+
+        // Progress<T> 构造时捕获同步上下文——必须在 UI 线程预建，放 Task.Run 里会丢 UI 亲和
+        var slotProgress = new IProgress<OtaToolUpdate>[total];
+        for (var i = 0; i < total; i++)
+        {
+            var itemI = queue[i];
+            var tagI = $"[{i + 1}/{total}]";
+            var slotI = i;
+            slotProgress[i] = new Progress<OtaToolUpdate>(u => OnSlotUpdate(tagI, itemI, slotPct, slotI, total, u));
+        }
+
+        var tasks = queue.Select((item, index) => Task.Run(async () =>
+        {
+            var tag = $"[{index + 1}/{total}]";
+            var g = (HidDeviceGroup)item.Tag;
+            try
+            {
+                await gate.WaitAsync(_cts!.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                BeginInvoke(new Action(() => SetItemStatus(item, "已跳过（取消）")));
+                return;
+            }
+            try
+            {
+                if (_cts.IsCancellationRequested)
+                {
+                    BeginInvoke(new Action(() => SetItemStatus(item, "已跳过（取消）")));
+                    return;
+                }
+
+                var engine = new OtaToolEngine(slotProgress[index]);
+                BeginInvoke(new Action(() =>
+                {
+                    SetItemStatus(item, "连接设备…");
+                    LogLine($"{tag} —— {Show(g.CommandChannel.SerialNumber)}（位置 {g.CommandChannel.LocationToken}）开始升级");
+                }));
+
+                var r = await engine.UpgradeOneAsync(g.CommandChannel, _fw!, cancellationToken: _cts.Token);
+                BeginInvoke(new Action(() => ApplyResult(tag, item, r, counts, sverText)));
+            }
+            finally
+            {
+                gate.Release();
+            }
+        })).ToArray();
+
+        await Task.WhenAll(tasks);
+    }
+
+    /// <summary>槽位引擎更新（Progress&lt;T&gt; 已回 UI 线程）：日志带台标，行级状态/百分比。</summary>
+    private void OnSlotUpdate(string tag, ListViewItem item, int[] slotPct, int slot, int total, OtaToolUpdate update)
+    {
+        switch (update)
+        {
+            case OtaToolUpdate.Log log:
+                LogLine($"{tag} {log.Message}");
+                break;
+            case OtaToolUpdate.Phase phase:
+                SetItemStatus(item, phase.Name);
+                break;
+            case OtaToolUpdate.Percent pct:
+                slotPct[slot] = pct.Value;
+                var sum = 0;
+                for (var i = 0; i < total; i++)
+                    sum += slotPct[i];
+                _progressBar.Value = Math.Min(100, sum / total);
+                SetItemStatus(item, $"传输 {pct.Value}%（{pct.BlocksDone}/{pct.TotalBlocks} 块）");
+                break;
+        }
+    }
+
+    /// <summary>单台结果回收（BeginInvoke 回 UI 线程）：状态列/版本列/计数。</summary>
+    private void ApplyResult(string tag, ListViewItem item, OtaDeviceResult r, int[] counts, string sverText)
+    {
+        LogLine($"{tag} {r.SummaryLine}");
+        SetItemStatus(item, $"{r.OutcomeText}：{r.Detail}");
+        if (r.Outcome == OtaDeviceOutcome.Success)
+        {
+            Cell(item, "ver").Text = sverText;   // 成功=对拍通过，即目标版本
+            counts[0]++;
+        }
+        else if (r.Outcome == OtaDeviceOutcome.Skip)
+        {
+            counts[0]++;
+        }
+        else
+        {
+            counts[1]++;
         }
     }
 
@@ -375,6 +518,7 @@ internal sealed class MainForm : Form
         _upgradeAllBtn.Enabled = !busy;
         _upgradeCheckedBtn.Enabled = !busy;
         _cancelBtn.Enabled = busy;
+        _concurrency.Enabled = !busy;
     }
 
     private void SetItemStatus(ListViewItem item, string text) => Cell(item, "status").Text = text;

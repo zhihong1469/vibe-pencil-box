@@ -71,11 +71,37 @@ internal static class Program
     {
         var groups = await Engine.ScanGroupsAsync();
         Out.Info($"在插可升级设备（命令通道）：{groups.Count} 台（按设备体系分组，一台一行）");
+
+        // 每台并发读当前版本（GUI 刷新同款体验；4 路窗口防多台拖慢扫描）
+        var versions = new string?[groups.Count];
+        using var gate = new SemaphoreSlim(4);
+        var readers = groups.Select(async (g, i) =>
+        {
+            try
+            {
+                await gate.WaitAsync(Cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            try
+            {
+                var (info, _) = await new OtaToolEngine().ReadVersionAsync(g.CommandChannel, Cts.Token);
+                versions[i] = info == null ? null : $"{info.SverMajor}.{info.SverMinor}.{info.SverPatch}";
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }).ToArray();
+        await Task.WhenAll(readers);
+
         for (var i = 0; i < groups.Count; i++)
         {
             var g = groups[i];
             var anchor = g.CommandChannel;
-            Out.Info($"  [{i + 1}] SN {Show(anchor.SerialNumber)}    位置 {anchor.LocationToken}    通道 {g.Channels.Count} 个");
+            Out.Info($"  [{i + 1}] SN {Show(anchor.SerialNumber)}    位置 {anchor.LocationToken}    当前版本 {versions[i] ?? "读取失败"}    通道 {g.Channels.Count} 个");
             foreach (var ch in g.Channels)
                 Out.Info($"        · {ch.InterfaceLabel}");
         }
@@ -414,7 +440,7 @@ internal static class Program
             PencilBox 裁剪版升级小工具（基站/dongle USB 升级，多支同插按设备分组区分）
 
             用法：
-              ota-tool scan                                  列出在插的全部可升级设备（按设备体系分组，一台一行）
+              ota-tool scan                                  列出在插的全部可升级设备（按设备体系分组，一台一行，附当前版本）
               ota-tool identify [--serial SN|位置]           读基站版本（0x03；一台自动，多台需 --serial/位置）
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
