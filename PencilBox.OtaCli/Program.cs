@@ -18,7 +18,7 @@ namespace PencilBox.OtaCli;
 internal static class Program
 {
     /// <summary>带值选项（位置参数解析时须连同其值一起跳过）。</summary>
-    private static readonly string[] ValueOptions = { "--serial", "--sver", "--chunk-gap-ms", "--abort-after-block", "--log", "--fw" };
+    private static readonly string[] ValueOptions = { "--serial", "--sver", "--chunk-gap-ms", "--abort-after-block", "--log", "--fw", "--parallel" };
 
     /// <summary>控制台走内联回调（引擎事件在哪个线程发生就同步打印——与旧 CLI 行为一致）。</summary>
     private static readonly OtaToolEngine Engine = new(new InlineProgress(OnUpdate));
@@ -120,6 +120,8 @@ internal static class Program
         var chunkGapMs = GetOptionInt(rest, "--chunk-gap-ms", -1);
         var abortAfterBlock = GetOptionInt(rest, "--abort-after-block", -1);
         var noRecheck = rest.Contains("--no-recheck");
+        var parallelRaw = GetOptionInt(rest, "--parallel", 1);
+        var parallel = parallelRaw < 1 ? 1 : (parallelRaw > 8 ? 8 : parallelRaw);   // net48 无 Math.Clamp
 
         if (fwPath is null || !File.Exists(fwPath))
         {
@@ -167,22 +169,32 @@ internal static class Program
             queue = new List<HidDeviceInfo> { selection.Selected };
         }
 
-        BeginLog(fw, queue);
-        Out.Warn(queue.Count > 1
-            ? $"共 {queue.Count} 台进入逐支升级队列——升级全程请勿拔下任何设备"
-            : "升级全程请勿拔下设备");
+        BeginLog(fw, queue, parallel);
+        if (parallel > 1 && queue.Count > 1)
+            Out.Warn($"共 {queue.Count} 台并行升级（并发 {Math.Min(parallel, queue.Count)}）——升级全程请勿拔下任何设备");
+        else
+            Out.Warn(queue.Count > 1
+                ? $"共 {queue.Count} 台进入逐支升级队列——升级全程请勿拔下任何设备"
+                : "升级全程请勿拔下设备");
 
         var results = new List<OtaDeviceResult>();
-        foreach (var (device, index) in queue.Select((d, i) => (d, i)))
+        if (parallel > 1 && queue.Count > 1)
         {
-            if (Cts.IsCancellationRequested)
-                break;
-            Out.Info($"—— [{index + 1}/{queue.Count}] SN {Show(device.SerialNumber)}（位置 {device.LocationToken}）——");
-            _lastPercent = -100;
-            var result = await Engine.UpgradeOneAsync(device, fw, abortAfterBlock, chunkGapMs, noRecheck, Cts.Token);
-            results.Add(result);
-            Log(result.SummaryLine);
-            Out.Info(result.SummaryLine);
+            results = await RunParallelAsync(queue, fw, parallel, abortAfterBlock, chunkGapMs, noRecheck);
+        }
+        else
+        {
+            foreach (var (device, index) in queue.Select((d, i) => (d, i)))
+            {
+                if (Cts.IsCancellationRequested)
+                    break;
+                Out.Info($"—— [{index + 1}/{queue.Count}] SN {Show(device.SerialNumber)}（位置 {device.LocationToken}）——");
+                _lastPercent = -100;
+                var result = await Engine.UpgradeOneAsync(device, fw, abortAfterBlock, chunkGapMs, noRecheck, Cts.Token);
+                results.Add(result);
+                Log(result.SummaryLine);
+                Out.Info(result.SummaryLine);
+            }
         }
 
         // 汇总（02 号 §4-6）
@@ -197,7 +209,86 @@ internal static class Program
         return failCount == 0 ? 0 : 1;
     }
 
+    /// <summary>
+    /// 滑动窗口并行升级（03 号 §10）：每台独立引擎实例（通道/FSM/探测互不共享），
+    /// 失败单支标记不阻塞其余；Ctrl+C 经由同一 Cts 优雅收敛所有在途会话。
+    /// </summary>
+    private static async Task<List<OtaDeviceResult>> RunParallelAsync(
+        List<HidDeviceInfo> queue, OtaFirmwarePackage fw, int parallel,
+        int abortAfterBlock, int chunkGapMs, bool noRecheck)
+    {
+        var total = queue.Count;
+        var lastPcts = new int[total];
+        for (var i = 0; i < total; i++)   // net48 无 Array.Fill
+            lastPcts[i] = -100;
+        using var gate = new SemaphoreSlim(parallel);
+
+        var tasks = queue.Select((device, index) => Task.Run(async () =>
+        {
+            var tag = $"[{index + 1}/{total}]";
+            try
+            {
+                await gate.WaitAsync(Cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return new OtaDeviceResult(device.SerialNumber, OtaDeviceOutcome.Abort, null,
+                    "未开始（用户取消）", TimeSpan.Zero);
+            }
+            try
+            {
+                if (Cts.IsCancellationRequested)
+                    return new OtaDeviceResult(device.SerialNumber, OtaDeviceOutcome.Abort, null,
+                        "未开始（用户取消）", TimeSpan.Zero);
+
+                var engine = new OtaToolEngine(new InlineProgress(u => OnUpdateTagged(tag, lastPcts, index, u)));
+                Out.Info($"{tag} —— SN {Show(device.SerialNumber)}（位置 {device.LocationToken}）开始升级");
+                var result = await engine.UpgradeOneAsync(device, fw, abortAfterBlock, chunkGapMs, noRecheck, Cts.Token);
+                Log(result.SummaryLine);
+                return result;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        })).ToArray();
+
+        await Task.WhenAll(tasks);
+        return tasks.Select(t => t.Result).ToList();
+    }
+
     // ================= 输出/日志/杂项 =================
+
+    /// <summary>并行模式输出：行首 [i/N] 台标（进度节流逐台独立；阶段行只进日志降噪）。</summary>
+    private static void OnUpdateTagged(string tag, int[] lastPcts, int slot, OtaToolUpdate update)
+    {
+        switch (update)
+        {
+            case OtaToolUpdate.Log log:
+                var msg = $"{tag} {log.Message}";
+                switch (log.Level)
+                {
+                    case "ok": Out.Ok(msg); break;
+                    case "warn": Out.Warn(msg); break;
+                    case "error": Out.Error(msg); break;
+                    default: Out.Info(msg); break;
+                }
+                Log(msg);
+                break;
+            case OtaToolUpdate.Percent pct:
+                if (pct.Value / 10 != lastPcts[slot] / 10)
+                {
+                    lastPcts[slot] = pct.Value;
+                    var m = $"{tag} 进度 {pct.Value,3}%（{pct.BlocksDone}/{pct.TotalBlocks} 块）";
+                    Out.Info(m);
+                    Log(m);
+                }
+                break;
+            case OtaToolUpdate.Phase phase:
+                Log($"{tag} [阶段] {phase.Name}");
+                break;
+        }
+    }
 
     /// <summary>引擎更新 → 控制台 + 日志（内联，与旧 CLI 打印节奏一致）。</summary>
     private static void OnUpdate(OtaToolUpdate update)
@@ -248,15 +339,21 @@ internal static class Program
 
     private static string Show(string s) => string.IsNullOrEmpty(s) ? "(无序列号)" : s;
 
-    private static void BeginLog(OtaFirmwarePackage fw, List<HidDeviceInfo> queue)
+    private static void BeginLog(OtaFirmwarePackage fw, List<HidDeviceInfo> queue, int parallel = 1)
     {
         _logLines = new List<string>();
         Log($"PencilBox 裁剪版升级小工具（CLI）  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        Log($"机器：{Environment.MachineName}    固件包：{fw.FileName}    目标版本：{fw.SverText}");
+        Log($"机器：{Environment.MachineName}    固件包：{fw.FileName}    目标版本：{fw.SverText}    并发：{parallel}");
         Log($"队列 {queue.Count} 台：{string.Join("、", queue.Select(d => Show(d.SerialNumber) + "/位置" + d.LocationToken))}");
     }
 
-    private static void Log(string line) => _logLines.Add($"{DateTime.Now:HH:mm:ss.fff} {line}");
+    private static readonly object _logLock = new();
+
+    private static void Log(string line)
+    {
+        lock (_logLock)
+            _logLines.Add($"{DateTime.Now:HH:mm:ss.fff} {line}");
+    }
 
     private static void FlushLog()
     {
@@ -319,20 +416,22 @@ internal static class Program
             用法：
               ota-tool scan                                  列出在插的全部可升级设备（按设备体系分组，一台一行）
               ota-tool identify [--serial SN|位置]           读基站版本（0x03；一台自动，多台需 --serial/位置）
-              ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列）
+              ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
             ota 选项：
               --serial SN|位置       选台：序列号（支持唯一前缀）；多台同号时用路径位置片段（如 "9&168367ac&0"，须加引号）
               --all                  逐支升级全部在插设备（失败单支标记，不阻塞其余）
+              --parallel N           并行升级：N 台同时刷（滑动窗口 1~8，缺省 1=逐台；每台独立通道互不干扰）
               --sver M.m.p           目标版本（缺省从包名解析：R1D_1.0.2_... → 1.0.2）
               --chunk-gap-ms N       片间隔（缺省 5ms，冻结值勿改）
               --abort-after-block N  发完 N 块主动退出（验证用：设备留旧固件可重试）
-              --no-recheck           升级后不等设备回来复读版本（缺省等：等路径消失→等重现 ≤120s→宽限对拍）
-              --log <path>           日志文件（缺省 exe 旁 ota-log_时间戳.txt）
+              --no-recheck           升级后不等设备回来复读版本（缺省主动探测读版本对拍 ≤120s）
+              --log <path>           日志文件（缺省 exe 旁 log\ 子目录）
 
             示例：
               ota-tool scan
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --all
+              ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --all --parallel 4
               ota-tool ota R1D_1.0.2_rc.1_win_4f245b6.bin --serial CD71
             """);
         return 0;
