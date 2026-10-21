@@ -3,5 +3,8 @@
   <Project Path="PencilBox.Infrastructure/PencilBox.Infrastructure.csproj" />
   <Project Path="PencilBox.Cli/PencilBox.Cli.csproj" />
   <Project Path="PencilBox.Desktop/PencilBox.Desktop.csproj" />
+  <Project Path="PencilBox.OtaCore/PencilBox.OtaCore.csproj" />
+  <Project Path="PencilBox.OtaCli/PencilBox.OtaCli.csproj" />
+  <Project Path="PencilBox.OtaGui/PencilBox.OtaGui.csproj" />
   <Project Path="PencilBox.Tests/PencilBox.Tests.csproj" />
 </Solution>

@@ -598,6 +598,8 @@ public class Program
         var rest = args.Skip(1).ToArray();
         var port = GetOption(rest, "--port");
         var no = (byte)GetOptionInt(rest, "--no", 0);
+        // USB 多实例选台（02 号多笔同升）：多支 dongle 同插时按序列号选台；空=唯一台自动 / 多台报错列名单
+        cmd.TargetSerial = GetOption(rest, "--serial");
 
         return action switch
         {
@@ -879,6 +881,8 @@ public class Program
             dsp      DSP signal processing (check, scripts, run, analyze)
             config   Configuration management (get, set, path)
             company  公司 V0.9 协议（0xFF02 命令通道；OTA 在此：company ota）
+                     USB 轨通用选项 --serial <SN>：多支 dongle 同插时按序列号选台
+                     （缺省=唯一台自动选中；多台未指定→报错列名单，禁静默取第一台；支持唯一前缀）
             keymap   快捷键映射配置（本地 configs/keymap/；按键表+S1 切换表；0x55 下发=apply，pc-issues/05）
                      list / show [配置]                            配置清单 / 表格内容（缺省当前配置）
                      new <名> [--from <配置>]                      复制创建（缺省复制出厂默认）并设为当前

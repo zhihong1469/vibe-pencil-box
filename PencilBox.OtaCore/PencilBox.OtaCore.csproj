@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 外发裁剪小工具的 OTA 核心库（01/02/03 号，售后服务）：
+       编译期子集单源包含 OTA 全链（FSM/Codec/Frame/CRC/HID 传输），同时喂 net10（主线）与 net48（本库）。
+       net48 = 客户机零安装（Win10 22H2/Win11 系统自带 .NET Framework 4.8），产物 MB 级（10MB 预算的来路）。
+       兼容垫片仅 6 处（#if NET48 于主线源内）+ 本库 Shims.cs（Index/Range/IsExternalInit，纯新增）。 -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <RootNamespace>PencilBox.OtaCore</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+    <PackageReference Include="HidSharp" Version="2.6.4" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageReference Include="System.Threading.Channels" Version="10.0.10" />
+    <PackageReference Include="System.Memory" Version="4.6.3" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.6.3" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 协议层 -->
+    <Compile Include="..\PencilBox.Core\Protocol\ProtocolConstants.cs" Link="Subset\ProtocolConstants.cs" />
+    <Compile Include="..\PencilBox.Core\Protocol\Company\CompanyFrame.cs" Link="Subset\CompanyFrame.cs" />
+    <Compile Include="..\PencilBox.Core\Protocol\Company\CompanyModels.cs" Link="Subset\CompanyModels.cs" />
+    <Compile Include="..\PencilBox.Core\Protocol\Company\CompanyCodec.cs" Link="Subset\CompanyCodec.cs" />
+    <Compile Include="..\PencilBox.Core\Protocol\Company\CompanyConfig.cs" Link="Subset\CompanyConfig.cs" />
+    <Compile Include="..\PencilBox.Core\Protocol\Company\Crc16CcittFalse.cs" Link="Subset\Crc16CcittFalse.cs" />
+    <Compile Include="..\PencilBox.Core\Protocol\Company\FirmwareNaming.cs" Link="Subset\FirmwareNaming.cs" />
+    <Compile Include="..\PencilBox.Core\Protocol\Company\TuningParamTable.cs" Link="Subset\TuningParamTable.cs" />
+    <!-- 会话层 -->
+    <Compile Include="..\PencilBox.Core\Fsm\CompanyOtaFsm.cs" Link="Subset\CompanyOtaFsm.cs" />
+    <Compile Include="..\PencilBox.Core\Fsm\OtaSessionModels.cs" Link="Subset\OtaSessionModels.cs" />
+    <Compile Include="..\PencilBox.Core\Fsm\CommandRequester.cs" Link="Subset\CommandRequester.cs" />
+    <Compile Include="..\PencilBox.Core\Fsm\IClock.cs" Link="Subset\IClock.cs" />
+    <!-- 通道层 -->
+    <Compile Include="..\PencilBox.Core\HexStrings.cs" Link="Subset\HexStrings.cs" />
+    <Compile Include="..\PencilBox.Core\Communication\ICommandChannel.cs" Link="Subset\ICommandChannel.cs" />
+    <Compile Include="..\PencilBox.Core\Communication\IHidTransport.cs" Link="Subset\IHidTransport.cs" />
+    <Compile Include="..\PencilBox.Core\Communication\HidDeviceInfo.cs" Link="Subset\HidDeviceInfo.cs" />
+    <Compile Include="..\PencilBox.Core\Communication\HidDeviceSelection.cs" Link="Subset\HidDeviceSelection.cs" />
+    <Compile Include="..\PencilBox.Infrastructure\Hid\HidSharpTransport.cs" Link="Subset\HidSharpTransport.cs" />
+    <Compile Include="..\PencilBox.Infrastructure\Hid\HidCommandChannel.cs" Link="Subset\HidCommandChannel.cs" />
+    <!-- 工具层（本库自有的 CLI/GUI 共用引擎；位于本目录，默认 glob 已含，勿重复声明） -->
+  </ItemGroup>
+
+</Project>

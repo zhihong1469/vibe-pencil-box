@@ -112,6 +112,12 @@ public class HidDeviceInfo
     public int CollectionNumber => ParseHexField(DevicePath, "col");
 
     /// <summary>
+    /// 位置片段（`X&amp;Y&amp;Z`，USB 母线/端口）：多台设备**序列号撞号**时（2026-10-21 实测同号双台）
+    /// 个体区分的最后判据——02 号"区分退化到端口号"观察项的落地显示位。
+    /// </summary>
+    public string LocationToken => HidDeviceSelection.PathToken(this);
+
+    /// <summary>
     /// 接口类型名（可读）：区分"这是什么样的接口"。
     /// 上位机 HID 扫描下的类型：custom_hid 命令通道 / 备用 0xA0·0x05 / 键盘 / 普通 HID 输入集合。
     /// </summary>

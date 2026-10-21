@@ -358,11 +358,21 @@ public partial class ProductHomeViewModel : ObservableObject
                 var ordered = ours.OrderByDescending(d => d.IsCommandChannel).ToList();
                 AvailableDevices = new ObservableCollection<HidDeviceInfo>(ordered);
 
-                var target = ordered.FirstOrDefault(d => d.IsCommandChannel);
-                if (target != null)
+                // 多实例差异化（02 号多笔同升）：命令通道按序列号逐台可辨；
+                // 多台时仍预选第一台但明示台数与名单，连接哪台由用户在下拉框定夺（禁静默唯一化）
+                var cmdDevs = ordered.Where(d => d.IsCommandChannel).ToList();
+                var target = cmdDevs.FirstOrDefault();
+                if (cmdDevs.Count > 1)
                 {
                     SelectedDevice = target;
-                    StatusMessage = $"已识别接收器命令通道：{target.ProductName}（VID_0x{target.VendorId:X4} PID_0x{target.ProductId:X4}）";
+                    var names = string.Join("、", cmdDevs.Select((d, i) =>
+                        $"[{i + 1}]{(string.IsNullOrEmpty(d.SerialNumber) ? "(无序列号)" : d.SerialNumber)}"));
+                    StatusMessage = $"识别到 {cmdDevs.Count} 台命令通道设备（{names}）——请在下拉框选择要连接的一台";
+                }
+                else if (target != null)
+                {
+                    SelectedDevice = target;
+                    StatusMessage = $"已识别接收器命令通道：{target.ProductName}（VID_0x{target.VendorId:X4} PID_0x{target.ProductId:X4}，SN {OrDash(target.SerialNumber)}）";
                 }
                 else if (ordered.Count > 0)
                 {
@@ -1084,6 +1094,9 @@ public partial class ProductHomeViewModel : ObservableObject
             MainThreadHelper.EnsureOnMainThread(() => IsK2Busy = false);
         }
     }
+
+    /// <summary>序列号空值兜底显示（多实例差异化：SN 是个体唯一标识，缺失时明示而非空白）。</summary>
+    private static string OrDash(string s) => string.IsNullOrWhiteSpace(s) ? "-" : s;
 
     /// <summary>信封结果 → 用户文案（08 M4 异常映射：02→笔未连接、03→笔端无应答）。</summary>
     private static string DescribeK2(PenCmdResult r) => r.Outcome switch

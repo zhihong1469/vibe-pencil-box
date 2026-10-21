@@ -48,6 +48,7 @@ public class DeviceCommands
             ("T", d => d.IsCommandChannel ? "★" : ""),
             ("VID", d => $"0x{d.VendorId:X4}"),
             ("PID", d => $"0x{d.ProductId:X4}"),
+            ("序列号", d => string.IsNullOrEmpty(d.SerialNumber) ? "-" : d.SerialNumber),
             ("接口", d => d.InterfaceLabel),
             ("UsagePg", d => d.IsCommandChannel ? $"0x{d.UsagePage:X4}" : "-"),
             ("IN/OUT", d => $"{d.InputReportLength}/{d.OutputReportLength}"),
@@ -56,7 +57,14 @@ public class DeviceCommands
         var ourCmd = list.Count(d => d.IsOurDevice && d.IsCommandChannel);
         var ourDev = list.Count(d => d.IsOurDevice);
         if (ourCmd > 0)
-            ConsoleFormatter.Success($"本产品 EP4 命令通道(0xFF02)接口: {ourCmd} 个；本产品设备接口共 {ourDev} 个");
+        {
+            // 多实例差异化：命令通道按序列号逐台列出（同插多支时个体可辨，02 号）
+            var serials = list.Where(d => d.IsOurDevice && d.IsCommandChannel)
+                .Select((d, i) => $"[{i + 1}]{(string.IsNullOrEmpty(d.SerialNumber) ? "(无序列号)" : d.SerialNumber)}");
+            ConsoleFormatter.Success($"本产品 EP4 命令通道(0xFF02)接口: {ourCmd} 台：{string.Join("、", serials)}；本产品设备接口共 {ourDev} 个");
+            if (ourCmd > 1)
+                ConsoleFormatter.Warn("多台同插：company 域请用 --serial <SN> 选台（缺省会拒绝执行避免刷错设备）");
+        }
         else
             ConsoleFormatter.Info("本产品设备无 EP4 命令通道(0xFF02)接口");
 

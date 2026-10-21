@@ -4,6 +4,7 @@
 //   See LICENSE file in the project root for full license information.
 // </copyright>
 using Microsoft.Extensions.Logging;
+using PencilBox.Core;
 using PencilBox.Core.Communication;
 using PencilBox.Core.Protocol.Company;
 
@@ -51,7 +52,7 @@ public sealed class HidCommandChannel : ICommandChannel
         logicalFrame.CopyTo(report);
 
         _logger.LogDebug("USB 通道发逻辑帧 {Len}B（补零至 64B）：{Hex}",
-            logicalFrame.Length, Convert.ToHexString(logicalFrame));
+            logicalFrame.Length, HexStrings.ToHex(logicalFrame));
 
         return _transport.SendReportAsync(0, report, cancellationToken);
     }
@@ -70,10 +71,11 @@ public sealed class HidCommandChannel : ICommandChannel
         FrameReceived?.Invoke(this, logical);
     }
 
-    /// <summary>只退订，不释放 <see cref="IHidTransport"/>（该传输层为共享单例，由容器统一释放）</summary>
+    /// <summary>只退订，不释放 <see cref="IHidTransport"/>（该传输层为共享单例，由容器统一释放）。
+    /// `default` 即已完成 ValueTask（双框架通用；net48 无 ValueTask.CompletedTask 静态）。</summary>
     public ValueTask DisposeAsync()
     {
         _transport.ReportReceived -= OnReportReceived;
-        return ValueTask.CompletedTask;
+        return default;
     }
 }

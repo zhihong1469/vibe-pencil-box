@@ -34,6 +34,12 @@ public class CompanyCommands
     private readonly IClock _clock;
     private readonly CompanyConfig _config;
 
+    /// <summary>
+    /// USB 多实例选择过滤（`--serial`；多支 dongle 同插时按序列号选台——02 号多笔同升）。
+    /// 空 = 唯一台自动选中、多台报错列名单（禁止静默取第一台）。由 Program 分派层注入。
+    /// </summary>
+    public string? TargetSerial { get; set; }
+
     public CompanyCommands(
         IHidTransport hidTransport,
         ISerialTransport serialTransport,
@@ -841,17 +847,17 @@ public class CompanyCommands
             return true;
 
         var devices = await _hidTransport.EnumerateDevicesAsync();
-        var match = devices.FirstOrDefault(d =>
-                        d.UsagePage == ProtocolConstants.UsagePageCustomHid &&
-                        ProtocolConstants.IsTargetVidPid(d.VendorId, d.ProductId))
-                    ?? devices.FirstOrDefault(d =>
-                        d.IsTargetDongle && ProtocolConstants.IsTargetVidPid(d.VendorId, d.ProductId));
-
-        if (match == null)
+        // 多实例差异化选择（02 号）：0 台报错 / 1 台自动 / N 台未指定 --serial 时列名单拒绝（禁静默取第一台）
+        var selection = HidDeviceSelection.Select(devices, TargetSerial);
+        if (selection.Error != null || selection.Selected == null)
         {
-            ConsoleFormatter.Error("未找到基站 EP4 命令通道（0xFF02 无 RID）");
+            ConsoleFormatter.Error(selection.Error ?? "USB 命令通道选择失败");
             return false;
         }
+
+        var match = selection.Selected;
+        if (selection.Candidates.Count > 1)
+            ConsoleFormatter.Info($"多台在插（{selection.Candidates.Count}），已按 --serial 选中：{match.SerialNumber}");
 
         if (!await _hidTransport.ConnectAsync(match.DevicePath))
         {
@@ -865,7 +871,7 @@ public class CompanyCommands
             return false;
         }
 
-        ConsoleFormatter.Info($"基站命令通道就绪：{match.InterfaceLabel}");
+        ConsoleFormatter.Info($"基站命令通道就绪：{match.InterfaceLabel}（SN {match.SerialNumber}）");
         return true;
     }
 

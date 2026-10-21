@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 外发裁剪小工具 · GUI 轨（01/02/03 号）：顶层选固件（一对多），下方设备列表按设备体系
+       一台一行、逐支顺序升级。net48 WinForms 绿色免安装；发布 → output\custom\GUI\。
+       业务全在 OtaCore.OtaToolEngine（与 CLI 共用零漂移），本工程只做界面。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <AssemblyName>ota-gui</AssemblyName>
+    <RootNamespace>PencilBox.OtaGui</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PencilBox.OtaCore\PencilBox.OtaCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- IsExternalInit 等编译垫片（internal 按程序集隔离，须各自带一份） -->
+    <Compile Include="..\PencilBox.OtaCore\Shims.cs" Link="Shims.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+</Project>

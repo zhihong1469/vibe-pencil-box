@@ -618,7 +618,7 @@ public sealed class CompanyCodec : ICompanyCodec
     /// <summary>float32 → 4B 大端（VALUE4；黄金向量口径：0.27f=3E 8A 3D 71）</summary>
     private static void WriteSingleBigEndian(float value, Span<byte> destination)
     {
-        int bits = BitConverter.SingleToInt32Bits(value);
+        int bits = SingleToInt32Bits(value);
         destination[0] = (byte)(bits >> 24);
         destination[1] = (byte)(bits >> 16);
         destination[2] = (byte)(bits >> 8);
@@ -627,7 +627,30 @@ public sealed class CompanyCodec : ICompanyCodec
 
     /// <summary>4B 大端 → float32（VALUE4）</summary>
     private static float ReadSingleBigEndian(ReadOnlySpan<byte> source) =>
-        BitConverter.Int32BitsToSingle((source[0] << 24) | (source[1] << 16) | (source[2] << 8) | source[3]);
+        Int32BitsToSingle((source[0] << 24) | (source[1] << 16) | (source[2] << 8) | source[3]);
+
+    /// <summary>
+    /// float↔int 位型转换（单源双框架）：net48（外发裁剪小工具）无 BitConverter.SingleToInt32Bits/
+    /// Int32BitsToSingle，走 GetBytes 往返；net10 走内建。语义均为 IEEE754 位型重解释。
+    /// </summary>
+    private static int SingleToInt32Bits(float value)
+    {
+#if NET48
+        var b = BitConverter.GetBytes(value);
+        return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24);
+#else
+        return BitConverter.SingleToInt32Bits(value);
+#endif
+    }
+
+    private static float Int32BitsToSingle(int bits)
+    {
+#if NET48
+        return BitConverter.ToSingle(BitConverter.GetBytes(bits), 0);
+#else
+        return BitConverter.Int32BitsToSingle(bits);
+#endif
+    }
 
     /// <summary>ASCII 写入定长字段：截断到定长、其余补 0（0 结束）</summary>
     private static void WriteAsciiFixed(string? text, Span<byte> destination)
@@ -648,7 +671,8 @@ public sealed class CompanyCodec : ICompanyCodec
         if (end < 0)
             end = source.Length;
 
-        var text = Encoding.ASCII.GetString(source[..end]);
+        // Slice+ToArray 双框架通用（net48 无 GetString(ReadOnlySpan) 重载；仅遥测 ASCII 读，量小不计）
+        var text = Encoding.ASCII.GetString(source.Slice(0, end).ToArray());
         return text.TrimEnd('\0', ' ');
     }
 }

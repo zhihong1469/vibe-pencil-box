@@ -22,6 +22,8 @@
   <ItemGroup>
     <ProjectReference Include="..\PencilBox.Core\PencilBox.Core.csproj" />
     <ProjectReference Include="..\PencilBox.Infrastructure\PencilBox.Infrastructure.csproj" />
+    <!-- OtaCore 与 Core 是单源复用（同名类型双程序集），须走别名隔离，测试里 extern alias OtaCore; -->
+    <ProjectReference Include="..\PencilBox.OtaCore\PencilBox.OtaCore.csproj" Aliases="OtaCore" />
   </ItemGroup>
 
 </Project>

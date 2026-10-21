@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 外发裁剪小工具 · CLI 轨（01/02/03 号）：扫描差异化 / 识别 / 逐支队列升级。
+       net48 绿色免安装（客户机系统自带运行时）；发布 → output\custom\。
+       GUI 轨（OtaGui）后续同底座复用本工具逻辑。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <AssemblyName>ota-tool</AssemblyName>
+    <RootNamespace>PencilBox.OtaCli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PencilBox.OtaCore\PencilBox.OtaCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- IsExternalInit 等编译垫片（本工程的 record 用；垫片是 internal 按程序集隔离，须各自带一份） -->
+    <Compile Include="..\PencilBox.OtaCore\Shims.cs" Link="Shims.cs" />
+  </ItemGroup>
+
+</Project>

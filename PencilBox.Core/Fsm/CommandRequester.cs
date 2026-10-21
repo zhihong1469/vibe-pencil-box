@@ -100,7 +100,12 @@ public sealed class CommandRequester
         {
             try
             {
+                // net48（外发裁剪小工具）无 IsCompletedSuccessfully 属性——同语义按状态判
+#if NET48
+                if (tcs.Task.Status == TaskStatus.RanToCompletion)
+#else
                 if (tcs.Task.IsCompletedSuccessfully)
+#endif
                     return tcs.Task.Result;
 
                 var timeout = _clock.DelayAsync(timeoutMs, cancellationToken);
