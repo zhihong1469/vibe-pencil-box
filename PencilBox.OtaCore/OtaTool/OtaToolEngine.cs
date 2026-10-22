@@ -287,7 +287,9 @@ public sealed class OtaToolEngine
                 $"验证性中断（{abortAfterBlock} 块后退出）：{result.Message}");
         }
 
-        if (!result.IsTerminalSuccess)
+        // Unconfirmed（满块后设备重受理 ⇒ FSM 发 DCMD=00 停止，不自动重传）：结果未知，
+        // 复核≠重传——与成功路径同走主动探测读版本对拍收口，读到达标版本即成功
+        if (!result.IsTerminalSuccess && result.Outcome != OtaOutcome.Unconfirmed)
         {
             CloseChannel();
             return Make(OtaDeviceOutcome.Fail, beforeText, result.Message);
@@ -359,22 +361,25 @@ public sealed class OtaToolEngine
                 Say("warn", $"SN={Show(sn)} {waitPhase}：第 {probes} 次探测——{lastErr}");
         }
 
+        var sessionNote = result.Outcome == OtaOutcome.Unconfirmed
+            ? "升级会话结果未知（已停止不自动重传）"
+            : "升级会话成功";
         if (cancellationToken.IsCancellationRequested)
         {
             return Make(OtaDeviceOutcome.Unconfirmed, beforeText,
-                $"升级会话成功，等待复核被取消（最后状态：{lastErr}）——请稍后重新识别复核");
+                $"{sessionNote}，等待复核被取消（最后状态：{lastErr}）——请稍后重新识别复核");
         }
 
         if (afterText != null)
         {
-            // 会话终态成功 + 回读不符 ⇒ 无法证明失败（10-21 双台实测：慢复位台宽限期内仍答旧版本，
+            // 会话终态成功/结果未知 + 回读不符 ⇒ 无法证明失败（10-21 双台实测：慢复位台宽限期内仍答旧版本，
             // 稍后实读已到目标版本）——标"待确认"并给出复核动作，勿报失败
             return Make(OtaDeviceOutcome.Unconfirmed, beforeText,
-                $"升级会话成功，但回读 {afterText} ≠ 目标 {sverText}（疑似复位未完成的旧实例）——请稍后重新识别复核");
+                $"{sessionNote}，但回读 {afterText} ≠ 目标 {sverText}（疑似复位未完成的旧实例）——请稍后重新识别复核");
         }
 
         return Make(OtaDeviceOutcome.Unconfirmed, beforeText,
-            $"升级会话成功，{lastErr}——请重插后复核");
+            $"{sessionNote}，{lastErr}——请重插后复核");
     }
 
     // ================= 通道/枚举/版本 =================

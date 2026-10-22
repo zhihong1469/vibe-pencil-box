@@ -497,21 +497,41 @@ public class CompanyOtaTests
         Assert.Equal(2, startFrames.Count());               // 首发 + R2 确认（终态窗超时不续等，直接 R2）
     }
 
-    /// <summary>R2 确认帧若答 **ALLOW（DCMD=01）** = 设备真缺固件、会话重启 → 终态丢失推断作废，
-    /// 重传后正常收终态 → 普通成功（非终态丢失）。</summary>
+    /// <summary>
+    /// R2 确认帧若答 **ALLOW（DCMD=01）** = 设备重新受理会话（键盘真机实证：复位窗内 DFU 仍会答
+    /// ALLOW，"ALLOW=真缺固件"推断被证伪）→ 按「不自动重传」停会话（DCMD=00）判 `Unconfirmed`，
+    /// 整包绝不重发（指挥官 10-22 裁决：失败也由人工重试，复核交引擎读版本对拍）。
+    /// </summary>
     [Fact]
-    public async Task Ota_TerminalLost_R2AnswersAllow_RestartsClean()
+    public async Task Ota_TerminalLost_R2AnswersAllow_StopsWithoutRetransfer()
     {
         var device = new TerminalLostDevice(TerminalLostDevice.LostBehavior.AllowOnRestart);
         var fsm = new CompanyOtaFsm(new CompanyCodec(), device, new StepClock(), Cfg());
 
         var result = await fsm.RunAsync(Image(1024), Downtype.BaseStation, 0x01, 1, 0, 0);
 
-        Assert.Equal(OtaOutcome.Succeeded, result.Outcome);
-        Assert.False(result.TerminalLost);
-        Assert.StartsWith("完成", result.Message);
+        Assert.Equal(OtaOutcome.Unconfirmed, result.Outcome);
+        Assert.False(result.IsTerminalSuccess);
+        Assert.Equal(100, result.Percent);                  // 满块事实不变
+        Assert.Contains("不自动重传", result.Message);
         var chunks = device.Sent.Count(f => f[7] == 0x07);
-        Assert.Equal(22 * 2, chunks);                       // 会话重启 → 整块重发
+        Assert.Equal(22, chunks);                           // 整块只发过一遍——绝不重传
+        Assert.Contains(device.Sent, f => f[7] == 0x01 && f[9] == OtaDcmd.Exit);   // 已发 DCMD=00 停会话
+    }
+
+    /// <summary>`0x0A` 常先于 ALLOW 到达（PC-6）：R2 后设备只重拉块（无 ALLOW）同判——停止不自动重传。</summary>
+    [Fact]
+    public async Task Ota_TerminalLost_R2AnsweredByBlockPull_StopsWithoutRetransfer()
+    {
+        var device = new TerminalLostDevice(TerminalLostDevice.LostBehavior.PullOnRestart);
+        var fsm = new CompanyOtaFsm(new CompanyCodec(), device, new StepClock(), Cfg());
+
+        var result = await fsm.RunAsync(Image(1024), Downtype.BaseStation, 0x01, 1, 0, 0);
+
+        Assert.Equal(OtaOutcome.Unconfirmed, result.Outcome);
+        var chunks = device.Sent.Count(f => f[7] == 0x07);
+        Assert.Equal(22, chunks);                           // 隐式允许门同样拦截——整块只发一遍
+        Assert.Contains(device.Sent, f => f[7] == 0x01 && f[9] == OtaDcmd.Exit);
     }
 
     /// <summary>R2 已在块级卡死时用掉（一次性），满块后终态再丢 → 无确认手段 → Failed（不悬挂）。</summary>
@@ -552,11 +572,11 @@ public class CompanyOtaTests
 
     /// <summary>
     /// 满块后丢终态的设备：首发 START → ALLOW + 拉块 0，末片收齐后**静默**（终态帧复位竞态丢失）；
-    /// R2 重发 START 按剧本答 skip（新固件同版本）或 ALLOW（真缺固件，会话重启）。
+    /// R2 重发 START 按剧本答 skip（新固件同版本）/ ALLOW+拉块（设备重新受理）/ 仅拉块（0x0A 先行）。
     /// </summary>
     private sealed class TerminalLostDevice : ICommandChannel
     {
-        public enum LostBehavior { SkipOnRestart, AllowOnRestart }
+        public enum LostBehavior { SkipOnRestart, AllowOnRestart, PullOnRestart }
 
         private readonly LostBehavior _behavior;
         private int _blockCompletions;
@@ -588,9 +608,13 @@ public class CompanyOtaTests
                     {
                         Reply(new byte[] { 0x01, 0x00, OtaDcmd.Skip });   // 新固件答同版本 skip
                     }
+                    else if (_behavior == LostBehavior.PullOnRestart)
+                    {
+                        Reply(new byte[] { 0x0A, 0x00, 0x00, 0x00, 0x00 });   // 仅重拉块（0x0A 先于 ALLOW 形态）
+                    }
                     else
                     {
-                        Reply(new byte[] { 0x01, 0x00, OtaDcmd.Start });  // 真缺固件 → 重启会话
+                        Reply(new byte[] { 0x01, 0x00, OtaDcmd.Start });  // 设备重新受理会话
                         Reply(new byte[] { 0x0A, 0x00, 0x00, 0x00, 0x00 });
                     }
                     break;

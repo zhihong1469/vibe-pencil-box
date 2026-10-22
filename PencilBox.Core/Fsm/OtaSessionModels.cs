@@ -101,7 +101,14 @@ public enum OtaOutcome
     Succeeded,
     Skipped,
     Failed,
-    Aborted
+    Aborted,
+
+    /// <summary>
+    /// 满块后终态帧未达且设备重新受理会话（ALLOW/0x0A）——已按「不自动重传」停止
+    /// （指挥官 10-22 裁决：失败也由人工重试，PC 不自己再传一遍）。结果未知：
+    /// 引擎接手主动探测读版本对拍，复核后由人工决定是否重刷。
+    /// </summary>
+    Unconfirmed
 }
 
 /// <summary>进度事件（自算 + 设备 `0x20 DCMD=01` 双轨；自算不替代终态 —— 红线 4）</summary>

@@ -22,8 +22,10 @@ namespace PencilBox.Core.Fsm;
 /// - **终态窗**（issues-pencil/14 方案乙）：满块（自算 100%）后末块改入**等终态窗**
 ///   （`OtaTerminalWaitMs` ≥5s，覆盖设备 VERIFY+activate+复位）；窗内收 `0x20 DCMD=02/03` → Done/Failed
 ///   （既有路径，不受状态门控）；窗超时 → **R2 重发开始帧确认**：满块 + 同版本 skip ⇒
-///   **成功（终态丢失）**（协议语义等价终态 02——设备只会在已跑新固件时答同版本）；R2 答 ALLOW
-///   则视为会话重启续走（终态丢失推断作废）；R2 已用或非 skip → `Failed`（不悬挂）；
+///   **成功（终态丢失）**（协议语义等价终态 02——设备只会在已跑新固件时答同版本）；R2 答 ALLOW/0x0A
+///   则设备重新受理会话（键盘复位窗内 DFU 仍会答 ALLOW，"ALLOW=真缺固件"已被证伪）⇒ 发 DCMD=00
+///   停止、判 `Unconfirmed`（**绝不自动重传**，指挥官 10-22 裁决；引擎转读版本对拍复核）；
+///   R2 已用或非 skip → `Failed`（不悬挂）；
 /// - **PC-4**（issues/05 §1-G）：同块重查超阈值**仅告警**（保险计数，不作协议失败信号——
 ///   块级失败的**唯一权威** = 设备终态 `0x20 DCMD=02/03`）；
 /// - **PC-6**（issues/05 §2.3-3）：`0x0A` 可能与开始应答 `0x01(DCMD=01)` 几乎同时到达 →
@@ -174,7 +176,7 @@ public sealed class CompanyOtaFsm
         switch (ev.Kind)
         {
             case OtaEventKind.SessionAck:
-                return OnSessionAck(ev.Dcmd);
+                return await OnSessionAckAsync(ev.Dcmd, ct).ConfigureAwait(false);
 
             case OtaEventKind.BlockRequest:
                 return await OnBlockRequestAsync(ev.PackH, abortAfterBlock, gap, ct).ConfigureAwait(false);
@@ -187,7 +189,7 @@ public sealed class CompanyOtaFsm
         }
     }
 
-    private OtaResult? OnSessionAck(byte dcmd)
+    private async Task<OtaResult?> OnSessionAckAsync(byte dcmd, CancellationToken ct)
     {
         if (State == OtaFsmState.Aborting)
         {
@@ -206,6 +208,16 @@ public sealed class CompanyOtaFsm
         switch (dcmd)
         {
             case OtaDcmd.Start:
+                if (_terminalLostCandidate)
+                {
+                    // 满块后的 R2 却收到会话重受理（ALLOW）＝设备 DFU 未退出、终态丢失（键盘真机实证：
+                    // 已刷完、复位窗内 DFU 仍会答 ALLOW，"ALLOW=真缺固件"推断被证伪）——
+                    // 按「不自动重传」口径停会话（指挥官 10-22 裁决：失败也由人工重试，PC 不自己再传一遍）
+                    await StopWithoutRetransferAsync(ct,
+                        "满块后终态未达而设备重新受理会话（ALLOW）——已停止不自动重传（DCMD=00），请读版本复核后手动决定是否重刷");
+                    return BuildResult();
+                }
+
                 // 14号 方案乙：设备答 ALLOW（而非同版本 skip）= 真重启会话 → 终态丢失推断作废
                 _terminalLostCandidate = false;
                 MoveTo(OtaFsmState.AwaitingRequest, "设备允许传输（DCMD=01）");
@@ -254,6 +266,15 @@ public sealed class CompanyOtaFsm
         // 先入 `AwaitingRequest` 再处理拉块（迟到的 DCMD=01 按既有"迟到应答"路径忽略）
         if (State == OtaFsmState.StartSent)
         {
+            // 满块后 R2 的 0x0A = 设备重新受理会话（键盘复位窗内 DFU 仍活着，键盘真机实证）
+            // → 与 ALLOW 同判：停止不自动重传（指挥官 10-22 裁决），0x0A 常先于 ALLOW 到达
+            if (_terminalLostCandidate)
+            {
+                await StopWithoutRetransferAsync(ct,
+                    "满块后终态未达而设备重新拉块（0x0A）——已停止不自动重传（DCMD=00），请读版本复核后手动决定是否重刷");
+                return BuildResult();
+            }
+
             _startRetry = 0;
             MoveTo(OtaFsmState.AwaitingRequest, "0x0A 先于开始应答被处理 → 隐式允许（设备仅 ALLOW 后拉块）");
         }
@@ -389,7 +410,7 @@ public sealed class CompanyOtaFsm
                         Warning?.Invoke(this,
                             $"等终态窗超时（{_config.OtaTerminalWaitMs}ms）未收 0x20 DCMD=02/03 " +
                             $"（满块 {_blocksDone}/{_totalBlocks}）→ R2 重发开始帧确认：" +
-                            "同版本 skip ⇒ 成功（终态丢失）；其它 ⇒ 失败");
+                            "同版本 skip ⇒ 成功（终态丢失）；设备重受理（ALLOW/0x0A）⇒ 停止不自动重传、转读版本复核");
                         _startRetry = 0;
                         MoveTo(OtaFsmState.StartSent, "终态窗超时：R2 重发开始帧确认终态");
                         await SendSessionAsync(OtaDcmd.Start, ct).ConfigureAwait(false);
@@ -468,6 +489,26 @@ public sealed class CompanyOtaFsm
 
     private Task SendSessionAsync(byte dcmd, CancellationToken ct) =>
         _channel.SendAsync(_codec.EncodeOtaSession(_target, dcmd, _hver, _sver1, _sver2, _sver3, _crc, (uint)_image.Length), ct);
+
+    /// <summary>
+    /// 「不自动重传」停会话（指挥官 10-22 裁决）：发 `DCMD=00` 尽力而为（设备可能在复位窗，
+    /// 停止帧发不出不改变判定——整包已发完、结果未知），判 <see cref="OtaOutcome.Unconfirmed"/>
+    /// 待引擎读版本对拍复核，复核后由人工决定是否重刷。
+    /// </summary>
+    private async Task StopWithoutRetransferAsync(CancellationToken ct, string reason)
+    {
+        try
+        {
+            await SendSessionAsync(OtaDcmd.Exit, ct).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            Warning?.Invoke(this, "停会话帧（DCMD=00）发送失败（设备疑在复位窗）——不影响不重传判定");
+        }
+
+        _outcome = OtaOutcome.Unconfirmed;
+        MoveTo(OtaFsmState.Failed, reason);
+    }
 
     private async Task SendChunkAsync(byte packH, byte packL, int gap, CancellationToken ct)
     {
@@ -557,6 +598,8 @@ public sealed class CompanyOtaFsm
             "跳过：已有相同固件（DCMD=02）"),
         OtaOutcome.Aborted => new(OtaOutcome.Aborted, _blocksDone * 100 / Math.Max(1, _totalBlocks),
             _blocksDone, _totalBlocks, "已退出（DCMD=00 回显确认）"),
+        OtaOutcome.Unconfirmed => new(OtaOutcome.Unconfirmed, 100, _blocksDone, _totalBlocks,
+            "结果未知：满块后终态未达而设备重新受理会话——已停止不自动重传，请读版本复核后人工决定是否重刷"),
         _ when State == OtaFsmState.Failed => new(OtaOutcome.Failed,
             _blocksDone * 100 / Math.Max(1, _totalBlocks), _blocksDone, _totalBlocks, "失败（详见转移原因）"),
         _ => new(OtaOutcome.None, 0, _blocksDone, _totalBlocks, State.ToString())
