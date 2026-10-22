@@ -283,6 +283,137 @@ public class AudioCommands
         return Task.FromResult(0);
     }
 
+    /// <summary>
+    /// 2b chirp 扫描（t7 场 2 PC 半边，规格单 t7/Dongle/D2 §1）：UAC 录音（16k mono s16 原始 WAV）
+    /// 与 120 点固件同源模板互相关。--idx 给 [CHIRP] 串口行 idx 列表（逗号分隔）逐窗 ±window 找峰，
+    /// 滞留 ms=(峰位−idx)·1000/16000；不给 idx 则按 750ms 网格自拟合（PPM+缺失槽位）。
+    /// 绝对滞留含录制起点常量偏置（idx 自 boot 计数、峰位自录音起点计数），分布形状/PPM 才是判测量。
+    /// </summary>
+    public Task<int> ChirpScanAsync(string? file, string? idxList, int windowSamples, double minQuality,
+        string? csvOut, string? jsonOut)
+    {
+        if (string.IsNullOrWhiteSpace(file) || !File.Exists(file))
+        {
+            ConsoleFormatter.Error($"请给 --file <rec.wav>（16k/mono/s16 UAC 原始录音；不存在：{file}）");
+            return Task.FromResult(1);
+        }
+        var wav = WavFile.ReadMono(file);
+        if (wav.SampleRate != ChirpTemplate.SampleRate)
+        {
+            ConsoleFormatter.Error($"录音须为 {ChirpTemplate.SampleRate}Hz（UAC 原始），当前 {wav.SampleRate}Hz" +
+                                   "——非 16k 说明落盘前经过了重采样，违反原始 WAV 口径红线（亚 ms 结论只走样本域）");
+            return Task.FromResult(1);
+        }
+
+        var idx = ParseIdxList(idxList);
+        ChirpScanReport report;
+        if (idx.Count > 0)
+        {
+            report = ChirpScanAnalyzer.ScanByIdx(wav.Mono, wav.SampleRate, idx,
+                Math.Max(1, windowSamples), (float)Math.Clamp(minQuality, 0.1, 0.99));
+        }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(idxList))
+            {
+                ConsoleFormatter.Error($"--idx 无法解析出任何样点号：{idxList}");
+                return Task.FromResult(1);
+            }
+            report = ChirpScanAnalyzer.ScanByGrid(wav.Mono, wav.SampleRate, ChirpTemplate.PeriodSamples,
+                Math.Max(1, windowSamples), (float)Math.Clamp(minQuality, 0.1, 0.99));
+        }
+
+        ConsoleFormatter.PrintObject(new
+        {
+            File = file,
+            Format = $"{wav.SampleRate}Hz/{wav.Channels}ch/{wav.BitsPerSample}bit→mono",
+            Mode = report.Mode,
+            Chirps = $"{report.DetectedCount}/{report.ExpectedCount}",
+            Missing = report.MissingSlots.Count == 0 ? "无"
+                : string.Join(",", report.MissingSlots.Take(20)) + (report.MissingSlots.Count > 20 ? "…" : ""),
+            Ppm = report.Ppm is { } p ? $"{p:F1}" : "—",
+            Lag = report.Lag is { } l ? $"min {l.MinMs:F2} / p50 {l.P50Ms:F2} / max {l.MaxMs:F2} ms" : "—",
+            QualityMin = report.Hits.Count > 0 ? report.Hits.Min(h => h.Quality).ToString("F3") : "—",
+            Note = "绝对滞留含录制起点常量偏置；同场分布形状/PPM 才是判测量（白皮书口径）"
+        });
+
+        if (report.Hits.Count > 0 && report.Hits.Count <= 60)
+            foreach (var h in report.Hits)
+                Console.WriteLine(
+                    $"  #{h.Slot,-4} idx={h.Idx?.ToString() ?? "—",-12} 峰位={h.PeakPos,-10} " +
+                    $"t={h.PeakPos / (double)wav.SampleRate,8:F3}s Q={h.Quality:F3} " +
+                    $"滞留={(h.LagMs is { } lm ? $"{lm:F2}ms" : "—"),-9} 栅差={(h.GridDevSamples is { } g ? $"{g:F0}" : "—")}");
+        if (report.Hits.Count > 60)
+            ConsoleFormatter.Info($"共 {report.Hits.Count} 行逐窗明细，超出屏显上限——用 --csv / --json 取全量");
+
+        if (csvOut is { Length: > 0 })
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(csvOut));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var lines = new List<string> { "slot,idx,peak_pos,peak_time_s,quality,lag_ms,grid_dev_samples" };
+            lines.AddRange(report.Hits.Select(h =>
+                $"{h.Slot},{h.Idx?.ToString() ?? string.Empty},{h.PeakPos},{h.PeakPos / (double)wav.SampleRate:F6}," +
+                $"{h.Quality:F4},{h.LagMs?.ToString("F3") ?? string.Empty},{h.GridDevSamples?.ToString("F0") ?? string.Empty}"));
+            File.WriteAllLines(csvOut, lines);
+            ConsoleFormatter.Info($"逐窗 CSV 已写：{csvOut}");
+        }
+        if (jsonOut is { Length: > 0 })
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(jsonOut));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(jsonOut, JsonSerializer.Serialize(new
+            {
+                file,
+                format = $"{wav.SampleRate}Hz/{wav.Channels}ch/{wav.BitsPerSample}bit→mono",
+                mode = report.Mode,
+                template = new
+                {
+                    name = "2b chirp 1k→3k / 7.5ms / 120点（t7/D2 规格单 §1 整数表）",
+                    sampleRate = ChirpTemplate.SampleRate,
+                    periodSamples = ChirpTemplate.PeriodSamples
+                },
+                expected = report.ExpectedCount,
+                detected = report.DetectedCount,
+                missingSlots = report.MissingSlots,
+                ppm = report.Ppm,
+                lag = report.Lag is null ? null : new
+                {
+                    minMs = Math.Round(report.Lag.MinMs, 3),
+                    p50Ms = Math.Round(report.Lag.P50Ms, 3),
+                    maxMs = Math.Round(report.Lag.MaxMs, 3)
+                },
+                note = "绝对滞留含录制起点常量偏置；分布形状/PPM 才是判测量",
+                hits = report.Hits.Select(h => new
+                {
+                    slot = h.Slot,
+                    idx = h.Idx,
+                    peakPos = h.PeakPos,
+                    peakTimeS = Math.Round(h.PeakPos / (double)wav.SampleRate, 6),
+                    quality = Math.Round(h.Quality, 4),
+                    lagMs = h.LagMs,
+                    gridDevSamples = h.GridDevSamples
+                })
+            }, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            }));
+            ConsoleFormatter.Info($"汇总 JSON 已写：{jsonOut}");
+        }
+        return Task.FromResult(0);
+    }
+
+    /// <summary>--idx 列表解析：逗号/分号/空白分隔的十进制样点号</summary>
+    private static List<long> ParseIdxList(string? idxList)
+    {
+        if (string.IsNullOrWhiteSpace(idxList)) return [];
+        return idxList
+            .Split([',', ';', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => long.TryParse(s, out _))
+            .Select(long.Parse)
+            .ToList();
+    }
+
     // === 扩音直通（采集 → 扬声器实时回路） ===
 
     /// <summary>列出播放（渲染）设备</summary>

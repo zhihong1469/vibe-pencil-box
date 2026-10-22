@@ -447,6 +447,15 @@ public class Program
                 double.TryParse(GetOption(args, "--session-gap-ms"), out var gap) ? gap : 200,
                 HasFlag(args, "--json")),
 
+            // 2b chirp 扫描（t7 场 2 PC 半边；模板=t7/D2 规格单 §1 整数表，滞留=蓄水池+USB+PC 全程）
+            "chirpscan" or "chirp" => await cmd.ChirpScanAsync(
+                GetOption(args, "--file"),
+                GetOption(args, "--idx"),                        // [CHIRP] 串口行 idx 列表，逗号分隔；缺省=750ms 网格自拟合
+                GetOptionInt(args, "--window", 400),             // ±样点窗（±25ms，规格单 §2）
+                double.TryParse(GetOption(args, "--min-quality"), out var cq) ? cq : 0.5,
+                GetOption(args, "--csv"),
+                GetOption(args, "--json")),
+
             _ => UnknownCommand($"audio {action}")
         };
     }
@@ -867,6 +876,10 @@ public class Program
                                [--pulses 20] [--interval 500] [--pulse-ms 15] [--render-latency-ms 40 仅定测试缓冲大小，不参与扣减]
                                [--save-capture out.wav] [--report-out report.json]  数值=物理闭环原值（不扣减）
                      envelope  WAV 包络分析：整体电平/逐块信封/首声时刻/尾音（--file x.wav [--csv]）
+                     chirpscan 2b chirp 扫描（t7 场 2）：录音×120 点模板互相关→逐窗滞留
+                               --file rec.wav（须 16k/mono/s16 UAC 原始）[--idx a,b,c 串口行列表]
+                               [--window 400] [--min-quality 0.5] [--csv out.csv] [--json out.json]
+                               绝对滞留含录制起点常量偏置，分布形状/PPM 才是判测量
                      tickstats P2 tick 统计：--file ticks.csv → 漂移扣除/p50/p95/重传率（[--json]）
             serial   串口：设备日志 + F5 协议帧 → 统一时间轴【可选功能：feature off seriallog 可整域关】
                     list    列端口（带类型标注，避开调试器虚拟口/蓝牙口）
