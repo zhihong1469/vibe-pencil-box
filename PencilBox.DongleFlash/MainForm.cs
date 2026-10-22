@@ -44,8 +44,10 @@ internal sealed class MainForm : Form
         Text = "R1D Dongle 产线烧录";
         Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
         ClientSize = new System.Drawing.Size(700, 560);
+        MinimumSize = new System.Drawing.Size(720, 600);
         StartPosition = FormStartPosition.CenterScreen;
-        MaximizeBox = false;
+        // 可缩放+可最大化（指挥官 10-22 目验反馈）：后续一拖多时中部结果区改槽位行，布局已全锚定
+        MaximizeBox = true;
 
         // ---- 固件包行 ----
         Controls.Add(new Label { Text = "固件版本:", Location = new System.Drawing.Point(15, 18), AutoSize = true });
@@ -134,6 +136,8 @@ internal sealed class MainForm : Form
         _driverBtn.Click += (_, _) =>
         {
             _driverPanel.Visible = !_driverPanel.Visible;
+            if (_driverPanel.Visible)
+                _driverPanel.BringToFront();   // 展开态日志框加在面板之前（z 序在上），不置顶会被压住=点了"没反应"
             _driverBtn.Text = _driverPanel.Visible ? "驱动安装 ▴" : "驱动安装 ▾";
         };
         Controls.Add(_driverBtn);

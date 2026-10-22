@@ -14,7 +14,9 @@ public sealed record FlashPackage(string Directory, string FolderName, string Di
 {
     public string FlashDir => Path.Combine(Directory, "flash");
     public string BatPath => Path.Combine(Directory, "一键烧录.bat");
-    public string Md5SumsPath => Path.Combine(FlashDir, "MD5SUMS.txt");
+
+    /// <summary>MD5SUMS.txt 在**包根**（与 bat 同级，01 号 §2.1 布局），清单内的文件名相对 `flash\` 解析。</summary>
+    public string Md5SumsPath => Path.Combine(Directory, "MD5SUMS.txt");
 }
 
 /// <summary>

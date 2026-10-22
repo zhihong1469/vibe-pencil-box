@@ -80,6 +80,8 @@ public class DongleFlashTests
             Assert.Equal("v1.0.1 (6a2fdc8)", pkgs[0].DisplayName);
             Assert.Equal("一键烧录脚本-8f1d122", pkgs[1].DisplayName);   // 横幅缺失回退
             Assert.EndsWith(@"flash", pkgs[0].FlashDir);
+            // MD5SUMS 在包根（与 bat 同级，01 号 §2.1），不在 flash\ 里——路径写错 = 全包误报"缺 MD5SUMS"
+            Assert.Equal(Path.Combine(pkgs[0].Directory, "MD5SUMS.txt"), pkgs[0].Md5SumsPath);
         }
         finally
         {
@@ -135,6 +137,7 @@ public class DongleFlashTests
         {
             Assert.True(File.Exists(Path.Combine(p.FlashDir, "isd_download.exe")), $"{p.FolderName} 缺 isd_download.exe");
             Assert.True(File.Exists(p.BatPath), $"{p.FolderName} 缺 一键烧录.bat");
+            Assert.True(File.Exists(p.Md5SumsPath), $"{p.FolderName} 包根缺 MD5SUMS.txt");
         });
         Assert.Contains(pkgs, p => p.DisplayName == "v1.0.1 (6a2fdc8)");
         Assert.Contains(pkgs, p => p.DisplayName == "v1.0.2-rc.2 (0bee553)");
