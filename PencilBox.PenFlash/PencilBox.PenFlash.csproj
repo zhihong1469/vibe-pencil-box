@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 量产产线烧录 UI · 键盘轨（量产保障/isp烧录/Pencil/01+02 号）：
+       R1P 笔端 ISP 串口烧录（CH340 治具），给已验证的 flash_r1p.ps1 流水线套 UI 壳，
+       烧录动作全权交给 OmBleIsp.exe，编排层逐条复刻 ps1（时序/映射/判定/错误码表）。
+       net48 WinForms 绿色免安装；发布 → output\produce\R1P\（产物总目录 10-22 定版）。
+       并行分工：本会话只做键盘轨；基站轨（DongleFlash）由平行会话按 Dongle\02 落地。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <AssemblyName>PenFlash</AssemblyName>
+    <RootNamespace>PencilBox.PenFlash</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Management" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- IsExternalInit 等编译垫片（record 用；internal 按程序集隔离，须各自带一份） -->
+    <Compile Include="..\PencilBox.OtaCore\Shims.cs" Link="Shims.cs" />
+  </ItemGroup>
+
+</Project>

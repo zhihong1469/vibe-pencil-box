@@ -6,5 +6,7 @@
   <Project Path="PencilBox.OtaCore/PencilBox.OtaCore.csproj" />
   <Project Path="PencilBox.OtaCli/PencilBox.OtaCli.csproj" />
   <Project Path="PencilBox.OtaGui/PencilBox.OtaGui.csproj" />
+  <Project Path="PencilBox.DongleFlash/PencilBox.DongleFlash.csproj" />
+  <Project Path="PencilBox.PenFlash/PencilBox.PenFlash.csproj" />
   <Project Path="PencilBox.Tests/PencilBox.Tests.csproj" />
 </Solution>
