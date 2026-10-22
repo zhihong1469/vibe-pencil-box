@@ -10,30 +10,33 @@ using System.Windows.Forms;
 namespace PencilBox.PenFlash;
 
 /// <summary>
-/// 产线操作面：固件下拉（出货版默认）+ 串口勾选（多候选强制手选）+ 大按钮 +
-/// 每口状态行 + PASS/FAIL 大字 + 日志折叠 + 计数。1366×768 适配，10 米外可辨。
+/// 产线操作面（版式对齐 ota-gui 多支同升，指挥官 10-22 目验反馈）：
+/// 顶层选固件（一对多的"一"）+ 大字横幅 + 每口一行（勾选要烧的口）+ 底部日志。
+/// Dock 装配：Fill 最先加入，随后 Bottom/Top（后加者先布局）。
 /// </summary>
-public sealed class MainForm : Form
+internal sealed class MainForm : Form
 {
     private readonly PenFlashEngine _engine;
 
-    private ComboBox _fwCombo = null!;
-    private Button _fwRefresh = null!;
-    private Label _shippingLabel = null!;
-    private CheckedListBox _portList = null!;
-    private Button _portRefresh = null!;
-    private Button _startButton = null!;
-    private CheckBox _parallelCheck = null!;
-    private CheckBox _probeCheck = null!;
-    private Label _resultLabel = null!;
-    private ListView _portView = null!;
-    private TextBox _logBox = null!;
-    private Button _logToggle = null!;
-    private Label _countLabel = null!;
-    private Button _driverButton = null!;
+    private readonly ComboBox _fwCombo;
+    private readonly Button _refreshFwBtn;
+    private readonly Button _refreshPortBtn;
+    private readonly Button _startBtn;
+    private readonly Button _cancelBtn;
+    private readonly CheckBox _parallelCheck;
+    private readonly CheckBox _probeCheck;
+    private readonly Label _infoLabel;        // 出货版徽标/材料提示（dimgrey，同 ota-gui _fwInfo 位）
+    private readonly Label _banner;           // PASS/FAIL 大字横幅（产线 10 米外可辨）
+    private readonly Label _phaseLabel;
+    private readonly Label _countLabel;
+    private readonly Button _driverBtn;
+    private readonly ListView _list;          // 一口一行（CheckBoxes，同 ota-gui 设备列表）
+    private readonly TextBox _logBox;
 
+    private readonly List<string> _logLines = new();
     private string? _shippingVersion;
     private CancellationTokenSource? _cts;
+    private PortFlashSession? _current;       // 正在烧的口（阶段写它那行）
     private volatile bool _busy;
     private int _passCount;
     private int _failCount;
@@ -54,109 +57,152 @@ public sealed class MainForm : Form
         }
         _engine = engine;
 
-        Text = "PenFlash — R1P 笔端产线烧录";
+        Text = "PenFlash — R1P 笔端产线烧录（ISP 串口·CH340 治具）";
+        Font = new Font("Microsoft YaHei UI", 9f);
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(920, 660);
-        Size = new Size(960, 700);
-        Font = new Font("Microsoft YaHei UI", 9F);
+        MinimumSize = new Size(880, 600);
+        Size = new Size(1000, 720);
 
-        BuildUi();
-        Load += (_, _) => { RefreshFirmwares(); RefreshPorts(); };
-    }
-
-    private void BuildUi()
-    {
-        var materialLabel = new Label
+        // ---- 顶层：固件选择（一对多的"一"）+ 动作按钮 ----
+        var top = new Panel { Dock = DockStyle.Top, Height = 96, Padding = new Padding(10, 8, 10, 0) };
+        var fwRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, WrapContents = false };
+        fwRow.Controls.Add(new Label { Text = "固件：", AutoSize = true, Margin = new Padding(3, 9, 0, 0) });
+        _fwCombo = new ComboBox
         {
-            Text = $"材料：{_engine.MaterialsRoot}",
-            AutoEllipsis = true,
-            Dock = DockStyle.Top,
-            Height = 24,
-            ForeColor = Color.DimGray,
+            Width = 480,
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Font = new Font("Microsoft YaHei UI", 10.5f),
+            Margin = new Padding(3, 5, 3, 0),
         };
+        fwRow.Controls.Add(_fwCombo);
+        _refreshFwBtn = new Button { Text = "刷新固件", AutoSize = true };
+        _refreshFwBtn.Click += (_, _) => RefreshFirmwares();
+        fwRow.Controls.Add(_refreshFwBtn);
+        _refreshPortBtn = new Button { Text = "刷新串口", AutoSize = true };
+        _refreshPortBtn.Click += (_, _) => RefreshPorts();
+        fwRow.Controls.Add(_refreshPortBtn);
 
-        // ---- 固件组 ----
-        var fwGroup = new GroupBox { Text = "固件（扫描 固件\\*.bin）", Left = 12, Top = 30, Width = 520, Height = 96 };
-        _fwCombo = new ComboBox { Left = 12, Top = 24, Width = 380, DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Microsoft YaHei UI", 10.5F) };
-        _fwRefresh = new Button { Left = 400, Top = 23, Width = 100, Height = 30, Text = "刷新" };
-        _shippingLabel = new Label { Left = 12, Top = 62, Width = 480, Height = 22, ForeColor = Color.DarkGreen };
-        _fwRefresh.Click += (_, _) => RefreshFirmwares();
-        fwGroup.Controls.AddRange(new Control[] { _fwCombo, _fwRefresh, _shippingLabel });
-
-        // ---- 串口组 ----
-        var portGroup = new GroupBox { Text = "串口（CH340 治具，VID 1A86:7523）", Left = 544, Top = 30, Width = 390, Height = 96 };
-        _portList = new CheckedListBox { Left = 12, Top = 20, Width = 200, Height = 66, CheckOnClick = true };
-        _portRefresh = new Button { Left = 224, Top = 20, Width = 100, Height = 30, Text = "刷新" };
-        var portTip = new Label { Left = 224, Top = 56, Width = 160, Height = 30, ForeColor = Color.DimGray, Text = "多个候选必须勾选，\r\n不会自动猜口" };
-        _portRefresh.Click += (_, _) => RefreshPorts();
-        portGroup.Controls.AddRange(new Control[] { _portList, _portRefresh, portTip });
-
-        // ---- 大按钮 + 选项 ----
-        _startButton = new Button
+        var actionRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, WrapContents = false };
+        _startBtn = new Button
         {
-            Left = 12, Top = 138, Width = 560, Height = 68,
-            Text = "开始烧录",
-            Font = new Font("Microsoft YaHei UI", 16F, FontStyle.Bold),
+            Text = "开始烧录（勾选口）",
+            AutoSize = true,
+            Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold),
             BackColor = Color.FromArgb(0, 120, 60),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
+            Margin = new Padding(3, 3, 6, 0),
         };
-        _startButton.Click += OnStartClick;
-        _parallelCheck = new CheckBox { Left = 588, Top = 144, Width = 330, Text = "并发（实验：OmBleIsp 多实例未验证，默认排队轮烧）", Checked = false };
-        _probeCheck = new CheckBox { Left = 588, Top = 172, Width = 330, Text = "烧后抽检（同口 1M 波特率读开机版本 8 秒）" };
-
-        // ---- 结果大字 ----
-        _resultLabel = new Label
+        _startBtn.Click += (_, _) => OnStartClick();
+        actionRow.Controls.Add(_startBtn);
+        _cancelBtn = new Button { Text = "取消", AutoSize = true, Enabled = false };
+        _cancelBtn.Click += (_, _) =>
         {
-            Left = 12, Top = 214, Width = 922, Height = 88,
-            Text = "待机",
-            Font = new Font("Microsoft YaHei UI", 40F, FontStyle.Bold),
+            LogLine("已请求取消（烧录中的口会终止 OmBleIsp 进程并判 FAIL）…");
+            _cts?.Cancel();
+        };
+        actionRow.Controls.Add(_cancelBtn);
+        _parallelCheck = new CheckBox
+        {
+            Text = "并发（实验：OmBleIsp 多实例未验证）",
+            AutoSize = true,
+            Margin = new Padding(12, 8, 0, 0),
             ForeColor = Color.DimGray,
-            TextAlign = ContentAlignment.MiddleCenter,
-            BackColor = Color.WhiteSmoke,
         };
-
-        // ---- 每口状态 ----
-        var stateGroup = new GroupBox { Text = "状态（每口一行）", Left = 12, Top = 310, Width = 922, Height = 110 };
-        _portView = new ListView
+        actionRow.Controls.Add(_parallelCheck);
+        _probeCheck = new CheckBox
         {
-            Left = 10, Top = 18, Width = 898, Height = 82,
-            View = View.Details,
-            FullRowSelect = true,
-            Font = new Font("Microsoft YaHei UI", 11F),
+            Text = "烧后抽检（1M 读开机版本 8 秒）",
+            AutoSize = true,
+            Margin = new Padding(6, 8, 0, 0),
         };
-        _portView.Columns.Add("串口", 120);
-        _portView.Columns.Add("阶段", 260);
-        _portView.Columns.Add("结果", 500);
-        stateGroup.Controls.Add(_portView);
+        actionRow.Controls.Add(_probeCheck);
+        _infoLabel = new Label
+        {
+            Text = "就绪",
+            AutoSize = true,
+            Margin = new Padding(12, 10, 0, 0),
+            ForeColor = Color.DimGray,
+        };
+        actionRow.Controls.Add(_infoLabel);
+        top.Controls.Add(actionRow);
+        top.Controls.Add(fwRow);
 
-        // ---- 日志（可折叠）----
+        // ---- PASS/FAIL 大字横幅（状态大字，左对齐不占满—— maximized 不留空腔）----
+        _banner = new Label
+        {
+            Text = "待机——选固件、勾串口，点【开始烧录】",
+            Dock = DockStyle.Top,
+            Height = 62,
+            Font = new Font("Microsoft YaHei UI", 26f, FontStyle.Bold),
+            ForeColor = Color.DimGray,
+            BackColor = Color.WhiteSmoke,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(14, 0, 0, 0),
+        };
+
+        // ---- 阶段条：阶段 + 本班计数 + 驱动安装 ----
+        var phaseStrip = new Panel { Dock = DockStyle.Top, Height = 28, Padding = new Padding(12, 4, 8, 0) };
+        _phaseLabel = new Label { Text = "就绪", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
+        _countLabel = new Label
+        {
+            Text = "本班：PASS 0   FAIL 0",
+            Dock = DockStyle.Right,
+            AutoSize = true,
+            Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleRight,
+            Padding = new Padding(0, 0, 8, 0),
+        };
+        _driverBtn = new Button { Text = "驱动安装…", Dock = DockStyle.Right, AutoSize = true };
+        _driverBtn.Click += (_, _) => OpenDriverFolder();
+        phaseStrip.Controls.Add(_phaseLabel);
+        phaseStrip.Controls.Add(_countLabel);
+        phaseStrip.Controls.Add(_driverBtn);
+
+        // ---- 串口列表（一行=一个 CH340 口，勾选要烧的口）----
+        _list = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            CheckBoxes = true,
+            FullRowSelect = true,
+            HideSelection = false,
+            UseCompatibleStateImageBehavior = false,
+            Font = new Font("Microsoft YaHei UI", 10.5f),
+        };
+        _list.Columns.Add("串口", 120).Name = "port";
+        _list.Columns.Add("阶段", 260).Name = "phase";
+        _list.Columns.Add("结果", 560).Name = "result";
+
+        // ---- 日志区 ----
+        var logPanel = new Panel { Dock = DockStyle.Bottom, Height = 168, Padding = new Padding(10, 4, 10, 8) };
         _logBox = new TextBox
         {
-            Left = 12, Top = 452, Width = 922, Height = 150,
-            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
-            Font = new Font("Consolas", 9F),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom,
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            BackColor = Color.White,
+            Font = new Font("Consolas", 9f),
         };
-        _logToggle = new Button { Left = 850, Top = 428, Width = 84, Height = 24, Text = "收起 ▲", Anchor = AnchorStyles.Top | AnchorStyles.Right };
-        _logToggle.Click += (_, _) =>
+        logPanel.Controls.Add(_logBox);
+
+        // Dock 装配顺序：Fill 最先加入，随后 Bottom/Top（后加者先布局）
+        Controls.Add(_list);
+        Controls.Add(logPanel);
+        Controls.Add(phaseStrip);
+        Controls.Add(_banner);
+        Controls.Add(top);
+
+        FormClosing += (_, e) =>
         {
-            var expanded = _logBox.Height > 40;
-            _logBox.Height = expanded ? 32 : 150;
-            _logToggle.Text = expanded ? "展开 ▼" : "收起 ▲";
+            if (_busy && MessageBox.Show(this, "烧录正在进行，确定退出？", "确认",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No)
+                e.Cancel = true;
+            FlushLog();
         };
 
-        // ---- 底部：计数 + 驱动 ----
-        _countLabel = new Label { Left = 12, Top = 612, Width = 400, Height = 26, Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold), Text = "本班：PASS 0   FAIL 0", Anchor = AnchorStyles.Left | AnchorStyles.Bottom };
-        _driverButton = new Button { Left = 830, Top = 608, Width = 104, Height = 30, Text = "驱动安装…", Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
-        _driverButton.Click += (_, _) => OpenDriverFolder();
-
-        Controls.AddRange(new Control[]
-        {
-            _countLabel, _driverButton, _logToggle, _logBox,
-            stateGroup, _resultLabel, _startButton, _parallelCheck, _probeCheck,
-            portGroup, fwGroup, materialLabel,
-        });
+        Load += (_, _) => { RefreshFirmwares(); RefreshPorts(); };
     }
 
     // ================= 数据刷新 =================
@@ -170,84 +216,135 @@ public sealed class MainForm : Form
 
         _shippingVersion = _engine.ReadShippingVersion();
         var defaultPath = PenFlashCore.SelectShippingFirmware(items, _shippingVersion);
-        _shippingLabel.Text = _shippingVersion is null
-            ? "出货版口径未配置（固件\\一期出货使用的*.txt 为空/缺失）——请手动选固件"
-            : $"出货版：{_shippingVersion}" + (defaultPath is null ? "（列表未唯一匹配，请手动选）" : "（已默认选中）");
-
         foreach (var f in items)
-            _fwCombo.Items.Add(new ComboItem(f.Path, $"{PenFlashCore.DescribeFirmware(f.FileName)}  —  {f.FileName}"));
+            _fwCombo.Items.Add(new ComboItem(f.Path,
+                $"{PenFlashCore.DescribeFirmware(f.FileName)}  —  {f.FileName}"));
+
         if (_fwCombo.Items.Count == 0)
+        {
+            UpdateInfo("固件目录没有 *.bin——把 bin 放进 材料\\固件\\ 后点【刷新固件】", Color.Firebrick);
             LogLine("[WARN] 固件目录没有 *.bin");
-        else if (defaultPath is not null)
+            return;
+        }
+        if (defaultPath is not null)
         {
             var idx = items.FindIndex(f => f.Path == defaultPath);
             if (idx >= 0) _fwCombo.SelectedIndex = idx;
+            UpdateInfo($"出货版 {_shippingVersion}（已默认选中）；材料 {_engine.MaterialsRoot}", Color.DarkGreen);
         }
-        else if (_fwCombo.Items.Count > 0)
+        else
+        {
             _fwCombo.SelectedIndex = 0;
+            UpdateInfo(_shippingVersion is null
+                ? "出货版口径未配置（固件\\一期出货使用的*.txt 为空/缺失）——请手动选固件"
+                : $"出货版 {_shippingVersion} 未在列表唯一匹配——请手动选固件",
+                _shippingVersion is null ? Color.DimGray : Color.Firebrick);
+        }
+        LogLine($"固件扫描：{items.Count} 个 bin；出货版口径 = {_shippingVersion ?? "（未配置）"}");
     }
 
     private void RefreshPorts()
     {
-        var checkedNow = _portList.CheckedItems.OfType<PortItem>().Select(p => p.Port).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _portList.Items.Clear();
+        var checkedNow = _list.Items.Cast<ListViewItem>()
+            .Where(i => i.Checked).Select(i => (string)i.Tag!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _list.Items.Clear();
         List<string> ports;
         try { ports = _engine.DetectCh340Ports(); }
         catch (Exception ex) { LogLine($"[ERR] 串口探测失败：{ex.Message}"); return; }
 
         foreach (var p in ports)
-            _portList.Items.Add(new PortItem(p), checkedNow.Contains(p));
-        // 唯一候选才自动选中；多候选不猜（01 号 §2.3-5）
+        {
+            var item = new ListViewItem(p) { Tag = p };
+            item.SubItems.Add("待烧").Name = "phase";
+            item.SubItems.Add("").Name = "result";
+            item.Checked = checkedNow.Contains(p);
+            _list.Items.Add(item);
+        }
+        // 唯一候选才自动勾选；多候选不猜（01 号 §2.3-5 / 验收 4）
         if (checkedNow.Count == 0 && PenFlashCore.PickDefaultPort(ports) is { } auto)
-            _portList.SetItemChecked(ports.IndexOf(auto), true);
+            _list.Items[ports.IndexOf(auto)].Checked = true;
         if (ports.Count == 0)
+        {
+            _phaseLabel.Text = "未发现 CH340 治具（VID:PID=1A86:7523）——插好治具或安装驱动后点【刷新串口】";
             LogLine("[WARN] 未发现 CH340 治具（VID:PID=1A86:7523）——插好治具或安装驱动");
+        }
+        else
+        {
+            LogLine($"串口扫描：发现 {ports.Count} 个 CH340 口（{string.Join(", ", ports)}）");
+        }
     }
 
     // ================= 烧录流程 =================
 
-    private async void OnStartClick(object? sender, EventArgs e)
+    private async void OnStartClick()
     {
         if (_busy)
-        {
-            // 烧录中点击 = 取消（按钮此时显示「取消」）
-            _cts?.Cancel();
             return;
-        }
 
         var firmware = (_fwCombo.SelectedItem as ComboItem)?.Path;
-        var ports = _portList.CheckedItems.OfType<PortItem>().Select(p => p.Port).ToList();
-        if (firmware is null) { MessageBox.Show("请先选固件", "PenFlash"); return; }
-        if (ports.Count == 0) { MessageBox.Show("请先勾选烧录串口（多候选必须明确勾选）", "PenFlash"); return; }
+        var ports = _list.Items.Cast<ListViewItem>()
+            .Where(i => i.Checked).Select(i => (string)i.Tag!).ToList();
+        if (firmware is null) { MessageBox.Show(this, "请先选固件。", "提示"); return; }
+        if (ports.Count == 0) { MessageBox.Show(this, "请先勾选要烧录的串口（多个候选必须明确勾选）。", "提示"); return; }
 
         _busy = true;
         _cts = new CancellationTokenSource();
-        _startButton.Text = "烧录中…（点击取消）";
-        _startButton.BackColor = Color.FromArgb(160, 80, 0);
-        SetPortRows(ports);
-        LogLine($"===== 开始：{Path.GetFileName(firmware)} → {string.Join(", ", ports)}（{(_parallelCheck.Checked ? "并发" : "排队")}模式）=====");
+        SetBusy(true);
+        _banner.Text = "烧录中…";
+        _banner.ForeColor = Color.FromArgb(160, 80, 0);
+        foreach (var p in ports) SetRow(p, phase: "排队中", result: "");
 
+        var fwName = Path.GetFileName(firmware);
+        LogLine($"===== 开始：{fwName} → {string.Join(", ", ports)}（{(_parallelCheck.Checked ? "并发" : "排队")}模式）=====");
+
+        var sessions = ports.Select(p => new PortFlashSession(_engine, p, firmware)).ToList();
         var results = new Dictionary<string, PortFlashSession>();
         try
         {
-            var sessions = ports.Select(p => new PortFlashSession(_engine, p, firmware)).ToList();
             foreach (var s in sessions)
             {
-                var session = s;
                 s.Log += (_, line) => Ui(() => LogLine(line));
-                s.PhaseChanged += (_, _) => Ui(() => UpdateRow(session));
+                s.PhaseChanged += (_, _) => Ui(() =>
+                {
+                    SetRow(s.Port, phase: PhaseText(s.Phase));
+                    if (_current == s)
+                        _phaseLabel.Text = $"{s.Port}：{PhaseText(s.Phase)}";
+                });
             }
 
             if (_parallelCheck.Checked)
-                await Task.WhenAll(sessions.Select(s => s.RunAsync(_cts.Token))).ConfigureAwait(true);
+            {
+                // 并发（实验）：每口独立会话；行/日志经 BeginInvoke 钉 UI 线程
+                await Task.WhenAll(sessions.Select(async s =>
+                {
+                    Ui(() => { _current = s; _phaseLabel.Text = $"{s.Port}：开始"; });
+                    await s.RunAsync(_cts.Token).ConfigureAwait(false);
+                })).ConfigureAwait(true);
+            }
             else
+            {
                 foreach (var s in sessions)
+                {
+                    if (_cts.IsCancellationRequested)
+                    {
+                        SetRow(s.Port, result: "已跳过（取消）", fail: true);
+                        continue;
+                    }
+                    _current = s;
                     await s.RunAsync(_cts.Token).ConfigureAwait(true);
+                    _current = null;
+                }
+            }
 
             foreach (var s in sessions)
                 results[s.Port] = s;
+
+            // 每口终态回填行（结果列着色；会话内事件只刷阶段，终态统一在此收）
+            foreach (var s in results.Values)
+                SetRow(s.Port, phase: "结束", result: s.Summary, fail: s.Passed == false);
         }
-        catch (OperationCanceledException) { /* 会话各自收 FAILED */ }
+        catch (OperationCanceledException) { /* 会话各自收 FAIL */ }
 
         var pass = results.Values.Count(s => s.Passed == true);
         var fail = results.Values.Count(s => s.Passed == false);
@@ -256,17 +353,10 @@ public sealed class MainForm : Form
         _lastBatchAllPass = fail == 0 && results.Count > 0;
         _countLabel.Text = $"本班：PASS {_passCount}   FAIL {_failCount}";
 
-        if (results.Count == 1)
-        {
-            var only = results.Values.Single();
-            _resultLabel.Text = only.Passed == true ? "PASS" : "FAIL";
-            _resultLabel.ForeColor = only.Passed == true ? Color.FromArgb(0, 140, 0) : Color.FromArgb(200, 0, 0);
-        }
-        else
-        {
-            _resultLabel.Text = fail == 0 ? $"PASS（{pass} 支全过）" : $"FAIL {fail} / {results.Count}";
-            _resultLabel.ForeColor = fail == 0 ? Color.FromArgb(0, 140, 0) : Color.FromArgb(200, 0, 0);
-        }
+        _banner.Text = results.Count == 1
+            ? results.Values.Single().Passed == true ? "PASS" : "FAIL"
+            : fail == 0 ? $"PASS（{pass} 支全过）" : $"FAIL {fail} / {results.Count}";
+        _banner.ForeColor = fail == 0 && results.Count > 0 ? Color.FromArgb(0, 140, 0) : Color.FromArgb(200, 0, 0);
 
         LogLine($"===== 本轮结束：PASS {pass}，FAIL {fail} =====");
 
@@ -275,11 +365,13 @@ public sealed class MainForm : Form
             await RunProbeAsync(ports, firmware).ConfigureAwait(true);
 
         _busy = false;
+        SetBusy(false);
+        _phaseLabel.Text = "就绪";
         _cts.Dispose();
         _cts = null;
         // 连续烧录（01 号 P0-5）：PASS 后换下一支笔直接再点；不做倒计时自动开烧（防笔没放好）
-        _startButton.Text = _lastBatchAllPass ? "继续下一支" : "重试";
-        _startButton.BackColor = _lastBatchAllPass ? Color.FromArgb(0, 120, 60) : Color.FromArgb(160, 80, 0);
+        _startBtn.Text = _lastBatchAllPass ? "继续下一支（勾选口）" : "重试（勾选口）";
+        _startBtn.BackColor = _lastBatchAllPass ? Color.FromArgb(0, 120, 60) : Color.FromArgb(160, 80, 0);
     }
 
     private async Task RunProbeAsync(List<string> ports, string firmware)
@@ -287,7 +379,7 @@ public sealed class MainForm : Form
         var expected = PenFlashCore.ParseFirmwareVersion(Path.GetFileName(firmware));
         foreach (var p in ports)
         {
-            LogLine($"[抽检] {p} 监听开机日志 8 秒（@{PenFlashCore.MonitorBaudrate}）…");
+            _phaseLabel.Text = $"抽检 {p}：监听开机日志 8 秒（@{PenFlashCore.MonitorBaudrate}）…";
             var text = await PostFlashProbe.ListenAsync(p, 8, CancellationToken.None).ConfigureAwait(true);
             foreach (var line in text.Split('\n'))
                 if (line.Trim().Length > 0) LogLine($"    {p} | {line.TrimEnd('\r')}");
@@ -306,7 +398,7 @@ public sealed class MainForm : Form
         var dir = Path.Combine(_engine.ToolDir, "驱动");
         if (!Directory.Exists(dir))
         {
-            MessageBox.Show($"找不到驱动目录：{dir}\n（人工到材料目录 OmBleISP_cmd_tool\\驱动 下解压 x64.rar 双击安装）", "PenFlash");
+            MessageBox.Show(this, $"找不到驱动目录：{dir}\n（人工到材料目录 OmBleISP_cmd_tool\\驱动 下解压 x64.rar 双击安装）", "PenFlash");
             return;
         }
         // rar 解压依赖本机解压器，不做静默解包（01 号已背书人工安装可接受）——直接打开目录引导
@@ -314,41 +406,48 @@ public sealed class MainForm : Form
         LogLine("[驱动] 已打开驱动目录：解压 x64.rar 后双击安装 CH340 驱动");
     }
 
-    // ================= UI 帮手 =================
+    // ================= 杂项 =================
 
-    private void SetPortRows(List<string> ports)
+    private void SetBusy(bool busy)
     {
-        _portView.Items.Clear();
-        foreach (var p in ports)
+        _busy = busy;
+        _startBtn.Enabled = !busy;
+        _refreshFwBtn.Enabled = !busy;
+        _refreshPortBtn.Enabled = !busy;
+        _fwCombo.Enabled = !busy;
+        _parallelCheck.Enabled = !busy;
+        _probeCheck.Enabled = !busy;
+        _cancelBtn.Enabled = busy;
+    }
+
+    private static string PhaseText(FlashPhase phase) => phase switch
+    {
+        FlashPhase.EnterIsp => "进 ISP",
+        FlashPhase.Burn => "烧录+校验",
+        FlashPhase.Run => "起跑",
+        FlashPhase.CleanReset => "干净复位",
+        FlashPhase.Done => "结束",
+        _ => phase.ToString(),
+    };
+
+    private void SetRow(string port, string? phase = null, string? result = null, bool? fail = null)
+    {
+        var item = _list.Items.Cast<ListViewItem>().FirstOrDefault(i => (string?)i.Tag == port);
+        if (item is null) return;
+        if (phase is not null)
+            item.SubItems["phase"]!.Text = phase;
+        if (result is not null)
         {
-            var item = new ListViewItem(p) { Tag = p };
-            item.SubItems.Add("待烧");
-            item.SubItems.Add("");
-            _portView.Items.Add(item);
+            item.SubItems["result"]!.Text = result;
+            item.SubItems["result"]!.ForeColor = fail == true ? Color.FromArgb(200, 0, 0) : Color.FromArgb(0, 140, 0);
         }
     }
 
-    private void UpdateRow(PortFlashSession s)
+    /// <summary>会话终态回填行（PhaseChanged 后由 RunAsync 内事件触发不了终态色，这里统一挂）。</summary>
+    private void UpdateInfo(string text, Color color)
     {
-        var item = _portView.Items.OfType<ListViewItem>().FirstOrDefault(i => (string?)i.Tag == s.Port);
-        if (item is null) return;
-        if (s.Passed is { } passed)
-        {
-            item.SubItems[1].Text = "结束";
-            item.SubItems[2].Text = s.Summary;
-            item.SubItems[2].ForeColor = passed ? Color.FromArgb(0, 140, 0) : Color.FromArgb(200, 0, 0);
-        }
-        else
-        {
-            item.SubItems[1].Text = s.Phase switch
-            {
-                FlashPhase.EnterIsp => "进 ISP",
-                FlashPhase.Burn => "烧录+校验",
-                FlashPhase.Run => "起跑",
-                FlashPhase.CleanReset => "干净复位",
-                _ => s.Phase.ToString(),
-            };
-        }
+        _infoLabel.Text = text;
+        _infoLabel.ForeColor = color;
     }
 
     private void Ui(Action action)
@@ -359,16 +458,32 @@ public sealed class MainForm : Form
 
     private void LogLine(string line)
     {
-        _logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {line}{Environment.NewLine}");
+        var stamped = $"{DateTime.Now:HH:mm:ss} {line}";
+        _logLines.Add(stamped);
+        _logBox.AppendText(stamped + Environment.NewLine);
+    }
+
+    private void FlushLog()
+    {
+        if (_logLines.Count == 0)
+            return;
+        try
+        {
+            var logDir = Path.Combine(AppContext.BaseDirectory, "log");
+            Directory.CreateDirectory(logDir);
+            var path = Path.Combine(logDir, $"penflash-log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            File.WriteAllLines(path, _logLines, new UTF8Encoding(true));
+            _logBox.AppendText($"—— 日志已保存：{path}{Environment.NewLine}");
+            _logLines.Clear();
+        }
+        catch
+        {
+            // 日志写盘失败不拦主流程（界面里已有全文）
+        }
     }
 
     private sealed record ComboItem(string Path, string Display)
     {
         public override string ToString() => Display;
-    }
-
-    private sealed record PortItem(string Port)
-    {
-        public override string ToString() => Port;
     }
 }
