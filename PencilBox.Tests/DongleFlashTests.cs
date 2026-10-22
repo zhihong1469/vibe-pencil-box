@@ -127,11 +127,11 @@ public class DongleFlashTests
     [Fact]
     public void Scan_RealR1DMaterials_IfPresent()
     {
-        var repo = FindRepoRoot();
-        if (repo == null)
+        var materialsRoot = FindMaterialsRoot();
+        if (materialsRoot == null)
             return;   // 交付环境无材料树，静默通过
 
-        var pkgs = PackageScanner.Scan(Path.Combine(repo, "output", "custom", "生产使用", "R1D"));
+        var pkgs = PackageScanner.Scan(materialsRoot);
         Assert.True(pkgs.Count >= 3, $"真实 R1D 材料应扫到 ≥3 包，实际 {pkgs.Count}");
         Assert.All(pkgs, p =>
         {
@@ -169,12 +169,17 @@ public class DongleFlashTests
         return BitConverter.ToString(md5.ComputeHash(fs)).Replace("-", "").ToLowerInvariant();
     }
 
-    private static string? FindRepoRoot()
+    /// <summary>材料权威源=produce\R1D（10-22 起，custom\生产使用\R1D 已删）；custom 作历史回退。</summary>
+    private static string? FindMaterialsRoot()
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
-            if (Directory.Exists(Path.Combine(dir.FullName, "output", "custom", "生产使用", "R1D")))
-                return dir.FullName;
+            var produce = Path.Combine(dir.FullName, "output", "produce", "R1D");
+            if (Directory.Exists(produce))
+                return produce;
+            var custom = Path.Combine(dir.FullName, "output", "custom", "生产使用", "R1D");
+            if (Directory.Exists(custom))
+                return custom;
         }
         return null;
     }
