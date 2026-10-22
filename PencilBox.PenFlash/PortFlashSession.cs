@@ -75,7 +75,7 @@ public sealed class PortFlashSession
                 $"--chip-select 0 --app 0 --app-file {copyName} --verify", ct).ConfigureAwait(false);
             foreach (var line in output.Split('\n'))
                 if (!PenFlashCore.IsProgressNoise(line.TrimEnd('\r')) && line.Trim().Length > 0)
-                    LogLine($"  {line.TrimEnd('\r')}");
+                    LogLine($"[{Port}]  {line.TrimEnd('\r')}");   // 带口前缀：并发时多口输出可区分
             LogLine($"[{Port}] OmBleIsp 退出码：{rc}");
             if (rc != 0)
                 LogLine($"[{Port}] 处置：{PenFlashCore.DescribeErrorCode(rc)}");

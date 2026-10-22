@@ -24,7 +24,6 @@ internal sealed class MainForm : Form
     private readonly Button _refreshPortBtn;
     private readonly Button _startBtn;
     private readonly Button _cancelBtn;
-    private readonly CheckBox _parallelCheck;
     private readonly CheckBox _probeCheck;
     private readonly Label _infoLabel;        // 出货版徽标/材料提示（dimgrey，同 ota-gui _fwInfo 位）
     private readonly Label _phaseLabel;       // 全局状态（待机/烧录中/本轮 PASS|FAIL，原大字横幅并入此格）
@@ -36,7 +35,6 @@ internal sealed class MainForm : Form
     private readonly List<string> _logLines = new();
     private string? _shippingVersion;
     private CancellationTokenSource? _cts;
-    private PortFlashSession? _current;       // 正在烧的口（阶段写它那行）
     private volatile bool _busy;
     private int _passCount;
     private int _failCount;
@@ -63,24 +61,28 @@ internal sealed class MainForm : Form
         MinimumSize = new Size(880, 600);
         Size = new Size(1000, 720);
 
-        // ---- 顶层：固件选择（一对多的"一"）+ 动作按钮 ----
+        // ---- 顶层：固件选择（一对多的"一"，固件框随窗拉伸）+ 动作按钮 ----
         var top = new Panel { Dock = DockStyle.Top, Height = 96, Padding = new Padding(10, 8, 10, 0) };
-        var fwRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, WrapContents = false };
-        fwRow.Controls.Add(new Label { Text = "固件：", AutoSize = true, Margin = new Padding(3, 9, 0, 0) });
+        var fwRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 36 };
+        fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));        // 固件：
+        fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));    // 固件框吃掉剩余宽
+        fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _fwCombo = new ComboBox
         {
-            Width = 480,
             DropDownStyle = ComboBoxStyle.DropDownList,
             Font = new Font("Microsoft YaHei UI", 10.5f),
+            Dock = DockStyle.Fill,
             Margin = new Padding(3, 5, 3, 0),
         };
-        fwRow.Controls.Add(_fwCombo);
-        _refreshFwBtn = new Button { Text = "刷新固件", AutoSize = true };
+        _refreshFwBtn = new Button { Text = "刷新固件", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 3, 3, 0) };
         _refreshFwBtn.Click += (_, _) => RefreshFirmwares();
-        fwRow.Controls.Add(_refreshFwBtn);
-        _refreshPortBtn = new Button { Text = "刷新串口", AutoSize = true };
+        _refreshPortBtn = new Button { Text = "刷新串口", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 3, 10, 0) };
         _refreshPortBtn.Click += (_, _) => RefreshPorts();
-        fwRow.Controls.Add(_refreshPortBtn);
+        fwRow.Controls.Add(new Label { Text = "固件：", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 0, 0, 0) }, 0, 0);
+        fwRow.Controls.Add(_fwCombo, 1, 0);
+        fwRow.Controls.Add(_refreshFwBtn, 2, 0);
+        fwRow.Controls.Add(_refreshPortBtn, 3, 0);
 
         var actionRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, WrapContents = false };
         _startBtn = new Button
@@ -101,14 +103,6 @@ internal sealed class MainForm : Form
             _cts?.Cancel();
         };
         actionRow.Controls.Add(_cancelBtn);
-        _parallelCheck = new CheckBox
-        {
-            Text = "并发（实验：OmBleIsp 多实例未验证）",
-            AutoSize = true,
-            Margin = new Padding(12, 8, 0, 0),
-            ForeColor = Color.DimGray,
-        };
-        actionRow.Controls.Add(_parallelCheck);
         _probeCheck = new CheckBox
         {
             Text = "烧后抽检（1M 读开机版本 8 秒）",
@@ -211,6 +205,13 @@ internal sealed class MainForm : Form
             _fwCombo.Items.Add(new ComboItem(f.Path,
                 $"{PenFlashCore.DescribeFirmware(f.FileName)}  —  {f.FileName}"));
 
+        if (_fwCombo.Items.Count > 0)
+        {
+            // 下拉列表宽随最长项（固件名全露出——指挥官 10-22 五轮目验：名字截断不可接受）
+            var widest = _fwCombo.Items.Cast<ComboItem>()
+                .Max(i => TextRenderer.MeasureText(i.Display, _fwCombo.Font).Width);
+            _fwCombo.DropDownWidth = Math.Max(_fwCombo.Width, widest + 24);
+        }
         if (_fwCombo.Items.Count == 0)
         {
             UpdateInfo("固件目录没有 *.bin——把 bin 放进 材料\\固件\\ 后点【刷新固件】", Color.Firebrick);
@@ -288,7 +289,7 @@ internal sealed class MainForm : Form
         foreach (var p in ports) SetRow(p, phase: "排队中", result: "");
 
         var fwName = Path.GetFileName(firmware);
-        LogLine($"===== 开始：{fwName} → {string.Join(", ", ports)}（{(_parallelCheck.Checked ? "并发" : "排队")}模式）=====");
+        LogLine($"===== 开始：{fwName} → {string.Join(", ", ports)}（并发·每口独立 OmBleIsp 实例）=====");
 
         var sessions = ports.Select(p => new PortFlashSession(_engine, p, firmware)).ToList();
         var results = new Dictionary<string, PortFlashSession>();
@@ -297,37 +298,12 @@ internal sealed class MainForm : Form
             foreach (var s in sessions)
             {
                 s.Log += (_, line) => Ui(() => LogLine(line));
-                s.PhaseChanged += (_, _) => Ui(() =>
-                {
-                    SetRow(s.Port, phase: PhaseText(s.Phase));
-                    if (_current == s)
-                        _phaseLabel.Text = $"{s.Port}：{PhaseText(s.Phase)}";
-                });
+                s.PhaseChanged += (_, _) => Ui(() => SetRow(s.Port, phase: PhaseText(s.Phase)));
             }
 
-            if (_parallelCheck.Checked)
-            {
-                // 并发（实验）：每口独立会话；行/日志经 BeginInvoke 钉 UI 线程
-                await Task.WhenAll(sessions.Select(async s =>
-                {
-                    Ui(() => { _current = s; _phaseLabel.Text = $"{s.Port}：开始"; });
-                    await s.RunAsync(_cts.Token).ConfigureAwait(false);
-                })).ConfigureAwait(true);
-            }
-            else
-            {
-                foreach (var s in sessions)
-                {
-                    if (_cts.IsCancellationRequested)
-                    {
-                        SetRow(s.Port, result: "已跳过（取消）", fail: true);
-                        continue;
-                    }
-                    _current = s;
-                    await s.RunAsync(_cts.Token).ConfigureAwait(true);
-                    _current = null;
-                }
-            }
+            // 并发全开放（指挥官 10-22 令，撤实验位；多实例已实证：无互斥/工具目录零落文件/
+            // 每口独立串口句柄+每口唯一名固件副本 fw_COMxx.bin——真机双 CH340 联测=实战自证）
+            await Task.WhenAll(sessions.Select(s => s.RunAsync(_cts.Token))).ConfigureAwait(true);
 
             foreach (var s in sessions)
                 results[s.Port] = s;
@@ -440,7 +416,6 @@ internal sealed class MainForm : Form
         _refreshFwBtn.Enabled = !busy;
         _refreshPortBtn.Enabled = !busy;
         _fwCombo.Enabled = !busy;
-        _parallelCheck.Enabled = !busy;
         _probeCheck.Enabled = !busy;
         _cancelBtn.Enabled = busy;
     }
