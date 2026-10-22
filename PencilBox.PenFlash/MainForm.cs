@@ -128,36 +128,38 @@ internal sealed class MainForm : Form
         top.Controls.Add(actionRow);
         top.Controls.Add(fwRow);
 
-        // ---- PASS/FAIL 大字横幅（状态大字，左对齐不占满—— maximized 不留空腔）----
+        // ---- PASS/FAIL 横幅（中等字号，指挥官 10-22 目验：26pt 过大；引导语留给日志与信息位）----
         _banner = new Label
         {
-            Text = "待机——选固件、勾串口，点【开始烧录】",
+            Text = "待机",
             Dock = DockStyle.Top,
-            Height = 62,
-            Font = new Font("Microsoft YaHei UI", 26f, FontStyle.Bold),
+            Height = 44,
+            Font = new Font("Microsoft YaHei UI", 15f, FontStyle.Bold),
             ForeColor = Color.DimGray,
             BackColor = Color.WhiteSmoke,
             TextAlign = ContentAlignment.MiddleLeft,
             Padding = new Padding(14, 0, 0, 0),
         };
 
-        // ---- 阶段条：阶段 + 本班计数 + 驱动安装 ----
-        var phaseStrip = new Panel { Dock = DockStyle.Top, Height = 28, Padding = new Padding(12, 4, 8, 0) };
-        _phaseLabel = new Label { Text = "就绪", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
+        // ---- 阶段条：阶段 + 本班计数 + 驱动安装（TableLayoutPanel 根治 Right 停靠互相挤压遮挡）----
+        var phaseStrip = new TableLayoutPanel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(12, 3, 10, 0) };
+        phaseStrip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        phaseStrip.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        phaseStrip.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _phaseLabel = new Label { Text = "就绪", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
         _countLabel = new Label
         {
             Text = "本班：PASS 0   FAIL 0",
-            Dock = DockStyle.Right,
             AutoSize = true,
+            Anchor = AnchorStyles.Right,
             Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold),
-            TextAlign = ContentAlignment.MiddleRight,
-            Padding = new Padding(0, 0, 8, 0),
+            Margin = new Padding(0, 0, 10, 0),
         };
-        _driverBtn = new Button { Text = "驱动安装…", Dock = DockStyle.Right, AutoSize = true };
-        _driverBtn.Click += (_, _) => OpenDriverFolder();
-        phaseStrip.Controls.Add(_phaseLabel);
-        phaseStrip.Controls.Add(_countLabel);
-        phaseStrip.Controls.Add(_driverBtn);
+        _driverBtn = new Button { Text = "驱动安装…", AutoSize = true, Anchor = AnchorStyles.Right, Margin = Padding.Empty, UseVisualStyleBackColor = true };
+        _driverBtn.Click += (_, _) => RunDriverInstaller();
+        phaseStrip.Controls.Add(_phaseLabel, 0, 0);
+        phaseStrip.Controls.Add(_countLabel, 1, 0);
+        phaseStrip.Controls.Add(_driverBtn, 2, 0);
 
         // ---- 串口列表（一行=一个 CH340 口，勾选要烧的口）----
         _list = new ListView
@@ -193,6 +195,10 @@ internal sealed class MainForm : Form
         Controls.Add(phaseStrip);
         Controls.Add(_banner);
         Controls.Add(top);
+
+        // 结果列自适应剩余宽（窄窗不挤出横滚、宽窗不留空）
+        Resize += (_, _) => AutofitResultColumn();
+        _list.HandleCreated += (_, _) => AutofitResultColumn();
 
         FormClosing += (_, e) =>
         {
@@ -393,17 +399,45 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void OpenDriverFolder()
+    /// <summary>
+    /// 驱动安装（指挥官 10-22 目验：点一下直接把安装器弹出来，别只开文件夹）：
+    /// 包内已预解压（驱动\x64\），定位安装器优先级 SETUP64/SETUP → 任意 exe；
+    /// 都没有才回退打开文件夹（只剩 rar 未解压的裸包形态）。
+    /// </summary>
+    private void RunDriverInstaller()
     {
-        var dir = Path.Combine(_engine.ToolDir, "驱动");
-        if (!Directory.Exists(dir))
+        var driverDir = Path.Combine(_engine.ToolDir, "驱动");
+        if (!Directory.Exists(driverDir))
         {
-            MessageBox.Show(this, $"找不到驱动目录：{dir}\n（人工到材料目录 OmBleISP_cmd_tool\\驱动 下解压 x64.rar 双击安装）", "PenFlash");
+            MessageBox.Show(this, $"找不到驱动目录：{driverDir}", "PenFlash");
             return;
         }
-        // rar 解压依赖本机解压器，不做静默解包（01 号已背书人工安装可接受）——直接打开目录引导
-        System.Diagnostics.Process.Start("explorer.exe", $"\"{dir}\"");
-        LogLine("[驱动] 已打开驱动目录：解压 x64.rar 后双击安装 CH340 驱动");
+
+        var installer = Directory.EnumerateFiles(driverDir, "*.exe", SearchOption.AllDirectories)
+            .OrderBy(p => Path.GetFileName(p).StartsWith("SETUP", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(p => Path.GetFileName(p).StartsWith("SETUP64", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .FirstOrDefault();
+        if (installer is null)
+        {
+            // 裸包兜底：让操作员解压后手动装（ rar 在包内，人工可接受）
+            System.Diagnostics.Process.Start("explorer.exe", $"\"{driverDir}\"");
+            LogLine("[驱动] 未找到已解压的安装器——已打开驱动目录，请解压 rar 后双击安装");
+            return;
+        }
+        LogLine($"[驱动] 调起安装器：{Path.GetFileName(installer)}（按引导装完再点【刷新串口】）");
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = installer,
+                WorkingDirectory = Path.GetDirectoryName(installer),
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            LogLine($"[驱动] 安装器调起失败：{ex.Message}——请手动到 驱动\\x64\\ 双击 {Path.GetFileName(installer)}");
+        }
     }
 
     // ================= 杂项 =================
@@ -429,6 +463,15 @@ internal sealed class MainForm : Form
         FlashPhase.Done => "结束",
         _ => phase.ToString(),
     };
+
+    /// <summary>结果列吃掉剩余宽度（List 列宽固定值之外的部分）。</summary>
+    private void AutofitResultColumn()
+    {
+        if (_list.Columns.Count < 3) return;
+        var others = _list.Columns[0].Width + _list.Columns[1].Width + 24;   // 24=表头边距冗余
+        var w = _list.ClientSize.Width - others;
+        _list.Columns[2].Width = w > 200 ? w : 200;
+    }
 
     private void SetRow(string port, string? phase = null, string? result = null, bool? fail = null)
     {
