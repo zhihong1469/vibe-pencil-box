@@ -22,13 +22,17 @@ public static class PulseTrain
     /// <param name="sampleRate">采样率</param>
     /// <param name="durationMs">脉冲时长（box/03 建议 10~20ms）</param>
     /// <param name="f0Hz">起始频率（建议 100~1000）</param>
-    /// <param name="f1Hz">结束频率（≤sampleRate/2 的一半以内）</param>
+    /// <param name="f1Hz">结束频率（超过 0.45×采样率时自动钳制——8k 采时默认 8k 端点必超奈奎斯特，</param>
     /// <param name="amplitude">峰值幅度 0~1</param>
     public static short[] GenerateChirp(int sampleRate, int durationMs, double f0Hz = DefaultF0Hz, double f1Hz = DefaultF1Hz, double amplitude = 0.8)
     {
         if (sampleRate < 8000) throw new ArgumentOutOfRangeException(nameof(sampleRate));
         if (durationMs < 1) throw new ArgumentOutOfRangeException(nameof(durationMs));
-        if (f1Hz > sampleRate / 2.0) throw new ArgumentException($"f1({f1Hz}Hz) 超过奈奎斯特({sampleRate / 2.0}Hz)");
+        // t7 B-2 边缘收口：f1 自动钳制到 0.45×采样率（曾直接 throw——8k 采设备上 probe 硬崩非降级）；
+        // f0 超限仍属调用错误照抛
+        f1Hz = Math.Min(f1Hz, sampleRate * 0.45);
+        if (f0Hz >= sampleRate * 0.45)
+            throw new ArgumentException($"f0({f0Hz}Hz) 超过工作奈奎斯特({sampleRate * 0.45}Hz)");
 
         var n = sampleRate * durationMs / 1000;
         var buf = new short[n];
