@@ -11,7 +11,8 @@ namespace PencilBox.PenFlash;
 
 /// <summary>
 /// 产线操作面（版式对齐 ota-gui 多支同升，指挥官 10-22 目验反馈）：
-/// 顶层选固件（一对多的"一"）+ 大字横幅 + 每口一行（勾选要烧的口）+ 底部日志。
+/// 顶层选固件（一对多的"一"）+ 阶段条（状态+本班计数+驱动）+ 每口一行（勾选要烧的口）+ 底部日志。
+/// 第四轮目验定版：控件尺寸全线统一（按钮忽大忽小砍）、大字横幅整行砍（状态并入阶段条左格）。
 /// Dock 装配：Fill 最先加入，随后 Bottom/Top（后加者先布局）。
 /// </summary>
 internal sealed class MainForm : Form
@@ -26,8 +27,7 @@ internal sealed class MainForm : Form
     private readonly CheckBox _parallelCheck;
     private readonly CheckBox _probeCheck;
     private readonly Label _infoLabel;        // 出货版徽标/材料提示（dimgrey，同 ota-gui _fwInfo 位）
-    private readonly Label _banner;           // PASS/FAIL 大字横幅（产线 10 米外可辨）
-    private readonly Label _phaseLabel;
+    private readonly Label _phaseLabel;       // 全局状态（待机/烧录中/本轮 PASS|FAIL，原大字横幅并入此格）
     private readonly Label _countLabel;
     private readonly Button _driverBtn;
     private readonly ListView _list;          // 一口一行（CheckBoxes，同 ota-gui 设备列表）
@@ -87,7 +87,6 @@ internal sealed class MainForm : Form
         {
             Text = "开始烧录（勾选口）",
             AutoSize = true,
-            Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold),
             BackColor = Color.FromArgb(0, 120, 60),
             ForeColor = Color.White,
             FlatStyle = FlatStyle.Flat,
@@ -128,25 +127,12 @@ internal sealed class MainForm : Form
         top.Controls.Add(actionRow);
         top.Controls.Add(fwRow);
 
-        // ---- PASS/FAIL 横幅（中等字号，指挥官 10-22 目验：26pt 过大；引导语留给日志与信息位）----
-        _banner = new Label
-        {
-            Text = "待机",
-            Dock = DockStyle.Top,
-            Height = 44,
-            Font = new Font("Microsoft YaHei UI", 15f, FontStyle.Bold),
-            ForeColor = Color.DimGray,
-            BackColor = Color.WhiteSmoke,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(14, 0, 0, 0),
-        };
-
-        // ---- 阶段条：阶段 + 本班计数 + 驱动安装（TableLayoutPanel 根治 Right 停靠互相挤压遮挡）----
-        var phaseStrip = new TableLayoutPanel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(12, 3, 10, 0) };
+        // ---- 阶段条：状态 + 本班计数 + 驱动安装（TableLayoutPanel 根治 Right 停靠互相挤压遮挡）----
+        var phaseStrip = new TableLayoutPanel { Dock = DockStyle.Top, Height = 32, Padding = new Padding(12, 3, 10, 0) };
         phaseStrip.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         phaseStrip.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         phaseStrip.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _phaseLabel = new Label { Text = "就绪", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
+        _phaseLabel = new Label { Text = "待机", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty, ForeColor = Color.DimGray };
         _countLabel = new Label
         {
             Text = "本班：PASS 0   FAIL 0",
@@ -193,7 +179,6 @@ internal sealed class MainForm : Form
         Controls.Add(_list);
         Controls.Add(logPanel);
         Controls.Add(phaseStrip);
-        Controls.Add(_banner);
         Controls.Add(top);
 
         // 结果列自适应剩余宽（窄窗不挤出横滚、宽窗不留空）
@@ -273,6 +258,7 @@ internal sealed class MainForm : Form
         if (ports.Count == 0)
         {
             _phaseLabel.Text = "未发现 CH340 治具（VID:PID=1A86:7523）——插好治具或安装驱动后点【刷新串口】";
+            _phaseLabel.ForeColor = Color.DimGray;
             LogLine("[WARN] 未发现 CH340 治具（VID:PID=1A86:7523）——插好治具或安装驱动");
         }
         else
@@ -297,8 +283,8 @@ internal sealed class MainForm : Form
         _busy = true;
         _cts = new CancellationTokenSource();
         SetBusy(true);
-        _banner.Text = "烧录中…";
-        _banner.ForeColor = Color.FromArgb(160, 80, 0);
+        _phaseLabel.Text = "烧录中…";
+        _phaseLabel.ForeColor = Color.FromArgb(160, 80, 0);
         foreach (var p in ports) SetRow(p, phase: "排队中", result: "");
 
         var fwName = Path.GetFileName(firmware);
@@ -359,20 +345,25 @@ internal sealed class MainForm : Form
         _lastBatchAllPass = fail == 0 && results.Count > 0;
         _countLabel.Text = $"本班：PASS {_passCount}   FAIL {_failCount}";
 
-        _banner.Text = results.Count == 1
+        var verdict = results.Count == 1
             ? results.Values.Single().Passed == true ? "PASS" : "FAIL"
             : fail == 0 ? $"PASS（{pass} 支全过）" : $"FAIL {fail} / {results.Count}";
-        _banner.ForeColor = fail == 0 && results.Count > 0 ? Color.FromArgb(0, 140, 0) : Color.FromArgb(200, 0, 0);
+        var verdictColor = fail == 0 && results.Count > 0 ? Color.FromArgb(0, 140, 0) : Color.FromArgb(200, 0, 0);
+        _phaseLabel.Text = verdict;
+        _phaseLabel.ForeColor = verdictColor;
 
         LogLine($"===== 本轮结束：PASS {pass}，FAIL {fail} =====");
 
         // 抽检（可选，逐口；口已空闲）：1M 波特率读开机横幅比对所选固件版本
         if (_probeCheck.Checked && pass > 0)
+        {
             await RunProbeAsync(ports, firmware).ConfigureAwait(true);
+            _phaseLabel.Text = verdict;        // 抽检进度借阶段格显示，收尾还原本轮判定
+            _phaseLabel.ForeColor = verdictColor;
+        }
 
         _busy = false;
         SetBusy(false);
-        _phaseLabel.Text = "就绪";
         _cts.Dispose();
         _cts = null;
         // 连续烧录（01 号 P0-5）：PASS 后换下一支笔直接再点；不做倒计时自动开烧（防笔没放好）
