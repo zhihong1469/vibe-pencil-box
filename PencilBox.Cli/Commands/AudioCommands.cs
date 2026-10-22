@@ -44,8 +44,34 @@ public class AudioCommands
         return 0;
     }
 
-    public async Task<int> CaptureAsync(string? deviceId, int seconds, string? outputPath)
+    public async Task<int> CaptureAsync(string? deviceId, int seconds, string? outputPath, bool exclusive = false)
     {
+        // 独占档（t7 B-1）：自持 IAudioClient EXCLUSIVE 采集循环，报告实报格式
+        if (exclusive)
+        {
+            outputPath ??= Path.Combine("output", "audio", $"excl_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
+            ConsoleFormatter.Info($"独占模式采集 {seconds}s（EXCLUSIVE 事件驱动循环，格式协商 16k 优先）...");
+            var r = await Task.Run(() => ExclusiveCaptureEngine.Record(deviceId, seconds, outputPath));
+            ConsoleFormatter.Success($"Saved: {r.Path}");
+            ConsoleFormatter.PrintObject(new
+            {
+                Device = r.DeviceName,
+                ActualFormat = $"{r.Format.SampleRate}Hz/{r.Format.Channels}ch/{r.Format.BitsPerSample}bit（独占实报）",
+                Duration = $"{r.Seconds:F1}s",
+                Samples = r.Samples,
+                WallSeconds = $"{r.WallSeconds:F2}",
+                Events = r.Events,
+                Packets = r.Packets
+            });
+            // 时钟完整性自检：活体采集 Duration 应≈Wall；失配=设备时钟重标签（如 Realtek 独占 48k
+            // 硬件原生率失配 pathology，实测 1.48×膨胀）——时间轴不可信，禁用于延迟测量
+            if (Math.Abs(r.Seconds - r.WallSeconds) > Math.Max(0.05, r.WallSeconds * 0.02))
+                ConsoleFormatter.Warn(
+                    $"独占流时钟失配：样点时长 {r.Seconds:F2}s ≠ 墙钟 {r.WallSeconds:F2}s（×{r.Seconds / Math.Max(0.001, r.WallSeconds):F2}）" +
+                    "——该设备独占模式时间轴不可信，此录音禁用于延迟测量（t7 红线）");
+            return 0;
+        }
+
         // 默认落盘 output/audio（识别场景素材约定目录）；--file 可覆盖（--output/-o 被全局格式选项占用）
         outputPath ??= Path.Combine("output", "audio", $"rec_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
         var dir = Path.GetDirectoryName(Path.GetFullPath(outputPath));

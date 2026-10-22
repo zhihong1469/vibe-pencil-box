@@ -367,7 +367,8 @@ public class Program
             "capture" or "rec" => await cmd.CaptureAsync(
                 GetOption(args, "--device") ?? GetOption(args, "-d"),
                 GetOptionInt(args, "--seconds", 10) == 0 ? GetOptionInt(args, "-s", 10) : GetOptionInt(args, "--seconds", 10),
-                GetOption(args, "--file")),  // --output/-o 与全局输出格式选项冲突，落盘路径用 --file
+                GetOption(args, "--file"),  // --output/-o 与全局输出格式选项冲突，落盘路径用 --file
+                HasFlag(args, "--exclusive")),
 
             "monitor" => await cmd.MonitorAsync(
                 GetOption(args, "--device") ?? GetOption(args, "-d"),
@@ -859,6 +860,9 @@ public class Program
                                                                    反复重连/配对压测（GAP/SMP 稳定性）
                      专项手册：_share/issues/0-待处理/命令行操作与OTA技能化/03
             audio    USB Audio capture (devices, capture, monitor)【可选功能：feature off audio 可整域关】
+                     capture   录音落 WAV（--device <id|名称子串> -s 秒 --file out.wav）
+                               [--exclusive] 独占档（t7 B-1）：自持 IAudioClient EXCLUSIVE 循环，
+                               格式协商 16k 优先并报告实报格式；独占期间同端点共享录音会互斥
                      renders   列播放设备（扩音渲染端）
                      volume    端点音量自检/设置（--set 35 --unmute / --mic-set 80 --mic-unmute）
                                "跑了没声"先看这里：多半是端点静音或音量 0
