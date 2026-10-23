@@ -127,7 +127,11 @@ public sealed class PenFlashEngine
     /// （ps1 实测：PS 侧直接合并会在 ErrorRecord 上打断烧录，故沿用 cmd 层合并）。
     /// 返回 (退出码, 全量输出)。
     /// </summary>
-    public async Task<(int ExitCode, string Output)> RunOmBleIspAsync(string arguments, CancellationToken ct)
+    /// <summary>
+    /// 跑 OmBleIsp。<paramref name="onLine"/> 逐行实时回调（烧录进度刷新用，工具线程调用）。
+    /// 10-23 起改逐行读：此前 ReadToEnd 收整段，日志时间戳全挤在进程退出时刻（失真），进度也不可见。
+    /// </summary>
+    public async Task<(int ExitCode, string Output)> RunOmBleIspAsync(string arguments, CancellationToken ct, Action<string>? onLine = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -143,7 +147,20 @@ public sealed class PenFlashEngine
         };
 
         using var proc = Process.Start(psi) ?? throw new InvalidOperationException("OmBleIsp.exe 启动失败");
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var readTask = Task.Run(async () =>
+        {
+            var lines = new List<string>();
+            try
+            {
+                while (await proc.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } line)
+                {
+                    lines.Add(line);
+                    onLine?.Invoke(line);
+                }
+            }
+            catch { /* 进程被杀时读流可能抛——尽力保留已读行 */ }
+            return lines;
+        });
         var stderrTask = proc.StandardError.ReadToEndAsync();   // 排空防缓冲满死锁（内容经 cmd 已并入 stdout）
         try
         {
@@ -156,9 +173,9 @@ public sealed class PenFlashEngine
             try { proc.WaitForExit(3000); } catch { /* 尽力收尸 */ }
             throw;
         }
-        var output = await stdoutTask.ConfigureAwait(false);
+        var lines2 = await readTask.ConfigureAwait(false);
         try { await stderrTask.ConfigureAwait(false); } catch { /* 已排空即可 */ }
-        return (proc.ExitCode, output);
+        return (proc.ExitCode, string.Join("\n", lines2));
     }
 
     private static void TryKill(Process proc)

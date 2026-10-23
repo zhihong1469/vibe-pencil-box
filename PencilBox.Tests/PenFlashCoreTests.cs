@@ -183,4 +183,23 @@ public class PenFlashCoreTests
         Assert.False(PenFlashCore.IsLinkSetupFailure(-1303));
         Assert.False(PenFlashCore.IsLinkSetupFailure(null));
     }
+
+    [Fact]
+    public void ParseProgrammingPercent_ResilientByDesign()
+    {
+        // 字段名厂商手册未载明：优先 percent/progress 键 → 裸 NN% 兜底 → 都没有不硬猜
+        Assert.Equal(37, PenFlashCore.ParseProgrammingPercent("{\"Status\":\"Programming\",\"Percent\":37}"));
+        Assert.Equal(8, PenFlashCore.ParseProgrammingPercent("{\"Status\":\"Programming\",\"progress\":8}"));
+        Assert.Equal(45, PenFlashCore.ParseProgrammingPercent("{\"Status\":\"Programming\",\"Block\":12} 45%"));
+        Assert.Null(PenFlashCore.ParseProgrammingPercent("{\"Status\":\"Programming\",\"Block\":12}"));
+        Assert.Null(PenFlashCore.ParseProgrammingPercent("{\"Status\":\"Finished\",\"Code\":0,\"Percent\":100}"));
+        Assert.Null(PenFlashCore.ParseProgrammingPercent(null));
+    }
+
+    [Fact]
+    public void DescribeErrorCode_VendorManualCodes()
+    {
+        Assert.Contains("参数", PenFlashCore.DescribeErrorCode(-1202));      // 厂商手册：ERR_INVALID_PARAMETER
+        Assert.Contains("非法应答", PenFlashCore.DescribeErrorCode(-1205));  // 厂商手册：ERR_INVALID_RESPONSE
+    }
 }

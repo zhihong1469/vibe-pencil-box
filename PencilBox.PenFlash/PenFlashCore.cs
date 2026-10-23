@@ -53,6 +53,38 @@ public static class PenFlashCore
     public static bool IsProgressNoise(string? line) =>
         line is not null && line.IndexOf(ProgrammingLineMark, StringComparison.Ordinal) >= 0;
 
+    /// <summary>
+    /// 从 Programming 进度行抓烧录百分比（0~100）。厂商手册未载明进度行字段名，
+    /// 弹性解析：优先 percent/progress 键，兜底裸 "NN%"；都不是返回 null。
+    /// </summary>
+    public static int? ParseProgrammingPercent(string? line)
+    {
+        if (line is null || line.IndexOf(ProgrammingLineMark, StringComparison.Ordinal) < 0)
+            return null;
+        foreach (System.Text.RegularExpressions.Match m in JsonIntPairRegex.Matches(line))
+        {
+            if (m.Groups["key"].Value.IndexOf("percent", StringComparison.OrdinalIgnoreCase) >= 0
+                || m.Groups["key"].Value.IndexOf("progress", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var v = int.Parse(m.Groups["val"].Value, System.Globalization.CultureInfo.InvariantCulture);
+                if (v >= 0 && v <= 100) return v;
+            }
+        }
+        var bare = BarePercentRegex.Match(line);
+        if (bare.Success)
+        {
+            var v = int.Parse(bare.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            if (v >= 0 && v <= 100) return v;
+        }
+        return null;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex JsonIntPairRegex =
+        new(@"""(?<key>[A-Za-z_]+)""\s*:\s*(?<val>\d{1,3})", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static readonly System.Text.RegularExpressions.Regex BarePercentRegex =
+        new(@"(?<![\d.])(?<val>\d{1,3})\s*%", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     // ---- 口换算（ps1 Convert-OmPort：COM20 → /dev/ttyS19）----
 
     public static string ConvertOmPort(string comPort)
@@ -149,6 +181,8 @@ public static class PenFlashCore
             -1007 => "发送失败（-1007）→ 查接线；确认芯片在 ISP 态；可降波特率重试",
             -1201 => "命令行参数非法（-1201）",
             -1203 => "芯片无响应（-1203）→ 确认已进 ISP、查接线，或重新复位再试",
+            -1202 => "命令行参数不合法（-1202）",
+            -1205 => "芯片非法应答（-1205）",
             -1206 => "Flash 读写失败（-1206）→ 可先擦除再烧",
             -1207 => "固件文件打不开（-1207）→ 检查文件是否存在",
             -1302 => "固件与芯片型号不匹配（-1302）→ 确认 bin 是 R1P 的",

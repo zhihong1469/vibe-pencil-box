@@ -312,6 +312,8 @@ internal sealed class MainForm : Form
             {
                 s.Log += (_, line) => Ui(() => LogLine(line));
                 s.PhaseChanged += (_, _) => Ui(() => SetRow(s.Port, phase: PhaseText(s.Phase)));
+                s.ProgressChanged += (_, _) => Ui(() =>
+                    SetRow(s.Port, phase: s.ProgressPercent is int p ? $"烧录+校验 {p}%" : PhaseText(s.Phase)));
             }
 
             // 并发全开放（指挥官 10-22 令，撤实验位；多实例已实证：无互斥/工具目录零落文件/

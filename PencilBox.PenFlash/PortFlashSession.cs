@@ -37,6 +37,11 @@ public sealed class PortFlashSession
 
     public FlashPhase Phase { get; private set; } = FlashPhase.Pending;
 
+    /// <summary>烧录+校验步的实时百分比（Programming 进度行解析；非烧录步为 null）。</summary>
+    public int? ProgressPercent { get; private set; }
+
+    public event EventHandler? ProgressChanged;
+
     /// <summary>终态：true=PASS。null=尚未结束。</summary>
     public bool? Passed { get; private set; }
 
@@ -74,9 +79,23 @@ public sealed class PortFlashSession
             // 3) 烧录 + 校验（--verify 必带，UI 不提供关闭入口——量产漏检防线）
             SetPhase(FlashPhase.Burn);
             LogLine($"[{Port}] OmBleIsp 烧录+校验中（{PenFlashCore.ConvertOmPort(Port)} @ {PenFlashCore.IspBaudrate}）…");
+            var firstProgressSeen = false;
             var (rc, output) = await _engine.RunOmBleIspAsync(
                 $"--serial {PenFlashCore.ConvertOmPort(Port)} --baudrate {PenFlashCore.IspBaudrate} " +
-                $"--chip-select 0 --app 0 --app-file {copyName} --verify", ct).ConfigureAwait(false);
+                $"--chip-select 0 --app 0 --app-file {copyName} --verify", ct, line =>
+            {
+                var pct = PenFlashCore.ParseProgrammingPercent(line);
+                if (pct is not int p)
+                    return;
+                if (!firstProgressSeen)
+                {
+                    firstProgressSeen = true;
+                    LogLine($"[{Port}] 进度行样例：{line.Trim()}");   // 厂商手册未载明字段名——真机首跑确认后可收紧解析
+                }
+                ProgressPercent = p;
+                ProgressChanged?.Invoke(this, EventArgs.Empty);
+            }).ConfigureAwait(false);
+            ProgressPercent = null;
             foreach (var line in output.Split('\n'))
                 if (!PenFlashCore.IsProgressNoise(line.TrimEnd('\r')) && line.Trim().Length > 0)
                     LogLine($"[{Port}]  {line.TrimEnd('\r')}");   // 带口前缀：并发时多口输出可区分
