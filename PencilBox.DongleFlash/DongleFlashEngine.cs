@@ -80,11 +80,17 @@ public static class PassRule
 public sealed record Md5Report(bool Ok, IReadOnlyList<string> Problems);
 
 /// <summary>
-/// MD5 自检（01 号 P1-8）：选中包时对 `flash\MD5SUMS.txt`（md5sum 格式 `hash *filename`，
+/// MD5 自检（01 号 P1-8）：选中包时对包根 `MD5SUMS.txt`（md5sum 格式 `hash *filename`，
 // 兼容两空格文本模式）逐项比对 flash\ 内文件；列出的文件缺失或不符 = 不合格，阻止烧录。
+/// 例外（10-23 三包取证）：jl_isd.bin / jl_isd.fw 是 isd_download 每次运行（含板不在线
+/// "只打包文件"）都会重写的合并产物，首次烧录后清单哈希必失配（v1.0.2-rc.2 三连"自检不过"
+/// 根因）——烧录命令不消费这两件，清单里列了也跳过比对。
 /// </summary>
 public static class Md5Checker
 {
+    private static readonly HashSet<string> VolatileArtifacts = new(StringComparer.OrdinalIgnoreCase)
+        { "jl_isd.bin", "jl_isd.fw" };
+
     public static Md5Report Verify(string flashDir, string md5SumsText)
     {
         var problems = new List<string>();
@@ -113,6 +119,9 @@ public static class Md5Checker
                 hash = parts[0];
                 name = parts[1];
             }
+
+            if (VolatileArtifacts.Contains(name))
+                continue;   // 运行期产物（见类注）：烧录命令不消费，比对无意义
 
             if (hash.Length != 32 || !hash.All(Uri.IsHexDigit))
             {

@@ -122,6 +122,66 @@ public class DongleFlashTests
         }
     }
 
+    [Fact]
+    public void Md5_Verify_IgnoresVolatileArtifacts_StillChecksRealFirmware()
+    {
+        var flash = NewTempDir();
+        try
+        {
+            var appPath = Path.Combine(flash, "app.bin");
+            File.WriteAllText(appPath, "hello app");
+            var goodAppHash = Md5Of(appPath);
+            // 0bee553 实际形态：清单把运行期产物 jl_isd.fw 也列了，哈希已被首次烧录作废
+            File.WriteAllText(Path.Combine(flash, "jl_isd.fw"), "每次运行被 isd_download 重写");
+
+            // jl_isd.fw 错哈希不罚（跳过比对），真固件 app.bin 哈希对 → 放行
+            var sums = $"{goodAppHash} *app.bin\n{new string('f', 32)} *jl_isd.fw\n";
+            Assert.True(Md5Checker.Verify(flash, sums).Ok);
+
+            // 真固件被换仍必须拦
+            Assert.False(Md5Checker.Verify(flash, $"{new string('0', 32)} *app.bin\n").Ok);
+        }
+        finally
+        {
+            try { Directory.Delete(flash, recursive: true); } catch { }
+        }
+    }
+
+    // ================= 烧录日志落盘（10-23 指挥官反馈：排障证据要留本地 log\） =================
+
+    [Fact]
+    public void FlashLog_DailyFile_AppendsWithTimestampPrefix()
+    {
+        var root = NewTempDir();
+        try
+        {
+            using (var log = FlashLog.OpenDaily(root))
+                log.WriteLine("第一行");
+            using (var log = FlashLog.OpenDaily(root))
+                log.WriteLine("第二行");
+
+            var path = Path.Combine(root, "log", "DongleFlash_" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+            var lines = File.ReadAllLines(path);
+            Assert.Equal(2, lines.Length);
+            Assert.True(System.Text.RegularExpressions.Regex.IsMatch(lines[0], @"^\d{2}:\d{2}:\d{2} 第一行$"),
+                $"应有时分秒前缀，实际：{lines[0]}");
+            Assert.True(System.Text.RegularExpressions.Regex.IsMatch(lines[1], @"^\d{2}:\d{2}:\d{2} 第二行$"),
+                $"应有时分秒前缀，实际：{lines[1]}");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void FlashLog_UnwritableBase_ReturnsNullQuietly()
+    {
+        var notADir = Path.Combine(NewTempDir(), "占位文件不是目录");
+        File.WriteAllText(notADir, "x");
+        Assert.Null(FlashLog.OpenDaily(notADir));   // 建目录失败 → 降级返 null，绝不拖垮烧录
+    }
+
     // ================= 真实材料冒烟（材料在位才生效，离线开发机可跳过） =================
 
     [Fact]

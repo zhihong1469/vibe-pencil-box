@@ -33,6 +33,7 @@ internal sealed class MainForm : Form
     private readonly Button _vcredistBtn = new();
 
     private readonly FlashRunner _runner = new();
+    private readonly FlashLog? _flashLog;
     private readonly List<FlashPackage> _packages = new();
     private Md5Report? _md5;
     private CancellationTokenSource? _cts;
@@ -156,6 +157,18 @@ internal sealed class MainForm : Form
         Controls.Add(_driverPanel);
 
         Load += (_, _) => ScanAndFill();
+
+        // 烧录日志按天落盘（10-23 指挥官反馈：MD5 拦截/FAIL 证据只滚在窗里，产线排障没凭据）
+        _flashLog = FlashLog.OpenDaily(BaseDir);
+        if (_flashLog == null)
+            AppendLog("[日志] log\\ 目录不可写，本次运行不落盘（不影响烧录）");
+        else
+            _flashLog.WriteLine("会话开始");
+        FormClosing += (_, _) =>
+        {
+            _flashLog?.WriteLine("会话结束");
+            _flashLog?.Dispose();
+        };
     }
 
     private string CountText => $"本班: PASS {_passCount}   FAIL {_failCount}";
@@ -225,6 +238,7 @@ internal sealed class MainForm : Form
         }
         else
         {
+            AppendLog($"[MD5] {pkg.DisplayName} 自检通过");
             SetStatus($"就绪：{pkg.DisplayName}（放入板子 USB，点【开始烧录】；板上已在线则先拔下快插一次触发下载态）");
         }
         UpdateFlashButton();
@@ -338,5 +352,6 @@ internal sealed class MainForm : Form
         _logBox.AppendText(line + Environment.NewLine);
         _logBox.SelectionStart = _logBox.TextLength;
         _logBox.ScrollToCaret();
+        _flashLog?.WriteLine(line);
     }
 }
