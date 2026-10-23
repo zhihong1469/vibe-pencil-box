@@ -32,6 +32,9 @@ public sealed class PortFlashSession
     public string Port { get; }
     public string FirmwarePath { get; }
 
+    /// <summary>治具烧录开关档位（ARM/ESP，操作口径；两档软件流程一致——ps1 头注）。</summary>
+    public string Position { get; }
+
     public FlashPhase Phase { get; private set; } = FlashPhase.Pending;
 
     /// <summary>终态：true=PASS。null=尚未结束。</summary>
@@ -43,11 +46,12 @@ public sealed class PortFlashSession
     public event EventHandler<string>? Log;
     public event EventHandler? PhaseChanged;
 
-    public PortFlashSession(PenFlashEngine engine, string port, string firmwarePath)
+    public PortFlashSession(PenFlashEngine engine, string port, string firmwarePath, string position = "ARM")
     {
         _engine = engine;
         Port = port;
         FirmwarePath = firmwarePath;
+        Position = position;
     }
 
     public async Task<bool> RunAsync(CancellationToken ct)
@@ -76,9 +80,14 @@ public sealed class PortFlashSession
             foreach (var line in output.Split('\n'))
                 if (!PenFlashCore.IsProgressNoise(line.TrimEnd('\r')) && line.Trim().Length > 0)
                     LogLine($"[{Port}]  {line.TrimEnd('\r')}");   // 带口前缀：并发时多口输出可区分
-            LogLine($"[{Port}] OmBleIsp 退出码：{rc}");
+            var toolCode = PenFlashCore.ParseToolJsonCode(output);   // 全量码（退出码仅低 8 位，10-23 真机实证）
+            LogLine($"[{Port}] OmBleIsp 退出码：{rc}{(toolCode is int tc ? $"（工具码 {tc}）" : "")}");
             if (rc != 0)
-                LogLine($"[{Port}] 处置：{PenFlashCore.DescribeErrorCode(rc)}");
+            {
+                LogLine($"[{Port}] 处置：{PenFlashCore.DescribeErrorCode(rc, output)}");
+                if (PenFlashCore.IsLinkSetupFailure(toolCode))
+                    LogLine($"[{Port}] 三查：①治具开关拨在 {Position} 档了吗？②接线松了（RST←RTS、BOOT←DTR）？③串口被占（关串口助手/OmBleIspStudio）？");
+            }
 
             // 4) --run 起跑 + 5) 必补 DTR/RTS 干净复位（两步都不省）
             SetPhase(FlashPhase.Run);
@@ -97,7 +106,7 @@ public sealed class PortFlashSession
             Passed = PenFlashCore.IsPass(rc, output);
             Summary = Passed.Value
                 ? $"PASS（Finished Code:0，已起跑）"
-                : $"FAIL（退出码 {rc}）{PenFlashCore.DescribeErrorCode(rc)}";
+                : $"FAIL（退出码 {rc}）{PenFlashCore.DescribeErrorCode(rc, output)}";
             LogLine($"[{Port}] {(Passed.Value ? "[PASS]" : "[FAIL]")} {Summary}");
             return Passed.Value;
         }

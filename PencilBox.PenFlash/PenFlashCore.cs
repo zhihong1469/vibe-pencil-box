@@ -131,24 +131,73 @@ public static class PenFlashCore
 
     // ---- 错误码中文对照（照抄 ps1 $ErrorCodes，来源开发侧 error_codes.json）----
 
-    public static string DescribeErrorCode(int rc) => rc switch
+    /// <summary>
+    /// 判码优先级：工具 JSON 自报的 Code > 退出码低 8 位反查内部负码 > 退出码直查。
+    /// 10-23 真机实证：OmBleIsp（cygwin 系）进程退出码只保留内部码低 8 位
+    /// （内部 -1001 → 退出 23），JSON 里报的才是全量码。
+    /// </summary>
+    public static string DescribeErrorCode(int rc, string? toolOutput = null)
     {
-        0 => "成功",
-        2 => "文件不存在 → 检查固件路径/文件名",
-        6 => "串口设备不存在 → 检查口号/是否插好",
-        13 => "串口被占用 → 关掉串口助手/PencilBox/OmBleIspStudio 再试",
-        -1001 => "通信链路未建立 → 芯片没进 ISP：查档位/接线/串口占用；先重插 USB 或退出 ISP 再试",
-        -1007 => "发送失败 → 查接线；确认芯片在 ISP 态；可降波特率重试",
-        -1201 => "命令行参数非法",
-        -1203 => "芯片无响应 → 确认已进 ISP、查接线，或重新复位再试",
-        -1206 => "Flash 读写失败 → 可先擦除再烧",
-        -1207 => "固件文件打不开 → 检查文件是否存在",
-        -1302 => "固件与芯片型号不匹配 → 确认 bin 是 R1P 的",
-        -1303 => "Flash 数据 CRC 校验失败 → 重烧一次，仍失败换线/换口",
-        -1401 => "不支持的芯片型号",
-        -1402 => "不支持的 FLASH → 片选用 0（内部 Flash）",
-        _ => $"未知返回码 {rc}"
-    };
+        var code = ParseToolJsonCode(toolOutput) ?? UnmapExitCode(rc) ?? rc;
+        return code switch
+        {
+            0 => "成功",
+            2 => "文件不存在 → 检查固件路径/文件名",
+            6 => "串口设备不存在 → 检查口号/是否插好",
+            13 => "串口被占用 → 关掉串口助手/PencilBox/OmBleIspStudio 再试",
+            -1001 => "通信链路未建立（-1001）→ 芯片没进 ISP：查治具开关档位/接线/串口占用；先重插 USB 或退出 ISP 再试",
+            -1007 => "发送失败（-1007）→ 查接线；确认芯片在 ISP 态；可降波特率重试",
+            -1201 => "命令行参数非法（-1201）",
+            -1203 => "芯片无响应（-1203）→ 确认已进 ISP、查接线，或重新复位再试",
+            -1206 => "Flash 读写失败（-1206）→ 可先擦除再烧",
+            -1207 => "固件文件打不开（-1207）→ 检查文件是否存在",
+            -1302 => "固件与芯片型号不匹配（-1302）→ 确认 bin 是 R1P 的",
+            -1303 => "Flash 数据 CRC 校验失败（-1303）→ 重烧一次，仍失败换线/换口",
+            -1401 => "不支持的芯片型号（-1401）",
+            -1402 => "不支持的 FLASH（-1402）→ 片选用 0（内部 Flash）",
+            _ => $"未知返回码 {rc}（注意：退出码仅内部码低 8 位，全量码看工具 JSON 输出）"
+        };
+    }
+
+    /// <summary>工具输出里最后一个 JSON 的 "Code"（失败/成功终态都会自报全量码）；无 JSON 返回 null。</summary>
+    public static int? ParseToolJsonCode(string? output)
+    {
+        if (string.IsNullOrEmpty(output)) return null;
+        int? last = null;
+        foreach (System.Text.RegularExpressions.Match m in ToolJsonCodeRegex.Matches(output))
+            last = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        return last;
+    }
+
+    /// <summary>退出码（内部码低 8 位）反查内部负码；字节撞号（多码同字节）或查不到返回 null——不猜。</summary>
+    private static int? UnmapExitCode(int rc)
+    {
+        if (rc <= 0 || rc > 255) return null;
+        return ExitByteToToolCode.TryGetValue(rc, out var code) && code != AmbiguousByte ? code : null;
+    }
+
+    private const int AmbiguousByte = int.MinValue;
+
+    // 负码 → 退出字节（&0xFF）；字节撞号记 AmbiguousByte。正码 2/6/13 是 errno 直查，不入此表。
+    private static readonly Dictionary<int, int> ExitByteToToolCode = BuildExitByteMap();
+
+    private static Dictionary<int, int> BuildExitByteMap()
+    {
+        var map = new Dictionary<int, int>();
+        foreach (var code in new[] { -1001, -1007, -1201, -1203, -1206, -1207, -1302, -1303, -1401, -1402 })
+        {
+            var b = code & 0xFF;
+            map[b] = map.ContainsKey(b) ? AmbiguousByte : code;
+        }
+        return map;
+    }
+
+    /// <summary>链路建立族失败（-1001/-1203/-1007）——治具开关档位/接线/占用三查的提示适用。</summary>
+    public static bool IsLinkSetupFailure(int? toolCode) =>
+        toolCode is -1001 or -1203 or -1007;
+
+    private static readonly System.Text.RegularExpressions.Regex ToolJsonCodeRegex =
+        new(@"""Code""\s*:\s*(-?\d+)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private static readonly System.Text.RegularExpressions.Regex ComNameRegex =
         new(@"COM\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);

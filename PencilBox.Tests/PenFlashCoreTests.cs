@@ -141,4 +141,46 @@ public class PenFlashCoreTests
         Assert.Equal("成功", PenFlashCore.DescribeErrorCode(0));
         Assert.StartsWith("未知", PenFlashCore.DescribeErrorCode(-9999));
     }
+
+    // ---- 工具 JSON 码 + 退出码低 8 位反查（10-23 真机实证：内部 -1001 → 退出 23）----
+
+    [Fact]
+    public void ParseToolJsonCode_TakesLastJson()
+    {
+        var output = "{\"Device\":\"/dev/ttyS11\",\"Status\":\"Fail\",\"Code\":-1001,\"Message\":\"Link established fail\"}\r\n" +
+                     "OnMicro BLE ISP Toolkit, TY1.2.3\r\n" +
+                     "{\"Status\":\"Finished\",\"Code\":0}";
+        Assert.Equal(0, PenFlashCore.ParseToolJsonCode(output));     // 最后一个 JSON 作数
+        Assert.Equal(-1001, PenFlashCore.ParseToolJsonCode("{\"Status\":\"Fail\",\"Code\":-1001}"));
+        Assert.Null(PenFlashCore.ParseToolJsonCode("no json here"));
+        Assert.Null(PenFlashCore.ParseToolJsonCode(null));
+    }
+
+    [Fact]
+    public void DescribeErrorCode_PrefersToolJsonOverExitCode()
+    {
+        // 真机 10-23 形态：退出码 23（=-1001 低 8 位），JSON 自报 -1001
+        var output = "{\"Status\":\"Fail\",\"Code\":-1001,\"Message\":\"Link established fail\"}";
+        Assert.Contains("通信链路未建立", PenFlashCore.DescribeErrorCode(23, output));
+        Assert.Contains("-1001", PenFlashCore.DescribeErrorCode(23, output));
+    }
+
+    [Fact]
+    public void DescribeErrorCode_ReverseMapsExitByte_WhenNoJson()
+    {
+        Assert.Contains("通信链路未建立", PenFlashCore.DescribeErrorCode(23));   // -1001 & 0xFF = 23
+        Assert.Contains("芯片无响应", PenFlashCore.DescribeErrorCode(77));       // -1203 & 0xFF = 77
+        Assert.Contains("占用", PenFlashCore.DescribeErrorCode(13));             // 正码 errno 直查不被反查劫走
+        Assert.StartsWith("未知", PenFlashCore.DescribeErrorCode(100));          // 查不到不猜
+    }
+
+    [Fact]
+    public void IsLinkSetupFailure_Family()
+    {
+        Assert.True(PenFlashCore.IsLinkSetupFailure(-1001));
+        Assert.True(PenFlashCore.IsLinkSetupFailure(-1203));
+        Assert.True(PenFlashCore.IsLinkSetupFailure(-1007));
+        Assert.False(PenFlashCore.IsLinkSetupFailure(-1303));
+        Assert.False(PenFlashCore.IsLinkSetupFailure(null));
+    }
 }

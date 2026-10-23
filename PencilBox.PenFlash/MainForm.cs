@@ -22,6 +22,11 @@ internal sealed class MainForm : Form
     private readonly ComboBox _fwCombo;
     private readonly Button _refreshFwBtn;
     private readonly Button _refreshPortBtn;
+    private readonly RadioButton _armRadio;
+    private readonly RadioButton _espRadio;
+
+    /// <summary>治具烧录开关档位（操作口径：选错一般也能烧，但两档流程提示/失败三查按此对齐——使用说明）。</summary>
+    private string Position => _espRadio.Checked ? "ESP" : "ARM";
     private readonly Button _startBtn;
     private readonly Button _cancelBtn;
     private readonly CheckBox _probeCheck;
@@ -68,6 +73,9 @@ internal sealed class MainForm : Form
         fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));    // 固件框吃掉剩余宽
         fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));        // 治具档位：
+        fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));        // ARM
+        fwRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));        // ESP
         _fwCombo = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
@@ -77,12 +85,17 @@ internal sealed class MainForm : Form
         };
         _refreshFwBtn = new Button { Text = "刷新固件", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 3, 3, 0) };
         _refreshFwBtn.Click += (_, _) => RefreshFirmwares();
-        _refreshPortBtn = new Button { Text = "刷新串口", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 3, 10, 0) };
+        _refreshPortBtn = new Button { Text = "刷新串口", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 3, 3, 0) };
         _refreshPortBtn.Click += (_, _) => RefreshPorts();
+        _armRadio = new RadioButton { Text = "ARM 档", AutoSize = true, Checked = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 3, 3, 0) };
+        _espRadio = new RadioButton { Text = "ESP 档", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 3, 10, 0) };
         fwRow.Controls.Add(new Label { Text = "固件：", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 0, 0, 0) }, 0, 0);
         fwRow.Controls.Add(_fwCombo, 1, 0);
         fwRow.Controls.Add(_refreshFwBtn, 2, 0);
         fwRow.Controls.Add(_refreshPortBtn, 3, 0);
+        fwRow.Controls.Add(new Label { Text = "治具档位：", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(6, 0, 0, 0) }, 4, 0);
+        fwRow.Controls.Add(_armRadio, 5, 0);
+        fwRow.Controls.Add(_espRadio, 6, 0);
 
         var actionRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, WrapContents = false };
         _startBtn = new Button
@@ -289,9 +302,9 @@ internal sealed class MainForm : Form
         foreach (var p in ports) SetRow(p, phase: "排队中", result: "");
 
         var fwName = Path.GetFileName(firmware);
-        LogLine($"===== 开始：{fwName} → {string.Join(", ", ports)}（并发·每口独立 OmBleIsp 实例）=====");
+        LogLine($"===== 开始：{fwName} → {string.Join(", ", ports)}（并发·每口独立 OmBleIsp 实例｜治具开关档位={Position}，请核对治具）=====");
 
-        var sessions = ports.Select(p => new PortFlashSession(_engine, p, firmware)).ToList();
+        var sessions = ports.Select(p => new PortFlashSession(_engine, p, firmware, Position)).ToList();
         var results = new Dictionary<string, PortFlashSession>();
         try
         {
@@ -417,6 +430,8 @@ internal sealed class MainForm : Form
         _refreshPortBtn.Enabled = !busy;
         _fwCombo.Enabled = !busy;
         _probeCheck.Enabled = !busy;
+        _armRadio.Enabled = !busy;
+        _espRadio.Enabled = !busy;
         _cancelBtn.Enabled = busy;
     }
 
