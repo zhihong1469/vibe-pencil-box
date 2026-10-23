@@ -65,20 +65,25 @@ public class DongleFlashTests
         var root = NewTempDir();
         try
         {
-            // 完整包（带横幅）
-            MakePackage(root, "一键烧录脚本", banner: "rem  Firmware : v1.0.1 (git 6a2fdc8), packaged 2026-10-16");
+            // 新正规命名（10-23 指挥官定版 R1D-<版本>-<hash>）
+            MakePackage(root, "R1D-v1.0.1-rc.1-8f1d122", banner: "rem  Firmware : v1.0.1-rc.1 (git 8f1d122), built 2026-10-16");
+            MakePackage(root, "R1D-v1.0.2-rc.3-66247f6", banner: "rem  Firmware : v1.0.2-rc.3 (git 66247f6), built 2026-10-23");
+            // 旧名过渡兼容
+            MakePackage(root, "一键烧录脚本-0bee553", banner: "rem  Firmware : v1.0.2-rc.2 (git 0bee553), built 2026-10-22");
             // 缺 isd_download.exe 的半拷贝包 → 不入列表
-            var broken = Path.Combine(root, "一键烧录脚本-deadbee");
+            var broken = Path.Combine(root, "R1D-v0.0-deadbee");
             Directory.CreateDirectory(Path.Combine(broken, "flash"));
             File.WriteAllText(Path.Combine(broken, "flash", "isd_config.ini"), "ini");
             // 完整但无横幅 → 显示名回退文件夹名
-            MakePackage(root, "一键烧录脚本-8f1d122", banner: null);
+            MakePackage(root, "R1D-v9.9.9-nobanner", banner: null);
 
             var pkgs = PackageScanner.Scan(root);
 
-            Assert.Equal(2, pkgs.Count);   // 排序按文件夹名："一键烧录脚本" < "一键烧录脚本-8f1d122"
-            Assert.Equal("v1.0.1 (6a2fdc8)", pkgs[0].DisplayName);
-            Assert.Equal("一键烧录脚本-8f1d122", pkgs[1].DisplayName);   // 横幅缺失回退
+            Assert.Equal(4, pkgs.Count);   // 排序按文件夹名：R1D-*（ASCII）在旧名（CJK）前
+            Assert.Equal("v1.0.1-rc.1 (8f1d122)", pkgs[0].DisplayName);
+            Assert.Equal("v1.0.2-rc.3 (66247f6)", pkgs[1].DisplayName);
+            Assert.Equal("R1D-v9.9.9-nobanner", pkgs[2].DisplayName);   // 横幅缺失回退
+            Assert.Equal("v1.0.2-rc.2 (0bee553)", pkgs[3].DisplayName); // 旧名兼容
             Assert.EndsWith(@"flash", pkgs[0].FlashDir);
             // MD5SUMS 在包根（与 bat 同级，01 号 §2.1），不在 flash\ 里——路径写错 = 全包误报"缺 MD5SUMS"
             Assert.Equal(Path.Combine(pkgs[0].Directory, "MD5SUMS.txt"), pkgs[0].Md5SumsPath);
@@ -192,15 +197,17 @@ public class DongleFlashTests
             return;   // 交付环境无材料树，静默通过
 
         var pkgs = PackageScanner.Scan(materialsRoot);
-        Assert.True(pkgs.Count >= 3, $"真实 R1D 材料应扫到 ≥3 包，实际 {pkgs.Count}");
+        Assert.True(pkgs.Count >= 2, $"真实 R1D 材料应扫到 ≥2 包，实际 {pkgs.Count}");
         Assert.All(pkgs, p =>
         {
             Assert.True(File.Exists(Path.Combine(p.FlashDir, "isd_download.exe")), $"{p.FolderName} 缺 isd_download.exe");
             Assert.True(File.Exists(p.BatPath), $"{p.FolderName} 缺 一键烧录.bat");
             Assert.True(File.Exists(p.Md5SumsPath), $"{p.FolderName} 包根缺 MD5SUMS.txt");
+            // 显示名应出自 bat 横幅（包会轮换，不钉具体版本号，只钉横幅形态）
+            Assert.True(System.Text.RegularExpressions.Regex.IsMatch(
+                    p.DisplayName, @"^v[0-9A-Za-z.\-]+ \([0-9a-f]{7,8}\)$"),
+                $"{p.FolderName} 显示名应出自横幅（v… (hash)），实际：{p.DisplayName}");
         });
-        Assert.Contains(pkgs, p => p.DisplayName == "v1.0.1 (6a2fdc8)");
-        Assert.Contains(pkgs, p => p.DisplayName == "v1.0.2-rc.2 (0bee553)");
     }
 
     // ================= 杂项 =================

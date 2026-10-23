@@ -20,8 +20,10 @@ public sealed record FlashPackage(string Directory, string FolderName, string Di
 }
 
 /// <summary>
-/// 动态扫描包根目录下的 `一键烧录脚本*`（01 号 P0-1）：入列门槛 = `flash\isd_download.exe` 与
-/// `isd_config.ini` 在位；显示名优先解析 bat 横幅（如 `v1.0.1 (6a2fdc8)`），横幅缺失回退文件夹名。
+/// 动态扫描包根目录下的固件包（01 号 P0-1）：正规命名 `R1D-&lt;固件版本&gt;-&lt;git短哈希&gt;`
+/// （10-23 指挥官定版，如 `R1D-v1.0.2-rc.3-66247f6`）；旧名 `一键烧录脚本*` 过渡期仍识别。
+/// 入列门槛 = `flash\isd_download.exe` 与 `isd_config.ini` 在位；显示名优先解析 bat 横幅
+/// （如 `v1.0.2-rc.3 (66247f6)`），横幅缺失回退文件夹名。
 /// </summary>
 public static class PackageScanner
 {
@@ -31,8 +33,11 @@ public static class PackageScanner
         if (!Directory.Exists(rootDir))
             return list;
 
-        foreach (var dir in Directory.GetDirectories(rootDir, "一键烧录脚本*")
-                     .OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        var dirs = Directory.GetDirectories(rootDir, "R1D-*")
+            .Concat(Directory.GetDirectories(rootDir, "一键烧录脚本*"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(d => d, StringComparer.OrdinalIgnoreCase);
+        foreach (var dir in dirs)
         {
             var flash = Path.Combine(dir, "flash");
             if (!File.Exists(Path.Combine(flash, "isd_download.exe")) ||
