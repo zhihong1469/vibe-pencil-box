@@ -98,6 +98,70 @@ public class DongleFlashTests
     public void Scan_MissingRoot_ReturnsEmpty() =>
         Assert.Empty(PackageScanner.Scan(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))));
 
+    // ================= 诊断包分组（04 号 §二：DIAG-* 沉底，量产在前） =================
+
+    [Fact]
+    public void Scan_DiagnosticPrefix_SortedAfterProduction()
+    {
+        var root = NewTempDir();
+        try
+        {
+            MakePackage(root, "DIAG-10k 读写压测-241024", banner: "rem  Firmware : diag-10k (git 2410abc), built 2026-10-24");
+            MakePackage(root, "R1D-v1.0.2-rc.3-66247f6", banner: "rem  Firmware : v1.0.2-rc.3 (git 66247f6), built 2026-10-23");
+
+            var pkgs = PackageScanner.Scan(root);
+
+            Assert.Equal(2, pkgs.Count);
+            Assert.False(pkgs[0].IsDiagnostic);   // 量产在前
+            Assert.Equal("v1.0.2-rc.3 (66247f6)", pkgs[0].DisplayName);
+            Assert.True(pkgs[1].IsDiagnostic);    // 诊断沉底，UI 加 [诊断] 标记
+            Assert.Equal("diag-10k (2410abc)", pkgs[1].DisplayName);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    // ================= 加密 Key 随包可变（04 号 §一：自研板要 key / 官方板不要） =================
+
+    [Fact]
+    public void KeySelector_EnumeratesKeyFiles_Sorted()
+    {
+        var flash = NewTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(flash, "ZZ_agent.key"), "k1");
+            File.WriteAllText(Path.Combine(flash, "AC69.key"), "k2");
+            File.WriteAllText(Path.Combine(flash, "isd_config.ini"), "ini");   // 非 key 不入列
+
+            var keys = KeySelector.Enumerate(flash);
+
+            Assert.Equal(new[] { "AC69.key", "ZZ_agent.key" }, keys);
+            Assert.Empty(KeySelector.Enumerate(Path.Combine(flash, "不存在")));   // 无 flash 目录不抛
+        }
+        finally
+        {
+            try { Directory.Delete(flash, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void BuildArguments_KeySegment_TogglesAroundFixedCore()
+    {
+        var withKey = FlashRunner.BuildArguments("AC69.key");
+        Assert.Contains("-key AC69.key ", withKey);
+        Assert.True(withKey.IndexOf("-wait 300 -key", StringComparison.Ordinal) >= 0, "key 段应在 -wait 之后");
+        Assert.True(withKey.IndexOf("-key AC69.key") < withKey.IndexOf("-uboot"), "key 段应在 -uboot 之前");
+
+        var withoutKey = FlashRunner.BuildArguments(null);
+        Assert.DoesNotContain("-key", withoutKey);
+        Assert.Contains("-wait 300 -uboot", withoutKey);   // 省略不留双空格
+
+        var otherKey = FlashRunner.BuildArguments("newagent.key");
+        Assert.Contains("-key newagent.key ", otherKey);   // 换代理=换 key 文件名
+    }
+
     // ================= MD5 自检（01 号 P1-8：不一致阻止烧录） =================
 
     [Fact]
@@ -203,10 +267,10 @@ public class DongleFlashTests
             Assert.True(File.Exists(Path.Combine(p.FlashDir, "isd_download.exe")), $"{p.FolderName} 缺 isd_download.exe");
             Assert.True(File.Exists(p.BatPath), $"{p.FolderName} 缺 一键烧录.bat");
             Assert.True(File.Exists(p.Md5SumsPath), $"{p.FolderName} 包根缺 MD5SUMS.txt");
-            // 显示名应出自 bat 横幅（包会轮换，不钉具体版本号，只钉横幅形态）
+            // 显示名应出自 bat 横幅（包会轮换，不钉具体版本号，只钉横幅形态；v 前缀可有可无）
             Assert.True(System.Text.RegularExpressions.Regex.IsMatch(
-                    p.DisplayName, @"^v[0-9A-Za-z.\-]+ \([0-9a-f]{7,8}\)$"),
-                $"{p.FolderName} 显示名应出自横幅（v… (hash)），实际：{p.DisplayName}");
+                    p.DisplayName, @"^v?[0-9A-Za-z.\-]+ \([0-9a-f]{7,8}\)$"),
+                $"{p.FolderName} 显示名应出自横幅（版本 (hash)），实际：{p.DisplayName}");
         });
     }
 

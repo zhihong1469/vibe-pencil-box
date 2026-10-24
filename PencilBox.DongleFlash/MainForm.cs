@@ -17,6 +17,7 @@ internal sealed class MainForm : Form
     private static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory;
 
     private readonly ComboBox _pkgBox = new();
+    private readonly ComboBox _keyBox = new();
     private readonly Button _refreshBtn = new();
     private readonly Label _md5Label = new();
     private readonly Button _flashBtn = new();
@@ -44,8 +45,8 @@ internal sealed class MainForm : Form
     {
         Text = "R1D Dongle 产线烧录";
         Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
-        ClientSize = new System.Drawing.Size(700, 560);
-        MinimumSize = new System.Drawing.Size(720, 600);
+        ClientSize = new System.Drawing.Size(700, 590);
+        MinimumSize = new System.Drawing.Size(720, 630);
         StartPosition = FormStartPosition.CenterScreen;
         // 可缩放+可最大化（指挥官 10-22 目验反馈）：后续一拖多时中部结果区改槽位行，布局已全锚定
         MaximizeBox = true;
@@ -70,8 +71,26 @@ internal sealed class MainForm : Form
         _md5Label.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         Controls.Add(_md5Label);
 
+        // ---- 加密 Key 行（04 号 §一 P0：key 跟代理商芯片走——自研板要 key、官方板不要，随包+下拉决定） ----
+        Controls.Add(new Label { Text = "加密 Key:", Location = new System.Drawing.Point(15, 47), AutoSize = true });
+        _keyBox.SetBounds(95, 43, 190, 26);
+        _keyBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        _keyBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        Controls.Add(_keyBox);
+        var keyHint = new Label
+        {
+            Text = "官方板/未加密板选「不使用 Key」；换代理的多 key 包下拉选",
+            Location = new System.Drawing.Point(295, 47),
+            AutoSize = false,
+            TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
+            ForeColor = System.Drawing.Color.Gray,
+        };
+        keyHint.SetBounds(295, 47, 395, 22);
+        keyHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        Controls.Add(keyHint);
+
         // ---- 大按钮 / 取消 ----
-        _flashBtn.SetBounds(90, 55, 494, 72);
+        _flashBtn.SetBounds(90, 85, 494, 72);
         _flashBtn.Text = "开始烧录";
         _flashBtn.Font = new System.Drawing.Font("Microsoft YaHei UI", 16f, System.Drawing.FontStyle.Bold);
         _flashBtn.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -79,7 +98,7 @@ internal sealed class MainForm : Form
         _flashBtn.Click += async (_, _) => await OnFlashAsync();
         Controls.Add(_flashBtn);
 
-        _cancelBtn.SetBounds(594, 55, 96, 72);
+        _cancelBtn.SetBounds(594, 85, 96, 72);
         _cancelBtn.Text = "取消";
         _cancelBtn.Font = new System.Drawing.Font("Microsoft YaHei UI", 12f, System.Drawing.FontStyle.Bold);
         _cancelBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
@@ -88,25 +107,25 @@ internal sealed class MainForm : Form
         Controls.Add(_cancelBtn);
 
         // ---- 状态 / 结果大字 ----
-        _statusLabel.SetBounds(15, 140, 675, 26);
+        _statusLabel.SetBounds(15, 170, 675, 26);
         _statusLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 11f);
         _statusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _statusLabel.Text = "正在扫描烧录包…";
         Controls.Add(_statusLabel);
 
-        _resultLabel.SetBounds(15, 172, 675, 108);
+        _resultLabel.SetBounds(15, 202, 675, 108);
         _resultLabel.Font = new System.Drawing.Font("Microsoft YaHei UI", 48f, System.Drawing.FontStyle.Bold);
         _resultLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
         _resultLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_resultLabel);
 
-        _nextHintLabel.SetBounds(15, 284, 675, 22);
+        _nextHintLabel.SetBounds(15, 314, 675, 22);
         _nextHintLabel.ForeColor = System.Drawing.Color.Gray;
         _nextHintLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_nextHintLabel);
 
         // ---- 日志 ----
-        _logToggle.SetBounds(15, 312, 120, 24);
+        _logToggle.SetBounds(15, 342, 120, 24);
         _logToggle.Text = "日志 ▸";
         _logToggle.CheckedChanged += (_, _) =>
         {
@@ -115,7 +134,7 @@ internal sealed class MainForm : Form
         };
         Controls.Add(_logToggle);
 
-        _logBox.SetBounds(15, 338, 675, 158);
+        _logBox.SetBounds(15, 368, 675, 158);
         _logBox.Multiline = true;
         _logBox.ReadOnly = true;
         _logBox.ScrollBars = ScrollBars.Both;
@@ -126,12 +145,12 @@ internal sealed class MainForm : Form
         Controls.Add(_logBox);
 
         // ---- 底部：计数 + 驱动安装 ----
-        _countLabel.SetBounds(15, 506, 300, 24);
+        _countLabel.SetBounds(15, 536, 300, 24);
         _countLabel.Text = CountText;
         _countLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         Controls.Add(_countLabel);
 
-        _driverBtn.SetBounds(588, 504, 102, 28);
+        _driverBtn.SetBounds(588, 534, 102, 28);
         _driverBtn.Text = "驱动安装 ▾";
         _driverBtn.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
         _driverBtn.Click += (_, _) =>
@@ -143,7 +162,7 @@ internal sealed class MainForm : Form
         };
         Controls.Add(_driverBtn);
 
-        _driverPanel.SetBounds(440, 466, 250, 36);
+        _driverPanel.SetBounds(440, 496, 250, 36);
         _driverPanel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
         _driverPanel.Visible = false;
         _serdrvBtn.SetBounds(0, 0, 122, 30);
@@ -183,7 +202,7 @@ internal sealed class MainForm : Form
 
         _packages.AddRange(PackageScanner.Scan(BaseDir));
         foreach (var p in _packages)
-            _pkgBox.Items.Add(p.DisplayName);
+            _pkgBox.Items.Add(p.IsDiagnostic ? "[诊断] " + p.DisplayName : p.DisplayName);
 
         if (_packages.Count == 0)
         {
@@ -210,6 +229,9 @@ internal sealed class MainForm : Form
         if (pkg == null)
             return;
 
+        FillKeyOptions(pkg);
+        if (pkg.IsDiagnostic)
+            AppendLog($"[包] {pkg.DisplayName} 为诊断包（非量产固件），确认目标板后再烧");
         SetStatus($"已选 {pkg.DisplayName}，MD5 自检中…");
         if (!File.Exists(pkg.Md5SumsPath))
         {
@@ -239,7 +261,10 @@ internal sealed class MainForm : Form
         else
         {
             AppendLog($"[MD5] {pkg.DisplayName} 自检通过");
-            SetStatus($"就绪：{pkg.DisplayName}（放入板子 USB，点【开始烧录】；板上已在线则先拔下快插一次触发下载态）");
+            SetStatus(
+                (pkg.IsDiagnostic ? "非量产固件（诊断包）——" : "") +
+                $"就绪：{pkg.DisplayName}（放入板子 USB，点【开始烧录】；板上已在线则先拔下快插一次触发下载态）",
+                warn: pkg.IsDiagnostic);
         }
         UpdateFlashButton();
     }
@@ -249,6 +274,25 @@ internal sealed class MainForm : Form
         if (_flashing)
             return;
         _flashBtn.Enabled = Selected != null && _md5 is { Ok: true };
+    }
+
+    private const string NoKeyItem = "（不使用 Key）";
+
+    /// <summary>
+    /// 04 号 §一 P0：key 随包走——列 flash\*.key 供下拉；默认跟随文件存在性（单 key 自动带上，
+    /// 官方板/无 key 包自动停在「不使用」）；换包时尽量保留上次手选的 key。
+    /// </summary>
+    private void FillKeyOptions(FlashPackage pkg)
+    {
+        var previous = _keyBox.SelectedIndex > 0 ? _keyBox.SelectedItem as string : null;
+        _keyBox.Items.Clear();
+        _keyBox.Items.Add(NoKeyItem);
+        var keys = KeySelector.Enumerate(pkg.FlashDir);
+        foreach (var key in keys)
+            _keyBox.Items.Add(key);
+        _keyBox.SelectedIndex = previous != null && keys.Contains(previous)
+            ? keys.IndexOf(previous) + 1
+            : keys.Count > 0 ? 1 : 0;
     }
 
     // ================= 烧录 =================
@@ -266,12 +310,13 @@ internal sealed class MainForm : Form
         _nextHintLabel.Text = "";
         _logToggle.Checked = true;
         AppendLog("");
+        var keyFile = _keyBox.SelectedIndex > 0 ? _keyBox.SelectedItem as string : null;
         AppendLog($"==== 开始烧录 {pkg.DisplayName} ====");
-        AppendLog($"run: isd_download.exe {FlashRunner.Arguments}");
+        AppendLog($"run: isd_download.exe {FlashRunner.BuildArguments(keyFile)}");
         AppendLog($"workdir: {pkg.FlashDir}");
         SetStatus("烧录中（30-60s）… 未插板则显示等待板子插入/快插，勿断电勿拔板");
 
-        var result = await _runner.RunAsync(pkg.FlashDir,
+        var result = await _runner.RunAsync(pkg.FlashDir, keyFile,
             line => BeginInvoke(new Action(() => AppendLog(line))), _cts.Token).ConfigureAwait(true);
 
         _flashing = false;
@@ -316,6 +361,7 @@ internal sealed class MainForm : Form
     private void SetBusy(bool busy)
     {
         _pkgBox.Enabled = !busy;
+        _keyBox.Enabled = !busy;
         _refreshBtn.Enabled = !busy;
         _driverBtn.Enabled = !busy;
         _flashBtn.Visible = !busy;

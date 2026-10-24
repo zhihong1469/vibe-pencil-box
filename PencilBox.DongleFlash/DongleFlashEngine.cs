@@ -9,8 +9,8 @@ using System.Text.RegularExpressions;
 
 namespace PencilBox.DongleFlash;
 
-/// <summary>烧录包 = `一键烧录脚本*` 文件夹（固件按 git 提交号命名，动态扫描不写死清单）。</summary>
-public sealed record FlashPackage(string Directory, string FolderName, string DisplayName)
+/// <summary>烧录包 = `R1D-*`（量产）/ `DIAG-*`（现场诊断，04 号 §二）/ 旧名 `一键烧录脚本*` 文件夹。</summary>
+public sealed record FlashPackage(string Directory, string FolderName, string DisplayName, bool IsDiagnostic = false)
 {
     public string FlashDir => Path.Combine(Directory, "flash");
     public string BatPath => Path.Combine(Directory, "一键烧录.bat");
@@ -20,8 +20,9 @@ public sealed record FlashPackage(string Directory, string FolderName, string Di
 }
 
 /// <summary>
-/// 动态扫描包根目录下的固件包（01 号 P0-1）：正规命名 `R1D-&lt;固件版本&gt;-&lt;git短哈希&gt;`
-/// （10-23 指挥官定版，如 `R1D-v1.0.2-rc.3-66247f6`）；旧名 `一键烧录脚本*` 过渡期仍识别。
+/// 动态扫描包根目录下的固件包（01 号 P0-1）：量产包正规命名 `R1D-&lt;固件版本&gt;-&lt;git短哈希&gt;`
+/// （10-23 指挥官定版，如 `R1D-v1.0.2-rc.3-66247f6`）；现场诊断包前缀 `DIAG-*`（04 号 §二，
+/// 排序沉底、UI 加 [诊断] 标记）；旧名 `一键烧录脚本*` 过渡期仍识别。
 /// 入列门槛 = `flash\isd_download.exe` 与 `isd_config.ini` 在位；显示名优先解析 bat 横幅
 /// （如 `v1.0.2-rc.3 (66247f6)`），横幅缺失回退文件夹名。
 /// </summary>
@@ -34,9 +35,11 @@ public static class PackageScanner
             return list;
 
         var dirs = Directory.GetDirectories(rootDir, "R1D-*")
+            .Concat(Directory.GetDirectories(rootDir, "DIAG-*"))
             .Concat(Directory.GetDirectories(rootDir, "一键烧录脚本*"))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(d => d, StringComparer.OrdinalIgnoreCase);
+            .OrderBy(d => IsDiagnosticFolder(d) ? 1 : 0)   // 量产在前，诊断包沉底
+            .ThenBy(d => d, StringComparer.OrdinalIgnoreCase);
         foreach (var dir in dirs)
         {
             var flash = Path.Combine(dir, "flash");
@@ -49,11 +52,15 @@ public static class PackageScanner
             if (File.Exists(bat))
                 banner = BatBanner.Parse(File.ReadAllText(bat));   // bat 纯 ASCII（其头注自述），默认解码即可
 
-            list.Add(new FlashPackage(dir, Path.GetFileName(dir), banner ?? Path.GetFileName(dir)));
+            list.Add(new FlashPackage(dir, Path.GetFileName(dir), banner ?? Path.GetFileName(dir),
+                IsDiagnostic: IsDiagnosticFolder(dir)));
         }
 
         return list;
     }
+
+    private static bool IsDiagnosticFolder(string path) =>
+        Path.GetFileName(path).StartsWith("DIAG-", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>bat 横幅解析：`rem  Firmware : v1.0.1 (git 6a2fdc8), packaged ...` → `v1.0.1 (6a2fdc8)`。</summary>
@@ -80,6 +87,23 @@ public static class PassRule
 
     public static bool IsPass(int exitCode, string output) =>
         exitCode == 0 && output.IndexOf(WriteEvidence, StringComparison.Ordinal) >= 0;
+}
+
+/// <summary>
+/// 加密 Key 候选（04 号 §一 P0）：key 跟代理商芯片走（换代理=换 key 文件；官方板/未加密板
+/// 整段不需要），随包枚举 `flash\*.key` 供 UI 下拉；无 key 包返回空 = 命令行整段省略 `-key`。
+/// </summary>
+public static class KeySelector
+{
+    public static List<string> Enumerate(string flashDir)
+    {
+        if (!Directory.Exists(flashDir))
+            return new List<string>();
+        return Directory.GetFiles(flashDir, "*.key")
+            .Select(Path.GetFileName)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 }
 
 public sealed record Md5Report(bool Ok, IReadOnlyList<string> Problems);
@@ -160,28 +184,33 @@ public sealed record FlashRunResult(int ExitCode, string Output, TimeSpan Durati
 }
 
 /// <summary>
-/// 烧录编排（01 号 §2.2 命令行**一字不改**照抄）：在所选包 `flash\` 目录内调 isd_download，
-/// 烧录动作全权交给工具本身。硬约束逐条落实：WorkingDirectory=flash（2.3-1，工具要在当前目录找
-/// bd19loader.bin 等 12 个文件，禁拷临时目录）；GBK 解码（2.3-3）；参数不得修改（2.3-4，
-/// `-format all` 量产全片擦 + `-reboot 2500` 烧完自动复位）；取消 = Kill 进程（等待板子
-/// `-wait 300` 窗内可取消）。
+/// 烧录编排（01 号 §2.2 已验证命令行，**除 key 段外一字不改**）：在所选包 `flash\` 目录内调
+/// isd_download，烧录动作全权交给工具本身。硬约束逐条落实：WorkingDirectory=flash（2.3-1，
+/// 工具要在当前目录找 bd19loader.bin 等 12 个文件，禁拷临时目录）；GBK 解码（2.3-3）；参数
+/// 不得修改（2.3-4，`-format all` 量产全片擦 + `-reboot 2500` 烧完自动复位；key 段例外见
+/// 04 号 §一——随包/下拉可变）；取消 = Kill 进程（等待板子 `-wait 300` 窗内可取消）。
 /// </summary>
 public sealed class FlashRunner
 {
-    public const string Arguments =
-        "isd_config.ini -tonorflash -dev bd19 -boot 0x2000 -div8 -wait 300 " +
-        "-key AC69.key -uboot uboot.boot -app app.bin cfg_tool.bin -res p11_code.bin " +
-        "-uboot_compress -format all -reboot 2500";
+    /// <summary>拼命令行：key 段随包可变（04 号 §一），传 null/空 = 官方板/未加密板，整段省略。</summary>
+    public static string BuildArguments(string? keyFile)
+    {
+        var key = string.IsNullOrEmpty(keyFile) ? "" : $"-key {keyFile} ";
+        return "isd_config.ini -tonorflash -dev bd19 -boot 0x2000 -div8 -wait 300 " +
+               key + "-uboot uboot.boot -app app.bin cfg_tool.bin -res p11_code.bin " +
+               "-uboot_compress -format all -reboot 2500";
+    }
 
     private static readonly Encoding Gbk = Encoding.GetEncoding(936);
 
+    /// <param name="keyFile">包内 key 文件名（相对 flash\）；null = 不带 -key 段。</param>
     /// <param name="onLine">输出行回调（线程池线程上触发，UI 自行投递）。</param>
-    public async Task<FlashRunResult> RunAsync(string flashDir, Action<string>? onLine, CancellationToken ct)
+    public async Task<FlashRunResult> RunAsync(string flashDir, string? keyFile, Action<string>? onLine, CancellationToken ct)
     {
         var psi = new ProcessStartInfo
         {
             FileName = Path.Combine(flashDir, "isd_download.exe"),
-            Arguments = Arguments,
+            Arguments = BuildArguments(keyFile),
             WorkingDirectory = flashDir,
             UseShellExecute = false,
             CreateNoWindow = true,
