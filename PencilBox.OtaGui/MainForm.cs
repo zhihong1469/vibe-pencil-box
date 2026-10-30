@@ -195,6 +195,7 @@ internal sealed class MainForm : Form
             HideSelection = false,
             UseCompatibleStateImageBehavior = false,
             ShowItemToolTips = true,
+            OwnerDraw = true,   // 不开此属性 DrawSubItem 不触发（探针 Mini7 有、本表漏——按钮列空格子案根因）
         };
         _list.Columns.Add("设备（序列号）", 200).Name = "sn";
         _list.Columns.Add("位置（端口片段）", 200).Name = "loc";
