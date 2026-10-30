@@ -181,7 +181,7 @@ internal sealed class MainForm : Form
         _list.Columns.Add("位置（端口片段）", 200).Name = "loc";
         _list.Columns.Add("通道数", 70).Name = "ch";
         _list.Columns.Add("当前版本", 100).Name = "ver";
-        _list.Columns.Add("Hash", 100).Name = "hash";
+        _list.Columns.Add("Hash（0x04 全 40 位）", 300).Name = "hash";
         _list.Columns.Add("状态", 300).Name = "status";
 
         // ---- 日志区 ----
@@ -336,7 +336,7 @@ internal sealed class MainForm : Form
                 }
                 else
                 {
-                    Cell(item, "hash").Text = hash.Length <= 8 ? hash : hash[..8] + "…";
+                    Cell(item, "hash").Text = hash;                            // 全 40 位直出（10-30 指挥官要求显示完整，列宽已随行加宽）
                     item.ToolTipText = $"Git hash（0x04 全 40 位）：{hash}";   // 行级悬停（net48 无子项级 ToolTip）
                     LogLine($"SN {Show(dev.SerialNumber)} Git hash：{hash}");
                 }
