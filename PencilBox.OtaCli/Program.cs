@@ -56,6 +56,7 @@ internal static class Program
                 "scan" or "list" => ScanAsync(rest.Contains("--raw")).GetAwaiter().GetResult(),
                 "identify" or "id" => IdentifyAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "hash" => HashAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
+                "repair" or "fix" => RepairAsync().GetAwaiter().GetResult(),
                 "ota" or "upgrade" => OtaAsync(rest).GetAwaiter().GetResult(),
                 "help" or "--help" or "-h" => Usage(),
                 _ => UnknownCommand(action)
@@ -150,6 +151,17 @@ internal static class Program
         }
         Out.Ok($"Git hash：{hash}");
         return 0;
+    }
+
+    // ================= repair =================
+
+    /// <summary>异常台自动重置（pnputil 软件拔插，治 Code=10 之类启动失败；需管理员权限，失败给指引）。退出码：0=无异常或全部收敛，1=仍有异常。</summary>
+    private static async Task<int> RepairAsync()
+    {
+        var (lines, _, problems) = await Engine.RepairProblemDevicesAsync();
+        foreach (var line in lines)
+            Out.Info(line);
+        return problems == 0 ? 0 : 1;
     }
 
     // ================= identify =================
@@ -504,6 +516,7 @@ internal static class Program
               ota-tool scan --raw                            末尾附 USB 设备层全量名单（含异常台；尾段=USB 口路径标识）
               ota-tool identify [--pen] [--serial SN|位置]   读版本（0x03；缺省读基站，--pen 经基站透读键盘）
               ota-tool hash [--serial SN|位置]               读 Git hash（0x04，仅基站 USB 直达；量产固件裁剪时无应答属预期）
+              ota-tool repair                               异常台自动重置（软件拔插，治"无法启动(Code10)"；需管理员权限，失败给指引）
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
             ota 选项：

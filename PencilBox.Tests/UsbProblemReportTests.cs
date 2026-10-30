@@ -115,4 +115,27 @@ public class UsbProblemReportTests
         Assert.Equal("未装驱动(Code28)", UsbProblemReport.CodeText(28));
         Assert.Equal("异常(Code43)", UsbProblemReport.CodeText(43));
     }
+
+    [Fact]
+    public void RestartTargets_OnlyBadCompositeRoots_SortedByCode()
+    {
+        var targets = UsbProblemReport.RestartTargets(new[]
+        {
+            Root("OK-1", 0),
+            Root("BAD-28", 28),
+            Root("BAD-10-A", 10),
+            Root("BAD-10-B", 10),
+            Child("MI_02", "8&4113003&0&0002", 28),   // 子接口异常不单独重置（重置的是整台）
+        });
+
+        Assert.Equal(3, targets.Count);
+        Assert.Equal(new[] { "BAD-10-A", "BAD-10-B", "BAD-28" },
+            targets.Select(t => t.DeviceId.Split('\\')[2]).ToArray());   // 码升序，无法启动在前
+    }
+
+    [Fact]
+    public void RestartTargets_AllHealthy_Empty()
+    {
+        Assert.Empty(UsbProblemReport.RestartTargets(new[] { Root("OK-1", 0), Child("MI_00", "8&x&0&0000", 0) }));
+    }
 }

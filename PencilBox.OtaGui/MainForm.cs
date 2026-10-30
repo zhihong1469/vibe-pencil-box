@@ -26,6 +26,7 @@ internal sealed class MainForm : Form
     private readonly Button _browseBtn;
     private readonly Button _refreshBtn;
     private readonly Button _hashBtn;
+    private readonly Button _repairBtn;
     private readonly Button _upgradeAllBtn;
     private readonly Button _upgradeCheckedBtn;
     private readonly Button _cancelBtn;
@@ -49,8 +50,9 @@ internal sealed class MainForm : Form
         Text = "多支同升 · USB 升级小工具（PencilBox 裁剪版）";
         Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new System.Drawing.Size(860, 560);
-        Size = new System.Drawing.Size(980, 680);
+        // 最小宽=全列和不裁切（sn200+loc200+ch70+ver100+hash300+status300≈1170+滚动条余量）；默认再大些留日志区
+        MinimumSize = new System.Drawing.Size(1210, 560);
+        Size = new System.Drawing.Size(1280, 700);
 
         _ui = new Progress<OtaToolUpdate>(OnUpdate);
         _engine = new OtaToolEngine(_ui);
@@ -80,6 +82,9 @@ internal sealed class MainForm : Form
         _hashBtn = new Button { Text = "读Hash", AutoSize = true };
         _hashBtn.Click += (_, _) => _ = ReadHashColumnAsync();
         fwRow.Controls.Add(_hashBtn);
+        _repairBtn = new Button { Text = "重置异常台", AutoSize = true };
+        _repairBtn.Click += (_, _) => _ = RepairProblemDevicesAsync();
+        fwRow.Controls.Add(_repairBtn);
 
         // 升级端切换（指挥官 10-21 晚：手动选择，不靠包名推断）——切换即按新端重读版本列
         fwRow.Controls.Add(new Label
@@ -328,17 +333,25 @@ internal sealed class MainForm : Form
             {
                 var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
                 Cell(item, "hash").Text = "读取中…";
-                var (hash, err) = await _engine.ReadHashAsync(dev);
-                if (hash == null)
+                try
                 {
-                    Cell(item, "hash").Text = "—";
-                    LogLine($"SN {Show(dev.SerialNumber)} 读hash失败：{err}");
+                    var (hash, err) = await _engine.ReadHashAsync(dev);
+                    if (hash == null)
+                    {
+                        Cell(item, "hash").Text = "—";
+                        LogLine($"SN {Show(dev.SerialNumber)} 读hash失败：{err}");
+                    }
+                    else
+                    {
+                        Cell(item, "hash").Text = hash;                            // 全 40 位直出（10-30 指挥官要求显示完整，列宽已随行加宽）
+                        item.ToolTipText = $"Git hash（0x04 全 40 位）：{hash}";   // 行级悬停（net48 无子项级 ToolTip）
+                        LogLine($"SN {Show(dev.SerialNumber)} Git hash：{hash}");
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    Cell(item, "hash").Text = hash;                            // 全 40 位直出（10-30 指挥官要求显示完整，列宽已随行加宽）
-                    item.ToolTipText = $"Git hash（0x04 全 40 位）：{hash}";   // 行级悬停（net48 无子项级 ToolTip）
-                    LogLine($"SN {Show(dev.SerialNumber)} Git hash：{hash}");
+                    Cell(item, "hash").Text = "读取异常";   // 逐台兜底：一台通道异常不拖死其余台（余下照读）
+                    LogLine($"SN {Show(dev.SerialNumber)} 读hash异常：{ex.Message}");
                 }
             }
             LogLine("读hash 完成——对包口径：与固件包 git 短哈希前缀对拍");
@@ -354,6 +367,35 @@ internal sealed class MainForm : Form
     {
         Cell(item, "hash").Text = "—";
         item.ToolTipText = null;
+    }
+
+    /// <summary>
+    /// 异常台自动重置（软件拔插，治"无法启动(Code10)"）：pnputil 逐台重启 + 收敛后重扫；
+    /// 重置需管理员权限——拒绝访问时日志给指引（提权运行或手动拔插）。
+    /// </summary>
+    private async Task RepairProblemDevicesAsync()
+    {
+        if (_busy)
+            return;
+        SetBusy(true);
+        _phaseLabel.Text = "重置异常台…";
+        try
+        {
+            var (lines, _, problems) = await _engine.RepairProblemDevicesAsync();
+            foreach (var line in lines)
+                LogLine(line);
+            _phaseLabel.Text = problems == 0 ? "重置完成——USB 层无异常台" : $"重置完成——仍有 {problems} 台异常（见日志）";
+        }
+        catch (Exception ex)
+        {
+            LogLine($"重置异常台失败：{ex.Message}");
+            _phaseLabel.Text = "重置失败（见日志）";
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+        await RefreshDevicesAsync();
     }
 
     // ================= 固件选择 =================
@@ -647,6 +689,7 @@ internal sealed class MainForm : Form
         _browseBtn.Enabled = !busy;
         _refreshBtn.Enabled = !busy;
         _hashBtn.Enabled = !busy;
+        _repairBtn.Enabled = !busy;
         _upgradeAllBtn.Enabled = !busy;
         _upgradeCheckedBtn.Enabled = !busy;
         _cancelBtn.Enabled = busy;

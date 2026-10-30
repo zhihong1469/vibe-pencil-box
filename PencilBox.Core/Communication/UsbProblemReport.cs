@@ -23,6 +23,16 @@ public static class UsbProblemReport
     public static bool IsCompositeChild(string deviceId) =>
         deviceId.IndexOf("&MI_", StringComparison.OrdinalIgnoreCase) >= 0;
 
+    /// <summary>
+    /// 可重置目标=异常的复合根台（Code≠0）：子接口异常不单独重置（重置的是整台），
+    /// 排序异常码升序（无法启动在前）。pnputil 重启设备=软件拔插，Code=10 这类启动失败常可借此复活。
+    /// </summary>
+    public static IReadOnlyList<UsbPnpInstance> RestartTargets(IReadOnlyList<UsbPnpInstance> instances) =>
+        instances.Where(i => !IsCompositeChild(i.DeviceId) && i.ProblemCode != 0)
+            .OrderBy(i => i.ProblemCode)
+            .ThenBy(i => i.DeviceId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
     /// <summary>配置结果码 → 中文短句（未知码原样露出，不猜）。</summary>
     public static string CodeText(int code) => code switch
     {

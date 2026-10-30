@@ -168,6 +168,40 @@ public sealed class OtaToolEngine
     }
 
     /// <summary>
+    /// 异常台自动重置（软件拔插，治 Code=10 之类启动失败）：pnputil 逐台重启异常复合根，
+    /// 收敛后重新盘点复核。行结果逐台回传；**重置需管理员权限**——拒绝访问时行内带指引（提权运行或手动拔插）。
+    /// 返回（每台结果行, 重置后台数, 重置后异常台数）。
+    /// </summary>
+    public async Task<(IReadOnlyList<string> Lines, int Roots, int Problems)> RepairProblemDevicesAsync()
+    {
+        var before = await Task.Run(UsbProblemProbe.EnumerateOurs);
+        var targets = UsbProblemReport.RestartTargets(before);
+        if (targets.Count == 0)
+            return (new[] { "USB 层无异常台——无需重置" }, 0, 0);
+
+        var lines = new List<string>();
+        foreach (var t in targets)
+        {
+            var (ok, output) = await UsbDeviceRestarter.RestartAsync(t.DeviceId);
+            var line = $"{(ok ? "[已发重置]" : "[重置失败]")} {t.DeviceId}（{UsbProblemReport.CodeText(t.ProblemCode)}）";
+            if (!ok)
+            {
+                var first = output.Split('\n').FirstOrDefault()?.Trim() ?? "";
+                line += $"：{first}——重置需管理员权限：以管理员身份运行本工具，或直接拔下重插/换口";
+            }
+            lines.Add(line);
+        }
+
+        // 复核：重启在后台重枚举，稍候再盘点（设备短暂消失属正常，缺口由"拔插后刷新"口径兜住）
+        await Task.Delay(2500);
+        var after = await Task.Run(UsbProblemProbe.EnumerateOurs);
+        var afterRoots = after.Count(i => !UsbProblemReport.IsCompositeChild(i.DeviceId));
+        var afterBad = after.Count(i => !UsbProblemReport.IsCompositeChild(i.DeviceId) && i.ProblemCode != 0);
+        lines.Add($"重置后盘点：本产品 {afterRoots} 台（{afterBad} 台异常）——仍有异常时拔下重插或换口后再刷新");
+        return (lines, afterRoots, afterBad);
+    }
+
+    /// <summary>
     /// 0x04 读 Git hash（**仅基站 USB 直达轨**——协议门控：无线/BLE 轨整轨不开放，0x04 定稿 §8-1；
     /// 键盘轨由调用方拒绝）。量产构建可裁 0x04（INTERNAL_DEBUG_CMD_ENABLE 关）⇒ 无应答属预期非故障。
     /// </summary>
