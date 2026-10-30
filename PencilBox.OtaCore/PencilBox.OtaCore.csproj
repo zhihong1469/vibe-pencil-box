@@ -40,6 +40,8 @@
     <Compile Include="..\PencilBox.Core\Protocol\Company\TuningParamTable.cs" Link="Subset\TuningParamTable.cs" />
     <!-- 会话层 -->
     <Compile Include="..\PencilBox.Core\Fsm\CompanyOtaFsm.cs" Link="Subset\CompanyOtaFsm.cs" />
+    <Compile Include="..\PencilBox.Core\Fsm\CompanyPairFsm.cs" Link="Subset\CompanyPairFsm.cs" />
+    <Compile Include="..\PencilBox.Core\Ble\MacAddress.cs" Link="Subset\MacAddress.cs" />
     <Compile Include="..\PencilBox.Core\Fsm\OtaSessionModels.cs" Link="Subset\OtaSessionModels.cs" />
     <Compile Include="..\PencilBox.Core\Fsm\CommandRequester.cs" Link="Subset\CommandRequester.cs" />
     <Compile Include="..\PencilBox.Core\Fsm\IClock.cs" Link="Subset\IClock.cs" />

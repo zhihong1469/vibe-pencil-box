@@ -57,6 +57,7 @@ internal static class Program
                 "identify" or "id" => IdentifyAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "hash" => HashAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "repair" or "fix" => RepairAsync().GetAwaiter().GetResult(),
+                "pair" => PairAsync(GetOption(rest, "--serial")).GetAwaiter().GetResult(),
                 "ota" or "upgrade" => OtaAsync(rest).GetAwaiter().GetResult(),
                 "help" or "--help" or "-h" => Usage(),
                 _ => UnknownCommand(action)
@@ -162,6 +163,33 @@ internal static class Program
         foreach (var line in lines)
             Out.Info(line);
         return problems == 0 ? 0 : 1;
+    }
+
+    // ================= pair =================
+
+    /// <summary>用户自主配对（0x52 手动逐台）：发指令后人工让键盘进配对（上电按住 K1 约 2 秒），最长等 60s 收结果帧（自带 MAC+名称）。退出码：0=成功，1=失败。</summary>
+    private static async Task<int> PairAsync(string? serial)
+    {
+        var candidates = await Engine.EnumerateCandidatesAsync();
+        var selection = HidDeviceSelection.Select(candidates, serial);
+        if (selection.Error != null || selection.Selected == null)
+        {
+            Out.Error(selection.Error ?? "设备选择失败");
+            PrintCandidates(selection.Candidates);
+            return selection.Candidates.Count > 1 && string.IsNullOrWhiteSpace(serial) ? 2 : 1;
+        }
+
+        var device = selection.Selected;
+        Out.Info($"发 0x52 进配对 ← {device.InterfaceLabel}（SN {Show(device.SerialNumber)}）");
+        Out.Info("请人工让目标键盘进入配对：键盘上电时按住 K1 约 2 秒（LED 三色序列=配对视窗已开，60s）…");
+        var (ok, mac, name, msg) = await Engine.PairEnterAsync(device, Cts.Token);
+        if (!ok)
+        {
+            Out.Error($"配对失败：{msg}");
+            return 1;
+        }
+        Out.Ok($"配对成功：MAC {mac ?? "—"}    名称 \"{name ?? "—"}\"");
+        return 0;
     }
 
     // ================= identify =================
@@ -517,6 +545,7 @@ internal static class Program
               ota-tool identify [--pen] [--serial SN|位置]   读版本（0x03；缺省读基站，--pen 经基站透读键盘）
               ota-tool hash [--serial SN|位置]               读 Git hash（0x04，仅基站 USB 直达；量产固件裁剪时无应答属预期）
               ota-tool repair                               异常台自动重置（软件拔插，治"无法启动(Code10)"；需管理员权限，失败给指引）
+              ota-tool pair [--serial SN|位置]              用户自主配对（0x52 手动逐台）：发指令→人工让键盘进配对（上电按住 K1 约 2s）→等结果回 MAC
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
             ota 选项：

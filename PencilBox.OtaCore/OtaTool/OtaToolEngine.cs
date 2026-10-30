@@ -4,6 +4,7 @@
 //   See LICENSE file in the project root for full license information.
 // </copyright>
 using System.Diagnostics;
+using PencilBox.Core.Ble;
 using PencilBox.Core.Communication;
 using PencilBox.Core.Fsm;
 using PencilBox.Core.Protocol;
@@ -242,6 +243,34 @@ public sealed class OtaToolEngine
         var (info, err) = await ReadVersionOpenAsync(target, cancellationToken);
         CloseChannel();
         return (info, err);
+    }
+
+    /// <summary>
+    /// 用户自主配对（0x52，**手动逐台**——指挥官 10-30 定版：人工把键盘进配对，PC 只发指令并等结果）：
+    /// 命基站进配对窗扫描绑定，收 01 受理后最长等 PairingWindowMs（缺省 60s）内的 02 成功帧
+    /// （自带键盘 MAC+名称）。仅基站 USB 直达轨；期间通道独占（串行铁律）。
+    /// 成功时 MAC=显示序（AA:BB:…）。
+    /// </summary>
+    public async Task<(bool Success, string? Mac, string? Name, string Message)> PairEnterAsync(
+        HidDeviceInfo device,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await OpenChannelAsync(device))
+            return (false, null, null, "连接 USB 命令通道失败");
+        try
+        {
+            var fsm = new CompanyPairFsm(_codec, _clock, _config);
+            fsm.Transitioned += (_, t) => Say("INFO", $"配对会话：{t.From} → {t.To}（{t.Reason}）");
+            var result = await fsm.EnterPairingAsync(_channel!, cancellationToken);
+            return (result.Success,
+                    result.Paired == null ? null : MacAddress.FormatDisplay(result.Paired.MacDisplay6),
+                    result.Paired?.BtName,
+                    result.Message);
+        }
+        finally
+        {
+            CloseChannel();
+        }
     }
 
     // ================= 固件包装载 =================

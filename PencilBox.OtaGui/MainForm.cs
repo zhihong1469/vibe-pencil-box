@@ -27,6 +27,10 @@ internal sealed class MainForm : Form
     private readonly Button _refreshBtn;
     private readonly Button _hashBtn;
     private readonly Button _repairBtn;
+    private readonly Button _pairBtn;
+    private readonly System.Diagnostics.Stopwatch _pairWatch = new();
+    private System.Windows.Forms.Timer? _pairTimer;
+    private ListViewItem? _pairItem;
     private readonly Button _upgradeAllBtn;
     private readonly Button _upgradeCheckedBtn;
     private readonly Button _cancelBtn;
@@ -85,6 +89,18 @@ internal sealed class MainForm : Form
         _repairBtn = new Button { Text = "重置异常台", AutoSize = true };
         _repairBtn.Click += (_, _) => _ = RepairProblemDevicesAsync();
         fwRow.Controls.Add(_repairBtn);
+        // 手动逐台配对（0x52，指挥官 10-30 定版）：对选中行发指令，人工让键盘进配对，PC 等结果帧
+        _pairBtn = new Button { Text = "配对(选中台)", AutoSize = true };
+        _pairBtn.Click += (_, _) => _ = PairSelectedAsync();
+        fwRow.Controls.Add(_pairBtn);
+        _pairTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _pairTimer.Tick += (_, _) =>
+        {
+            if (_pairItem == null)
+                return;
+            var sec = (int)_pairWatch.Elapsed.TotalSeconds;
+            Cell(_pairItem, "status").Text = $"配对中…已等 {sec}s/60s——请让键盘进配对（上电按住 K1 约 2 秒）";
+        };
 
         // 升级端切换（指挥官 10-21 晚：手动选择，不靠包名推断）——切换即按新端重读版本列
         fwRow.Controls.Add(new Label
@@ -398,6 +414,60 @@ internal sealed class MainForm : Form
         await RefreshDevicesAsync();
     }
 
+    /// <summary>
+    /// 手动逐台配对（0x52，指挥官 10-30 定版）：对选中行发指令 → 人工让键盘进配对（上电按住 K1 约 2 秒）
+    /// → 等结果帧（最长 60s，状态列秒表）→ 行状态显示绑定 MAC+名称。一次只配一台（SetBusy 全局串行）。
+    /// </summary>
+    private async Task PairSelectedAsync()
+    {
+        if (_busy)
+            return;
+        if (_list.SelectedItems.Count != 1)
+        {
+            LogLine("配对：请先在列表中选中一台基站（单击该行高亮）——配对逐台手动进行");
+            return;
+        }
+        var item = _list.SelectedItems[0];
+        var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
+
+        SetBusy(true);
+        _pairItem = item;
+        _pairWatch.Restart();
+        _pairTimer!.Start();
+        Cell(item, "status").Text = "配对中…请让键盘进配对（上电按住 K1 约 2 秒）";
+        _phaseLabel.Text = $"配对中：位置 {dev.LocationToken}";
+        LogLine($"发 0x52 进配对 ← 位置 {dev.LocationToken}——请人工让目标键盘进配对（上电按住 K1 约 2 秒，LED 三色序列=配对视窗已开，60s）…");
+        try
+        {
+            var (ok, mac, name, msg) = await _engine.PairEnterAsync(dev);
+            if (ok)
+            {
+                Cell(item, "status").Text = $"已绑定 MAC {mac}    名称 \"{name}\"";
+                LogLine($"配对成功（位置 {dev.LocationToken}）：MAC {mac}    名称 \"{name}\"");
+                _phaseLabel.Text = "配对成功";
+            }
+            else
+            {
+                Cell(item, "status").Text = "配对失败";
+                LogLine($"配对失败（位置 {dev.LocationToken}）：{msg}");
+                _phaseLabel.Text = "配对失败（见日志）";
+            }
+        }
+        catch (Exception ex)
+        {
+            Cell(item, "status").Text = "配对异常";
+            LogLine($"配对异常（位置 {dev.LocationToken}）：{ex.Message}");
+            _phaseLabel.Text = "配对异常（见日志）";
+        }
+        finally
+        {
+            _pairTimer!.Stop();
+            _pairWatch.Reset();
+            _pairItem = null;
+            SetBusy(false);
+        }
+    }
+
     // ================= 固件选择 =================
 
     private void PickFirmware()
@@ -690,6 +760,7 @@ internal sealed class MainForm : Form
         _refreshBtn.Enabled = !busy;
         _hashBtn.Enabled = !busy;
         _repairBtn.Enabled = !busy;
+        _pairBtn.Enabled = !busy;
         _upgradeAllBtn.Enabled = !busy;
         _upgradeCheckedBtn.Enabled = !busy;
         _cancelBtn.Enabled = busy;
