@@ -163,6 +163,24 @@ public static class HidDeviceSelection
         return groups;
     }
 
+    /// <summary>
+    /// 扫描诊断行（10-24 指挥官现场：插 6 台只显 4 台）。扫描/分组全程无数量上限，差额只能出在
+    /// HID 枚举/过滤层——把漏斗摊开：HID 总实例 → 本产品 VID/PID → 0xFF02 命令通道，
+    /// 缺口落在哪一层、现场怎么办，一行说清（GUI 刷新与 CLI scan 共用）。
+    /// </summary>
+    public static string ScanDiagnosticLine(IReadOnlyList<HidDeviceInfo> devices)
+    {
+        var ours = devices.Where(d => ProtocolConstants.IsTargetVidPid(d.VendorId, d.ProductId)).ToList();
+        var cmd = ours.Where(d => d.IsCommandChannel).ToList();
+        var head = $"枚举诊断：HID 实例 {devices.Count} 个 → 本产品 VID/PID {ours.Count} 个 → 0xFF02 命令通道 {cmd.Count} 个";
+        if (ours.Count == 0)
+            return head + "（未发现本产品设备——确认接收器已插入且此电脑能识别）";
+        return ours.Count == cmd.Count
+            ? head
+            : head + $"，另 {ours.Count - cmd.Count} 个本产品实例未开命令通道" +
+              "（键盘等输入集合本就不开，属正常；整台不在列表=该台命令通道未枚举——拔下重插或重装驱动后再刷新）";
+    }
+
     /// <summary>候选项单行描述（序列号 + 路径片段，同号多台时靠后者区分）。</summary>
     public static string Describe(HidDeviceInfo d) =>
         $"SN {Show(d.SerialNumber)}";

@@ -55,6 +55,7 @@ internal static class Program
             {
                 "scan" or "list" => ScanAsync().GetAwaiter().GetResult(),
                 "identify" or "id" => IdentifyAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
+                "hash" => HashAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "ota" or "upgrade" => OtaAsync(rest).GetAwaiter().GetResult(),
                 "help" or "--help" or "-h" => Usage(),
                 _ => UnknownCommand(action)
@@ -71,6 +72,7 @@ internal static class Program
     private static async Task<int> ScanAsync()
     {
         var groups = await Engine.ScanGroupsAsync();
+        Out.Info(await Engine.ScanDiagnosticAsync());
         Out.Info($"在插可升级设备（命令通道）：{groups.Count} 台（按设备体系分组，一台一行）");
 
         // 每台并发读当前版本（GUI 刷新同款体验；4 路窗口防多台拖慢扫描）
@@ -106,6 +108,38 @@ internal static class Program
             foreach (var ch in g.Channels)
                 Out.Info($"        · {ch.InterfaceLabel}");
         }
+        return 0;
+    }
+
+    // ================= hash =================
+
+    /// <summary>0x04 读 Git hash（仅基站 USB 直达轨；量产固件裁 0x04 时无应答属预期）。</summary>
+    private static async Task<int> HashAsync(string? serial, bool pen)
+    {
+        if (pen)
+        {
+            Out.Error("0x04 读 hash 仅基站 USB 直达轨支持——键盘无线轨协议门控整轨不开放（0x04 定稿 §8-1）");
+            return 2;
+        }
+
+        var candidates = await Engine.EnumerateCandidatesAsync();
+        var selection = HidDeviceSelection.Select(candidates, serial);
+        if (selection.Error != null || selection.Selected == null)
+        {
+            Out.Error(selection.Error ?? "设备选择失败");
+            PrintCandidates(selection.Candidates);
+            return selection.Candidates.Count > 1 && string.IsNullOrWhiteSpace(serial) ? 2 : 1;
+        }
+
+        var device = selection.Selected;
+        Out.Info($"读 Git hash（0x04，基站 USB 直达）← {device.InterfaceLabel}（SN {Show(device.SerialNumber)}）");
+        var (hash, err) = await Engine.ReadHashAsync(device, Cts.Token);
+        if (hash == null)
+        {
+            Out.Error($"读 hash 失败：{err}");
+            return 1;
+        }
+        Out.Ok($"Git hash：{hash}");
         return 0;
     }
 
@@ -458,6 +492,7 @@ internal static class Program
             用法：
               ota-tool scan                                  列出在插的全部可升级设备（按设备体系分组，一台一行，附当前版本）
               ota-tool identify [--pen] [--serial SN|位置]   读版本（0x03；缺省读基站，--pen 经基站透读键盘）
+              ota-tool hash [--serial SN|位置]               读 Git hash（0x04，仅基站 USB 直达；量产固件裁剪时无应答属预期）
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
             ota 选项：

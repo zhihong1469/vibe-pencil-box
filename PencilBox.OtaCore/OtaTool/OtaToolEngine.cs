@@ -141,6 +141,43 @@ public sealed class OtaToolEngine
     public async Task<List<HidDeviceGroup>> ScanGroupsAsync() =>
         HidDeviceSelection.DeviceGroups(await EnumerateCandidatesAsync());
 
+    /// <summary>扫描诊断行（GUI 刷新/CLI scan 共用）：枚举漏斗摊开，台数对不上现场先看这行。</summary>
+    public async Task<string> ScanDiagnosticAsync()
+    {
+        _transport ??= new HidSharpTransport(TransportLog);
+        var devices = await _transport.EnumerateDevicesAsync();
+        return HidDeviceSelection.ScanDiagnosticLine(devices);
+    }
+
+    /// <summary>
+    /// 0x04 读 Git hash（**仅基站 USB 直达轨**——协议门控：无线/BLE 轨整轨不开放，0x04 定稿 §8-1；
+    /// 键盘轨由调用方拒绝）。量产构建可裁 0x04（INTERNAL_DEBUG_CMD_ENABLE 关）⇒ 无应答属预期非故障。
+    /// </summary>
+    public async Task<(string? Hash, string? Error)> ReadHashAsync(
+        HidDeviceInfo device,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await OpenChannelAsync(device))
+            return (null, "连接 USB 命令通道失败");
+        try
+        {
+            var requester = new CommandRequester(_clock, _config);
+            var resp = await requester.RequestAsync(_channel!, _codec.EncodeReadHash(0x00),
+                CompanyCmd.ReadHash, cancellationToken: cancellationToken);
+            if (resp == null)
+                return (null, "无应答（量产固件裁 0x04 属预期，或固件过旧无此命令）");
+            if (!_codec.TryParseHashResp(resp, out var status, out var hash))
+                return (null, "应答结构非法");
+            if (status != CompanyStatus.Ok)
+                return (null, $"STATUS=0x{status:X2}（设备自报不可用）");
+            return (hash, null);
+        }
+        finally
+        {
+            CloseChannel();
+        }
+    }
+
     /// <summary>读单台版本（开通道 → 0x03 → 关通道）。target=键盘时经基站透读笔端类别并过 G14 冒充闸。</summary>
     public async Task<(VersionInfo? Info, string? Error)> ReadVersionAsync(
         HidDeviceInfo device,

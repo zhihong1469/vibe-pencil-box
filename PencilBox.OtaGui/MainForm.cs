@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
     private readonly Label _phaseLabel;
     private readonly Button _browseBtn;
     private readonly Button _refreshBtn;
+    private readonly Button _hashBtn;
     private readonly Button _upgradeAllBtn;
     private readonly Button _upgradeCheckedBtn;
     private readonly Button _cancelBtn;
@@ -76,6 +77,9 @@ internal sealed class MainForm : Form
         _refreshBtn = new Button { Text = "刷新设备", AutoSize = true };
         _refreshBtn.Click += (_, _) => _ = RefreshDevicesAsync();
         fwRow.Controls.Add(_refreshBtn);
+        _hashBtn = new Button { Text = "读Hash", AutoSize = true };
+        _hashBtn.Click += (_, _) => _ = ReadHashColumnAsync();
+        fwRow.Controls.Add(_hashBtn);
 
         // 升级端切换（指挥官 10-21 晚：手动选择，不靠包名推断）——切换即按新端重读版本列
         fwRow.Controls.Add(new Label
@@ -134,7 +138,7 @@ internal sealed class MainForm : Form
         actionRow.Controls.Add(_concurrency);
         actionRow.Controls.Add(new Label
         {
-            Text = "（1=逐台；N=同时刷 N 台）",
+            Text = "（升级并行数：1=逐台；N=同时刷 N 台——不影响扫描到的设备数）",
             AutoSize = true,
             Margin = new Padding(2, 9, 0, 0),
             ForeColor = System.Drawing.Color.DimGray,
@@ -171,12 +175,14 @@ internal sealed class MainForm : Form
             FullRowSelect = true,
             HideSelection = false,
             UseCompatibleStateImageBehavior = false,
+            ShowItemToolTips = true,
         };
         _list.Columns.Add("设备（序列号）", 200).Name = "sn";
         _list.Columns.Add("位置（端口片段）", 200).Name = "loc";
         _list.Columns.Add("通道数", 70).Name = "ch";
         _list.Columns.Add("当前版本", 100).Name = "ver";
-        _list.Columns.Add("状态", 330).Name = "status";
+        _list.Columns.Add("Hash", 100).Name = "hash";
+        _list.Columns.Add("状态", 300).Name = "status";
 
         // ---- 日志区 ----
         var logPanel = new Panel { Dock = DockStyle.Bottom, Height = 170, Padding = new Padding(10, 4, 10, 8) };
@@ -245,6 +251,7 @@ internal sealed class MainForm : Form
         {
             _list.Items.Clear();
             var groups = await _engine.ScanGroupsAsync();
+            LogLine(await _engine.ScanDiagnosticAsync());
             foreach (var g in groups)
                 _list.Items.Add(MakeItem(g));
             LogLine($"扫描：在插可升级设备 {groups.Count} 台（按设备体系分组）");
@@ -290,9 +297,59 @@ internal sealed class MainForm : Form
         item.SubItems.Add(anchor.LocationToken).Name = "loc";
         item.SubItems.Add(g.Channels.Count.ToString()).Name = "ch";
         item.SubItems.Add("—").Name = "ver";
+        item.SubItems.Add("—").Name = "hash";
         item.SubItems.Add("就绪").Name = "status";
         item.Checked = true;
         return item;
+    }
+
+    /// <summary>
+    /// 0x04 读 Git hash 列（10-24 指挥官采纳；仅基站 USB 直达轨——键盘无线轨协议门控整轨不开放）。
+    /// 单元格=前 8 位（行悬停见全 40 位），完整值进日志；量产固件裁 0x04 ⇒ 无应答属预期，只记日志。
+    /// </summary>
+    private async Task ReadHashColumnAsync()
+    {
+        if (_busy || _list.Items.Count == 0)
+            return;
+        if (_target == OtaUpgradeTarget.PenWireless)
+        {
+            LogLine("0x04 读 hash 仅基站 USB 直达轨支持——键盘无线轨协议门控不开放，已跳过");
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            foreach (ListViewItem item in _list.Items)
+            {
+                var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
+                Cell(item, "hash").Text = "读取中…";
+                var (hash, err) = await _engine.ReadHashAsync(dev);
+                if (hash == null)
+                {
+                    Cell(item, "hash").Text = "—";
+                    LogLine($"SN {Show(dev.SerialNumber)} 读hash失败：{err}");
+                }
+                else
+                {
+                    Cell(item, "hash").Text = hash.Length <= 8 ? hash : hash[..8] + "…";
+                    item.ToolTipText = $"Git hash（0x04 全 40 位）：{hash}";   // 行级悬停（net48 无子项级 ToolTip）
+                    LogLine($"SN {Show(dev.SerialNumber)} Git hash：{hash}");
+                }
+            }
+            LogLine("读hash 完成——对包口径：与固件包 git 短哈希前缀对拍");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    /// <summary>固件已变，旧 hash 不可留（升级成功后调用）。</summary>
+    private static void ResetHashCell(ListViewItem item)
+    {
+        Cell(item, "hash").Text = "—";
+        item.ToolTipText = null;
     }
 
     // ================= 固件选择 =================
@@ -407,6 +464,7 @@ internal sealed class MainForm : Form
                 if (r.Outcome is OtaDeviceOutcome.Success)
                 {
                     Cell(item, "ver").Text = _fw.SverText;   // 成功=对拍通过，即目标版本
+                    ResetHashCell(item);
                     ok++;
                 }
                 else if (r.Outcome is OtaDeviceOutcome.Skip)
@@ -542,6 +600,7 @@ internal sealed class MainForm : Form
         if (r.Outcome == OtaDeviceOutcome.Success)
         {
             Cell(item, "ver").Text = sverText;   // 成功=对拍通过，即目标版本
+            ResetHashCell(item);
             counts[0]++;
         }
         else if (r.Outcome == OtaDeviceOutcome.Skip)
@@ -583,6 +642,7 @@ internal sealed class MainForm : Form
         _busy = busy;
         _browseBtn.Enabled = !busy;
         _refreshBtn.Enabled = !busy;
+        _hashBtn.Enabled = !busy;
         _upgradeAllBtn.Enabled = !busy;
         _upgradeCheckedBtn.Enabled = !busy;
         _cancelBtn.Enabled = busy;
