@@ -27,10 +27,10 @@ internal sealed class MainForm : Form
     private readonly Button _refreshBtn;
     private readonly Button _hashBtn;
     private readonly Button _repairBtn;
-    private readonly Button _pairBtn;
     private readonly System.Diagnostics.Stopwatch _pairWatch = new();
     private System.Windows.Forms.Timer? _pairTimer;
     private ListViewItem? _pairItem;
+    private int _pairColIndex = -1;
     private readonly Button _upgradeAllBtn;
     private readonly Button _upgradeCheckedBtn;
     private readonly Button _cancelBtn;
@@ -54,9 +54,9 @@ internal sealed class MainForm : Form
         Text = "多支同升 · USB 升级小工具（PencilBox 裁剪版）";
         Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
         StartPosition = FormStartPosition.CenterScreen;
-        // 最小宽=全列和不裁切（sn200+loc200+ch70+ver100+hash300+status300≈1170+滚动条余量）；默认再大些留日志区
-        MinimumSize = new System.Drawing.Size(1210, 560);
-        Size = new System.Drawing.Size(1280, 700);
+        // 最小宽=全列和不裁切（sn200+loc200+ch70+ver100+hash300+status280+pair80≈1230+滚动条余量）
+        MinimumSize = new System.Drawing.Size(1290, 560);
+        Size = new System.Drawing.Size(1360, 700);
 
         _ui = new Progress<OtaToolUpdate>(OnUpdate);
         _engine = new OtaToolEngine(_ui);
@@ -89,10 +89,8 @@ internal sealed class MainForm : Form
         _repairBtn = new Button { Text = "重置异常台", AutoSize = true };
         _repairBtn.Click += (_, _) => _ = RepairProblemDevicesAsync();
         fwRow.Controls.Add(_repairBtn);
-        // 手动逐台配对（0x52，指挥官 10-30 定版）：对选中行发指令，人工让键盘进配对，PC 等结果帧
-        _pairBtn = new Button { Text = "配对(选中台)", AutoSize = true };
-        _pairBtn.Click += (_, _) => _ = PairSelectedAsync();
-        fwRow.Controls.Add(_pairBtn);
+        // 配对入口=每行自带「配对」按钮（10-30 指挥官目验定版：撤顶部选中台按钮——勾选/高亮歧义坑过一轮）；
+        // 行内按钮列用 OwnerDraw+ButtonRenderer 出真按钮，点击命中见 _list.MouseClick（探针 _scratch/lv_probe 取证：勾选框存活+按钮出字）
         _pairTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         _pairTimer.Tick += (_, _) =>
         {
@@ -203,7 +201,43 @@ internal sealed class MainForm : Form
         _list.Columns.Add("通道数", 70).Name = "ch";
         _list.Columns.Add("当前版本", 100).Name = "ver";
         _list.Columns.Add("Hash（0x04 全 40 位）", 300).Name = "hash";
-        _list.Columns.Add("状态", 300).Name = "status";
+        _list.Columns.Add("状态", 280).Name = "status";
+        _list.Columns.Add("操作", 80).Name = "pair";
+        _pairColIndex = _list.Columns.Count - 1;
+
+        // 行内「配对」按钮：OwnerDraw 只接管按钮列，其余子项 DrawDefault（探针取证：勾选框/文本不受影响）
+        typeof(ListView).GetProperty("DoubleBuffered",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            !.SetValue(_list, true);
+        _list.DrawColumnHeader += (_, e) => e.DrawDefault = true;
+        _list.DrawSubItem += (_, e) =>
+        {
+            if (e.ColumnIndex != _pairColIndex || e.SubItem == null)
+            {
+                e.DrawDefault = true;
+                return;
+            }
+            var pairing = _pairItem != null && ReferenceEquals(_pairItem, e.Item);
+            var state = _busy
+                ? System.Windows.Forms.VisualStyles.PushButtonState.Disabled
+                : System.Windows.Forms.VisualStyles.PushButtonState.Normal;
+            ButtonRenderer.DrawButton(e.Graphics, e.Bounds, pairing ? "配对中…" : "配对", _list.Font, false, state);
+        };
+        _list.MouseClick += (_, e) =>
+        {
+            var hit = _list.HitTest(e.Location);
+            if (hit.Item == null || hit.SubItem == null)
+                return;
+            var colIndex = hit.Item.SubItems.IndexOf(hit.SubItem);   // net48 命中结果无 ColumnIndex，按子项序反查
+            if (colIndex != _pairColIndex)
+                return;
+            if (_busy)
+            {
+                LogLine("配对：当前有操作进行中（一次只配一台）——等它结束再点行内「配对」");
+                return;
+            }
+            _ = PairRowAsync(hit.Item);
+        };
 
         // ---- 日志区 ----
         var logPanel = new Panel { Dock = DockStyle.Bottom, Height = 170, Padding = new Padding(10, 4, 10, 8) };
@@ -324,6 +358,7 @@ internal sealed class MainForm : Form
         item.SubItems.Add("—").Name = "ver";
         item.SubItems.Add("—").Name = "hash";
         item.SubItems.Add("就绪").Name = "status";
+        item.SubItems.Add("").Name = "pair";   // 行内「配对」按钮列（文字由 OwnerDraw 画）
         item.Checked = true;
         return item;
     }
@@ -415,25 +450,19 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>
-    /// 手动逐台配对（0x52，指挥官 10-30 定版）：对选中行发指令 → 人工让键盘进配对（上电按住 K1 约 2 秒）
-    /// → 等结果帧（最长 60s，状态列秒表）→ 行状态显示绑定 MAC+名称。一次只配一台（SetBusy 全局串行）。
+    /// 手动逐台配对（0x52，指挥官 10-30 定版：行内按钮发起）：对指定行发指令 → 人工让键盘进配对
+    /// （上电按住 K1 约 2 秒）→ 等结果帧（最长 60s，状态列秒表）→ 行状态显示绑定 MAC+名称。
+    /// 一次只配一台（SetBusy 全局串行，其余行按钮同时转禁用态）。
     /// </summary>
-    private async Task PairSelectedAsync()
+    private async Task PairRowAsync(ListViewItem item)
     {
-        if (_busy)
-            return;
-        if (_list.SelectedItems.Count != 1)
-        {
-            LogLine("配对：请先在列表中选中一台基站（单击该行高亮）——配对逐台手动进行");
-            return;
-        }
-        var item = _list.SelectedItems[0];
         var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
 
         SetBusy(true);
         _pairItem = item;
         _pairWatch.Restart();
         _pairTimer!.Start();
+        _list.Invalidate();   // 该行按钮转「配对中…」
         Cell(item, "status").Text = "配对中…请让键盘进配对（上电按住 K1 约 2 秒）";
         _phaseLabel.Text = $"配对中：位置 {dev.LocationToken}";
         LogLine($"发 0x52 进配对 ← 位置 {dev.LocationToken}——请人工让目标键盘进配对（上电按住 K1 约 2 秒，LED 三色序列=配对视窗已开，60s）…");
@@ -449,7 +478,7 @@ internal sealed class MainForm : Form
             else
             {
                 Cell(item, "status").Text = "配对失败";
-                LogLine($"配对失败（位置 {dev.LocationToken}）：{msg}");
+                LogLine($"{msg}（位置 {dev.LocationToken}）");   // FSM 消息已带"配对失败/超时"语义，勿再加前缀
                 _phaseLabel.Text = "配对失败（见日志）";
             }
         }
@@ -760,13 +789,13 @@ internal sealed class MainForm : Form
         _refreshBtn.Enabled = !busy;
         _hashBtn.Enabled = !busy;
         _repairBtn.Enabled = !busy;
-        _pairBtn.Enabled = !busy;
         _upgradeAllBtn.Enabled = !busy;
         _upgradeCheckedBtn.Enabled = !busy;
         _cancelBtn.Enabled = busy;
         _concurrency.Enabled = !busy;
         _targetBs.Enabled = !busy;
         _targetPen.Enabled = !busy;
+        _list.Invalidate();   // 行内「配对」按钮列随忙闲重画（可用/禁用态）
     }
 
     private void SetItemStatus(ListViewItem item, string text) => Cell(item, "status").Text = text;

@@ -185,7 +185,7 @@ internal static class Program
         var (ok, mac, name, msg) = await Engine.PairEnterAsync(device, Cts.Token);
         if (!ok)
         {
-            Out.Error($"配对失败：{msg}");
+            Out.Error(msg);   // FSM 消息已带"配对失败/超时"语义，勿再加前缀（真机 10-30 实测双前缀）
             return 1;
         }
         Out.Ok($"配对成功：MAC {mac ?? "—"}    名称 \"{name ?? "—"}\"");
