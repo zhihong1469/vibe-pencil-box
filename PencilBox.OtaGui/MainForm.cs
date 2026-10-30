@@ -252,12 +252,16 @@ internal sealed class MainForm : Form
             _list.Items.Clear();
             var groups = await _engine.ScanGroupsAsync();
             LogLine(await _engine.ScanDiagnosticAsync());
+            var (usbLine, usbProblems) = await _engine.UsbProblemCheckAsync();
+            LogLine(usbLine);
             foreach (var g in groups)
                 _list.Items.Add(MakeItem(g));
             LogLine($"扫描：在插可升级设备 {groups.Count} 台（按设备体系分组）");
             _phaseLabel.Text = groups.Count == 0
                 ? "未发现可升级设备——确认接收器已插入且此电脑能识别"
                 : $"发现 {groups.Count} 台设备";
+            if (usbProblems > 0)
+                _phaseLabel.Text += $"；另有 {usbProblems} 台插着但 USB 异常（拔下重插或换口，见日志）";
 
             // 版本列跟随升级对象开关：切到「键盘」读各基站所配键盘的版本（经基站透读），缺省读基站自身
             var verTarget = _target;

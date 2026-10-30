@@ -14,6 +14,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- USB 设备层异常盘点（6 插 4 识别问题显性化）：WMI 取数，net48 主机面自带 -->
+    <Reference Include="System.Management" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
     <PackageReference Include="HidSharp" Version="2.6.4" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
@@ -44,6 +49,7 @@
     <Compile Include="..\PencilBox.Core\Communication\IHidTransport.cs" Link="Subset\IHidTransport.cs" />
     <Compile Include="..\PencilBox.Core\Communication\HidDeviceInfo.cs" Link="Subset\HidDeviceInfo.cs" />
     <Compile Include="..\PencilBox.Core\Communication\HidDeviceSelection.cs" Link="Subset\HidDeviceSelection.cs" />
+    <Compile Include="..\PencilBox.Core\Communication\UsbProblemReport.cs" Link="Subset\UsbProblemReport.cs" />
     <Compile Include="..\PencilBox.Infrastructure\Hid\HidSharpTransport.cs" Link="Subset\HidSharpTransport.cs" />
     <Compile Include="..\PencilBox.Infrastructure\Hid\HidCommandChannel.cs" Link="Subset\HidCommandChannel.cs" />
     <!-- 工具层（本库自有的 CLI/GUI 共用引擎；位于本目录，默认 glob 已含，勿重复声明） -->

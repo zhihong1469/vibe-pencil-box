@@ -53,7 +53,7 @@ internal static class Program
         {
             return action switch
             {
-                "scan" or "list" => ScanAsync().GetAwaiter().GetResult(),
+                "scan" or "list" => ScanAsync(rest.Contains("--raw")).GetAwaiter().GetResult(),
                 "identify" or "id" => IdentifyAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "hash" => HashAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "ota" or "upgrade" => OtaAsync(rest).GetAwaiter().GetResult(),
@@ -69,10 +69,13 @@ internal static class Program
 
     // ================= scan =================
 
-    private static async Task<int> ScanAsync()
+    /// <summary><paramref name="raw"/>：末尾附 USB 设备层全量名单（含异常台，含 USB 口路径标识）。</summary>
+    private static async Task<int> ScanAsync(bool raw = false)
     {
         var groups = await Engine.ScanGroupsAsync();
         Out.Info(await Engine.ScanDiagnosticAsync());
+        var (usbLine, _) = await Engine.UsbProblemCheckAsync();
+        Out.Info(usbLine);
         Out.Info($"在插可升级设备（命令通道）：{groups.Count} 台（按设备体系分组，一台一行）");
 
         // 每台并发读当前版本（GUI 刷新同款体验；4 路窗口防多台拖慢扫描）
@@ -107,6 +110,12 @@ internal static class Program
             Out.Info($"  [{i + 1}] SN {Show(anchor.SerialNumber)}    位置 {anchor.LocationToken}    当前版本 {versions[i] ?? "读取失败"}    通道 {g.Channels.Count} 个");
             foreach (var ch in g.Channels)
                 Out.Info($"        · {ch.InterfaceLabel}");
+        }
+
+        if (raw)
+        {
+            foreach (var line in await Engine.UsbRawLinesAsync())
+                Out.Info(line);
         }
         return 0;
     }
@@ -491,6 +500,8 @@ internal static class Program
 
             用法：
               ota-tool scan                                  列出在插的全部可升级设备（按设备体系分组，一台一行，附当前版本）
+                                                             附 USB 设备层盘点：插着却不识别的台（Windows 配置失败）在此显性化
+              ota-tool scan --raw                            末尾附 USB 设备层全量名单（含异常台；尾段=USB 口路径标识）
               ota-tool identify [--pen] [--serial SN|位置]   读版本（0x03；缺省读基站，--pen 经基站透读键盘）
               ota-tool hash [--serial SN|位置]               读 Git hash（0x04，仅基站 USB 直达；量产固件裁剪时无应答属预期）
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）

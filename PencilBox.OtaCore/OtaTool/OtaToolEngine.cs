@@ -150,6 +150,24 @@ public sealed class OtaToolEngine
     }
 
     /// <summary>
+    /// USB 设备层异常盘点（WMI，后台线程——6 插 4 识别问题的显性化）：
+    /// 扫描所见=Windows 成功拉起的台；"插着却不识别"的台在这层就是配置失败（Code=10 等），
+    /// Problems>0 时应拔下重插或换口，而不是以为插坏/少插。
+    /// </summary>
+    public async Task<(string Line, int Problems)> UsbProblemCheckAsync()
+    {
+        var instances = await Task.Run(UsbProblemProbe.EnumerateOurs);
+        return (UsbProblemReport.DescribeLine(instances), instances.Count(i => i.ProblemCode != 0));
+    }
+
+    /// <summary>USB 设备层全量名单（CLI scan --raw）：含异常台，实例 ID 尾段=USB 口路径标识，可定位到口。</summary>
+    public async Task<IReadOnlyList<string>> UsbRawLinesAsync()
+    {
+        var instances = await Task.Run(UsbProblemProbe.EnumerateOurs);
+        return UsbProblemReport.RawLines(instances);
+    }
+
+    /// <summary>
     /// 0x04 读 Git hash（**仅基站 USB 直达轨**——协议门控：无线/BLE 轨整轨不开放，0x04 定稿 §8-1；
     /// 键盘轨由调用方拒绝）。量产构建可裁 0x04（INTERNAL_DEBUG_CMD_ENABLE 关）⇒ 无应答属预期非故障。
     /// </summary>
