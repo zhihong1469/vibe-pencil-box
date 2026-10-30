@@ -104,6 +104,6 @@ _share/
 /_share/
 /input/
 **/*.csv
-
+**/*.wav
 # 临时试验脚本/合成 WAV（根锚定）
 /_scratch/
