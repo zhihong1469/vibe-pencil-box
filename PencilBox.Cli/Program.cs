@@ -362,6 +362,11 @@ public class Program
                 !HasFlag(rest, "--no-aec"), !HasFlag(rest, "--no-ans"), HasFlag(rest, "--afc"),
                 GetOptionInt(rest, "--hpf", 80), GetOptionInt(rest, "--lpf", 0)),
 
+            "probe" => await cmd.ProbeAsync(
+                GetOption(rest, "--mac"), GetOption(rest, "--name"),
+                GetOptionInt(rest, "--sec", 12), GetOption(rest, "--out"),
+                ParseVolume(GetOption(rest, "--volume"))),
+
             "batt" or "battery" => await cmd.BattAsync(
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
                 GetOptionInt(rest, "--timeout", 10_000)),
