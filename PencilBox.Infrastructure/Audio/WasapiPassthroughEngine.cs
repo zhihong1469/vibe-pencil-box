@@ -66,6 +66,10 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
 
     private AudioPassthroughState _state = AudioPassthroughState.Idle;
 
+    // 外源 PCM 泵模式（ExternalSource=true 时置位）：无 WASAPI 采集，PCM 经 WriteExternalPcm 进链。
+    // 仅 StartCore 同步置位、清理时复位，跨线程读可见性靠"先置位后开流"的顺序保证。
+    private bool _externalSource;
+
     // 计数（多线程：采集线程 / 渲染线程 / 调用方，全部 Interlocked）
     private long _captureCallbacks;
     private long _captureBytes;
@@ -180,11 +184,20 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
 
     private void StartCore(PassthroughStartOptions options)
     {
-        // 1. 解析设备
+        // 1. 解析设备（外源模式无本地采集设备，PCM 由 WriteExternalPcm 泵入）
         using var enumerator = new MMDeviceEnumerator();
-        _captureDevice = ResolveDevice(enumerator, DataFlow.Capture, options.CaptureDeviceId, "录音");
+        _externalSource = options.ExternalSource;   // 每次启动重置（防上次外源残留）
+        if (options.ExternalSource)
+        {
+            _captureDevice = null;
+            _captureName = "（外源 PCM 泵）";
+        }
+        else
+        {
+            _captureDevice = ResolveDevice(enumerator, DataFlow.Capture, options.CaptureDeviceId, "录音");
+            _captureName = _captureDevice.FriendlyName;
+        }
         _renderDevice = ResolveDevice(enumerator, DataFlow.Render, options.RenderDeviceId, "播放");
-        _captureName = _captureDevice.FriendlyName;
         _renderName = _renderDevice.FriendlyName;
         _renderLatencyMs = Math.Clamp(options.RenderLatencyMs, 10, 200);
         _volume = Math.Clamp(options.Volume, 0f, PassthroughStartOptions.MaxVolume);
@@ -230,15 +243,24 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         // 3. 采集：级联尝试（请求格式 → 采集端混音格式 × 事件同步 → 睡眠同步）。
         // 实机坑：USB Audio 1.0 + 事件同步 + 非混音格式 → AudioClient.Initialize 阻塞 ~30s 后
         // E_UNEXPECTED(0x8000FFFF)；一旦出现该码，跳过剩余事件同步尝试，直落睡眠同步。
+        // 外源模式整段跳过：采集格式固定 16k/16bit/1ch（mSBC 解码定参，泵入方保证）。
+        WaveFormat inFormat;
+        if (options.ExternalSource)
+        {
+            inFormat = new WaveFormat(16000, 16, 1);
+            _logger.LogInformation("外源 PCM 泵模式：跳过 WASAPI 采集（16k/16bit/1ch 由泵入方保证）");
+        }
+        else
+        {
         var requested = new WaveFormat(Math.Clamp(options.SampleRate, 8000, 96000), 16, Math.Clamp(options.Channels, 1, 2));
         WaveFormat captureMix;
-        using (var captureClient = _captureDevice.AudioClient)
+        using (var captureClient = _captureDevice!.AudioClient)
         {
             captureMix = captureClient.MixFormat;
         }
 
         WasapiCapture? capture = null;
-        WaveFormat inFormat = requested;
+        inFormat = requested;
         var sawCatastrophic = false;
         Exception? lastError = null;
 
@@ -283,6 +305,8 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
                 $"采集流打开失败（已尝试 请求格式/混音格式 × 事件/睡眠同步）: {_captureName}", lastError);
 
         _capture = capture;
+        }
+
         _inFormat = inFormat;
         _converter = new SampleFormatConverter(
             inFormat.SampleRate, inFormat.BitsPerSample, IsFloatFormat(inFormat), inFormat.Channels,
@@ -538,6 +562,33 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
     }
 
     // === 采集线程 ===
+
+    /// <summary>
+    /// 外源 PCM 泵（<see cref="PassthroughStartOptions.ExternalSource"/>=true）：16k/16bit/单声道 PCM
+    /// 直入处理链 → 环形缓冲 → 渲染。与采集回调同语义：未运行/链未就绪丢弃，异常吞掉不打断泵入方
+    /// （BLE 通知回调线程同此要求——异常不得打断 WinRT 线程池）。
+    /// </summary>
+    public int WriteExternalPcm(ReadOnlySpan<byte> pcm)
+    {
+        var ring = _ring;
+        if (pcm.IsEmpty || ring == null || !_externalSource ||
+            Volatile.Read(ref _chainReady) == 0 || State != AudioPassthroughState.Running)
+            return 0;
+
+        try
+        {
+            Interlocked.Increment(ref _captureCallbacks);
+            Interlocked.Add(ref _captureBytes, pcm.Length);
+            UpdateLevel(pcm);
+            ProcessThroughChain(pcm, ring);
+            return pcm.Length;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "外源 PCM 泵异常");
+            return 0;
+        }
+    }
 
     private void OnCaptureDataAvailable(object? sender, WaveInEventArgs e)
     {
@@ -805,7 +856,7 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
 
     /// <summary>
     /// Box 段估计延迟（USB 音频到达 → 扬声器发声），组合可加性拆解：
-    /// 采集引擎周期(≈10ms) + 处理链附加(凑帧 10ms + AFC 群延迟 1ms，全关为 0)
+    /// 采集引擎周期(≈10ms；外源泵 0——BLE 通知到达即泵入) + 处理链附加(凑帧 10ms + AFC 群延迟 1ms，全关为 0)
     /// + 环形深度(活值) + 渲染缓冲(设定值)。
     /// </summary>
     private double EstimateBoxLatencyMs()
@@ -813,7 +864,8 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         var chainActive = Volatile.Read(ref _chainReady) != 0 &&
                           (Volatile.Read(ref _aecOn) != 0 || Volatile.Read(ref _ansOn) != 0 || Volatile.Read(ref _afcOn) != 0);
         var chainMs = chainActive ? 10.0 + (Volatile.Read(ref _afcOn) != 0 ? 1.0 : 0.0) : 0.0;
-        return 10.0 + chainMs + CurrentRingDepthMs() + _renderLatencyMs;
+        var captureMs = _externalSource ? 0.0 : 10.0;
+        return captureMs + chainMs + CurrentRingDepthMs() + _renderLatencyMs;
     }
 
     private double CurrentRingDepthMs()

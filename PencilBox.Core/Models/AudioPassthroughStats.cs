@@ -95,6 +95,13 @@ public sealed class PassthroughStartOptions
 
     /// <summary>桥接副汇渲染缓冲（ms；非实时消费，默认放宽 150）</summary>
     public int BridgeLatencyMs { get; set; } = 150;
+
+    /// <summary>
+    /// 外源 PCM 泵模式（软件接收器等）：不开本地 WASAPI 采集，PCM 由调用方经
+    /// <see cref="PencilBox.Core.Services.IAudioPassthrough.WriteExternalPcm"/> 泵入处理链。
+    /// 泵入方须保证 16kHz/16bit/单声道（mSBC 解码定参）；处理链与渲染侧与采集模式完全共用。
+    /// </summary>
+    public bool ExternalSource { get; set; }
 }
 
 /// <summary>

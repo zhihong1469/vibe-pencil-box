@@ -3,6 +3,7 @@
 //   Licensed under the Polyform Noncommercial License 1.0.0.
 //   See LICENSE file in the project root for full license information.
 // </copyright>
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Serilog;
@@ -353,6 +354,14 @@ public class Program
                 voiceState,
                 GetOptionInt(rest, "--timeout", 10_000)),
 
+            "amp" => await cmd.AmpAsync(
+                GetOption(rest, "--mac"), GetOption(rest, "--name"),
+                GetOptionInt(rest, "--sec", 0), voiceState,
+                ParseVolume(GetOption(rest, "--volume")),
+                GetOptionInt(rest, "--latency", 40),
+                !HasFlag(rest, "--no-aec"), !HasFlag(rest, "--no-ans"), HasFlag(rest, "--afc"),
+                GetOptionInt(rest, "--hpf", 80), GetOptionInt(rest, "--lpf", 0)),
+
             "batt" or "battery" => await cmd.BattAsync(
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
                 GetOptionInt(rest, "--timeout", 10_000)),
@@ -360,6 +369,12 @@ public class Program
             _ => UnknownCommand($"srx {action}")
         };
     }
+
+    /// <summary>--volume 解析（InvariantCulture，防区域小数点坑；非法/缺省=1.0）</summary>
+    private static float ParseVolume(string? raw) =>
+        raw != null && float.TryParse(raw, CultureInfo.InvariantCulture, out var v)
+            ? Math.Clamp(v, 0f, PencilBox.Core.Models.PassthroughStartOptions.MaxVolume)
+            : 1.0f;
 
     // === Device ep4 (custom_hid 无 RID 命令通道) ===
     private static async Task<int> DispatchDeviceEp4Async(DeviceCommands cmd, string[] args)

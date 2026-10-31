@@ -75,6 +75,14 @@ public interface IAudioPassthrough : IDisposable
     /// 空列表 = 关。运行中即时生效。
     /// </summary>
     void SetNotches(int[] centersHz, int q);
+
+    /// <summary>
+    /// 外源 PCM 泵（<see cref="PassthroughStartOptions.ExternalSource"/>=true 时替代 WASAPI 采集）：
+    /// 16kHz/16bit/单声道 PCM 直入处理链（带通/AEC/ANS/AFC）→ 环形缓冲 → 渲染播出。
+    /// 与采集回调同语义：未运行/链未就绪时丢弃（返回 0），内部异常吞掉不打断泵入方。
+    /// 返回实际消费字节数。
+    /// </summary>
+    int WriteExternalPcm(ReadOnlySpan<byte> pcm);
 }
 
 /// <summary>
