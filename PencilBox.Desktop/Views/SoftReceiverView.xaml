@@ -12,6 +12,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -82,8 +83,32 @@
                     IsEnabled="{Binding IsConnected}"/>
         </Grid>
 
+        <!-- 延迟实测（chirp 回环；复用 SoftReceiverProbe，CLI srx probe 同一份逻辑） -->
+        <GroupBox Grid.Row="2" Header="延迟实测（chirp 回环：扬声器播训练列 → 笔端麦拾取 → BLE 回传）" Padding="8" Margin="0,0,0,8">
+            <StackPanel>
+                <WrapPanel>
+                    <TextBlock Text="时长(秒)：" VerticalAlignment="Center" Foreground="#555"/>
+                    <TextBox Width="64" Margin="0,0,8,0" VerticalContentAlignment="Center"
+                             Text="{Binding ProbeSecondsInput, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="10~300，默认 30"/>
+                    <Button Content="开始延迟实测" Command="{Binding ProbeCommand}" Margin="0,0,8,0"
+                            Style="{StaticResource ActionButton}"
+                            IsEnabled="{Binding CanProbe}"
+                            ToolTip="需先连接；期间按 K2 语音键或拨 S1 扩音档让语音流在流"/>
+                </WrapPanel>
+                <TextBlock Text="口径：绝对延迟含起点常量偏置（笔端自由跑钟无共享锚），同场形状/PPM 有效、跨场勿比绝对值。"
+                           FontSize="11" Foreground="#7F8C8D" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                <!-- 结果多行：只读 TextBox 带 wrap+纵向滚，防长 WAV 路径把行高顶爆 -->
+                <TextBox Text="{Binding ProbeResultText, Mode=OneWay}" IsReadOnly="True"
+                         FontFamily="Consolas" FontSize="11" Margin="0,6,0,0"
+                         TextWrapping="Wrap" AcceptsReturn="True"
+                         MaxHeight="110" VerticalScrollBarVisibility="Auto"
+                         Background="#FBFBFB" BorderBrush="#E5E5E5"/>
+            </StackPanel>
+        </GroupBox>
+
         <!-- 事件流 -->
-        <GroupBox Grid.Row="2" Header="事件流（键 / 档位 / 状态槽 / 诊断；最新 200 条）" Padding="4">
+        <GroupBox Grid.Row="3" Header="事件流（键 / 档位 / 状态槽 / 诊断；最新 200 条）" Padding="4">
             <ListBox ItemsSource="{Binding EventLog}" FontFamily="Consolas" FontSize="12"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
