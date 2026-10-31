@@ -54,8 +54,13 @@
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock Text="扩音泵出：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
-                        <TextBlock Text="{Binding SpeakerText}" VerticalAlignment="Center"
+                        <TextBlock Text="{Binding SpeakerText}" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="#0B5345" FontWeight="SemiBold"/>
+                        <!-- 一键实时扩音（第一性需求：键盘麦人声→PC 扬声器）；链路=解码 PCM→引擎外源泵→扬声器 -->
+                        <Button Content="{Binding SpeakerButtonText}" Command="{Binding ToggleSpeakerCommand}"
+                                Style="{StaticResource ActionButton}"
+                                IsEnabled="{Binding CanToggleSpeaker}"
+                                ToolTip="键盘麦克风人声实时扩音到本机扬声器（解码 PCM→扩音引擎外源泵→扬声器）；CLI 等价=srx amp"/>
                     </StackPanel>
                 </WrapPanel>
                 <TextBlock Text="{Binding StatsText}" FontSize="11" Foreground="#7F8C8D" Margin="0,4,0,0"

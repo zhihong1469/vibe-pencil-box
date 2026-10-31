@@ -52,6 +52,7 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [ObservableProperty] private bool _isBusy;
     [NotifyPropertyChangedFor(nameof(CanProbe))]
+    [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _connectionText = "未连接";
     [ObservableProperty] private string _macInput = "";
@@ -60,6 +61,8 @@ public partial class SoftReceiverViewModel : ObservableObject
     [ObservableProperty] private string _devStateText = "—";
     [ObservableProperty] private string _modeText = "—";
     [ObservableProperty] private string _statsText = "—";
+    [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
+    [NotifyPropertyChangedFor(nameof(SpeakerButtonText))]
     [ObservableProperty] private bool _isSpeakerOn;
     [ObservableProperty] private string _speakerText = "关";
 
@@ -73,6 +76,12 @@ public partial class SoftReceiverViewModel : ObservableObject
 
     /// <summary>「开始延迟实测」可用 = 已连接且未在测未忙（按钮 IsEnabled 直绑，勿用转换器）</summary>
     public bool CanProbe => IsConnected && !IsProbing && !IsBusy;
+
+    /// <summary>「扩音泵出」按钮可用 = 已连接，或扩音正开着（允许随时关）；实测中锁死</summary>
+    public bool CanToggleSpeaker => (IsConnected || IsSpeakerOn) && !IsProbing;
+
+    /// <summary>扩音按钮文案随态翻转</summary>
+    public string SpeakerButtonText => IsSpeakerOn ? "关扩音" : "开扩音";
 
     /// <summary>事件流（最新在下；容量裁剪防长会话膨胀）</summary>
     public ObservableCollection<string> EventLog { get; } = [];
