@@ -92,6 +92,7 @@ public partial class App : Application
         services.AddPassthroughModule();
         services.AddAirMouseModule();
         services.AddSoftTriggerModule();
+        services.AddSoftReceiverModule();
         services.AddDebugToolsModule();
         services.AddShellModule();
     }
