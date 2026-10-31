@@ -49,6 +49,9 @@ public sealed class MsbcDecoder
     /// <summary>每帧输出 PCM 字节数（120 样点 × 2B，s16LE 单声道 16kHz = 7.5ms）</summary>
     public const int PcmBytesPerFrame = 240;
 
+    /// <summary>解码输出采样率（mSBC 定参 16kHz；消费端 WAV/渲染口径单点）</summary>
+    public const int SampleRate = 16000;
+
     /// <summary>mSBC 同步字（payload[0]）</summary>
     private const byte Syncword = 0xAD;
 

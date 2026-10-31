@@ -78,6 +78,7 @@ public class Program
         services.AddSingleton<DeviceCommands>();
         services.AddSingleton<BleCommands>();
         services.AddSingleton<BleCentralCommands>();
+        services.AddSingleton<SoftReceiverCommands>();
         services.AddSingleton<AudioCommands>();
         services.AddSingleton<SerialCommands>();
         services.AddSingleton<MacroCommands>();
@@ -101,6 +102,7 @@ public class Program
             {
                 "device" or "dev" => await DispatchDeviceAsync(sp, args.Skip(1).ToArray()),
                 "ble" => await DispatchBleAsync(sp, args.Skip(1).ToArray()),
+                "srx" => await DispatchSrxAsync(sp, args.Skip(1).ToArray()),
 
                 // 门禁（14 号）：可选功能被 feature off 后整域拒绝并指路；核心域（device/ble/company/keymap/workstate）不受管
                 "audio" or "aud" => await GateAsync(sp, "audio", () => DispatchAudioAsync(sp, args.Skip(1).ToArray())),
@@ -325,6 +327,37 @@ public class Program
                 GetOption(rest, "--protect") ?? "encryption"),
 
             _ => UnknownCommand($"ble {action}")
+        };
+    }
+
+    // === 软件接收器（PC 直连键盘收语音，绕过硬件基站） ===
+    private static async Task<int> DispatchSrxAsync(IServiceProvider sp, string[] args)
+    {
+        var cmd = sp.GetRequiredService<SoftReceiverCommands>();
+        var action = args.Length > 0 ? args[0].ToLowerInvariant() : "scan";
+        var rest = args.Skip(1).ToArray();
+        var voiceStateRaw = GetOptionInt(rest, "--voice-state", -1);
+        byte? voiceState = voiceStateRaw is >= 0 and <= 2 ? (byte)voiceStateRaw : null;
+
+        return action switch
+        {
+            "scan" => await cmd.ScanAsync(GetOptionInt(rest, "--duration", 5)),
+
+            "connect" or "conn" => await cmd.ConnectAsync(
+                GetOption(rest, "--mac"), GetOption(rest, "--name"),
+                GetOptionInt(rest, "--timeout", 10_000)),
+
+            "receive" or "rec" or "rx" => await cmd.ReceiveAsync(
+                GetOption(rest, "--mac"), GetOption(rest, "--name"),
+                GetOption(rest, "--out"), GetOptionInt(rest, "--sec", 0),
+                voiceState,
+                GetOptionInt(rest, "--timeout", 10_000)),
+
+            "batt" or "battery" => await cmd.BattAsync(
+                GetOption(rest, "--mac"), GetOption(rest, "--name"),
+                GetOptionInt(rest, "--timeout", 10_000)),
+
+            _ => UnknownCommand($"srx {action}")
         };
     }
 
