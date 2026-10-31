@@ -229,6 +229,36 @@ public sealed class WinRtBleCentral : IBleCentral
     public async Task<BleOpResult> SubscribeAsync(string uuid, TimeSpan duration, Action<string>? onHex,
         CancellationToken ct = default)
     {
+        int count = 0;
+        var result = await SubscribeCoreAsync(uuid, e =>
+        {
+            Interlocked.Increment(ref count);
+            onHex?.Invoke(Convert.ToHexString(ToBytes(e.CharacteristicValue)));
+        }, duration, ct);
+        return new BleOpResult { Ok = result.Ok, Error = result.Error, Notifications = count };
+    }
+
+    /// <inheritdoc/>
+    public async Task<BleOpResult> SubscribeContinuousAsync(string uuid, Action<byte[]> onData,
+        CancellationToken ct = default)
+    {
+        int count = 0;
+        var result = await SubscribeCoreAsync(uuid, e =>
+        {
+            Interlocked.Increment(ref count);
+            onData(ToBytes(e.CharacteristicValue));
+        }, Timeout.InfiniteTimeSpan, ct);
+        // 回调计数在退订后才读——ValueChanged 已摘除，计数稳定
+        return new BleOpResult { Ok = result.Ok, Error = result.Error, Notifications = Volatile.Read(ref count) };
+    }
+
+    /// <summary>
+    /// 订阅公共骨架：找特征（内部已登记 GATT 强引用）→ 校验 NOTIFY/INDICATE → 挂
+    /// ValueChanged → 写 CCCD → 等待（duration 到点 / ct 取消 / 无限）→ finally 退订退 CCCD。
+    /// </summary>
+    private async Task<BleOpResult> SubscribeCoreAsync(string uuid, Action<GattValueChangedEventArgs> onValue,
+        TimeSpan duration, CancellationToken ct)
+    {
         var chr = await FindCharacteristicAsync(uuid, ct);
         if (chr == null)
             return BleOpResult.Fail($"未找到特征 {uuid}（先 discover，或确认 UUID）");
@@ -238,12 +268,7 @@ public sealed class WinRtBleCentral : IBleCentral
         if (!notify && !indicate)
             return BleOpResult.Fail("该特征无 NOTIFY/INDICATE 属性，不能订阅");
 
-        int count = 0;
-        void OnChanged(GattCharacteristic c, GattValueChangedEventArgs e)
-        {
-            Interlocked.Increment(ref count);
-            onHex?.Invoke(Convert.ToHexString(ToBytes(e.CharacteristicValue)));
-        }
+        void OnChanged(GattCharacteristic c, GattValueChangedEventArgs e) => onValue(e);
 
         chr.ValueChanged += OnChanged;
         try
@@ -255,7 +280,13 @@ public sealed class WinRtBleCentral : IBleCentral
             if (cccd != GattCommunicationStatus.Success)
                 return BleOpResult.Fail($"写 CCCD 失败：{cccd}（特征是否要求加密/绑定？）");
 
-            try { await Task.Delay(duration, ct); }
+            try
+            {
+                if (duration == Timeout.InfiniteTimeSpan)
+                    await Task.Delay(Timeout.Infinite, ct);
+                else
+                    await Task.Delay(duration, ct);
+            }
             catch (OperationCanceledException) { /* 到点/Ctrl+C：正常收尾 */ }
         }
         finally
@@ -272,7 +303,7 @@ public sealed class WinRtBleCentral : IBleCentral
             }
         }
 
-        return new BleOpResult { Ok = true, Notifications = count };
+        return new BleOpResult { Ok = true };
     }
 
     public async Task<BlePairResult> PairAsync(string protection = "encryption", CancellationToken ct = default)

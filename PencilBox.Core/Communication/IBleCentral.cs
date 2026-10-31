@@ -170,6 +170,14 @@ public interface IBleCentral
         CancellationToken ct = default);
 
     /// <summary>
+    /// 持续订阅通知（写 CCCD），每条通知以**原始字节**回调 <paramref name="onData"/>，
+    /// 直至 <paramref name="ct"/> 取消——取消即退订并正常返回（Notifications=已收条数）。
+    /// 软件接收器等长时收流场景用（<see cref="SubscribeAsync"/> 是定长窗口采样语义）。
+    /// </summary>
+    Task<BleOpResult> SubscribeContinuousAsync(string uuid, Action<byte[]> onData,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// 触发 SMP 配对/绑定。protection：`default`/`none`/`encryption`/`authentication`
     /// （MITM 类需要交互确认，CLI 会提示）。
     /// </summary>

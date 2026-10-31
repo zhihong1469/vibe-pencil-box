@@ -201,6 +201,10 @@ public class BleStressRunnerTests
             CancellationToken ct = default)
             => Task.FromResult(new BleOpResult { Ok = true });
 
+        public Task<BleOpResult> SubscribeContinuousAsync(string uuid, Action<byte[]> onData,
+            CancellationToken ct = default)
+            => Task.FromResult(new BleOpResult { Ok = true });
+
         public Task<BlePairResult> PairAsync(string protection = "encryption", CancellationToken ct = default)
         {
             PairCalls++;
