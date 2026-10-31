@@ -310,25 +310,6 @@ public class SoftReceiverCommands
             return 1;
 
         var session = new SoftReceiverSession(_central, msg => ConsoleFormatter.Info($"[SRX] {msg}"));
-        var pcmChunks = new List<byte[]>();
-        long totalPcmBytes = 0;
-        var pacingFrames = new List<(long Seq, double ArrivalMs)>();
-        long unwrappedSeq = 0;
-        long prevSeq = -1;
-        var dataLock = new object();
-        session.AudioFrameReady += (_, f) =>
-        {
-            lock (dataLock)
-            {
-                var delta = (f.AudioSeq - (prevSeq < 0 ? f.AudioSeq : prevSeq)) & 0xFF;
-                if (delta is > 0 and < 128)
-                    unwrappedSeq += delta;
-                prevSeq = f.AudioSeq;
-                pacingFrames.Add((unwrappedSeq, f.LocalTimestampMs));
-                pcmChunks.Add(f.Pcm);
-                totalPcmBytes += f.Pcm.Length;
-            }
-        };
 
         using var cts = new CancellationTokenSource();
         if (sec > 0)
@@ -339,30 +320,15 @@ public class SoftReceiverCommands
             cts.Cancel();
         };
 
-        NAudio.CoreAudioApi.MMDevice? renderDevice = null;
-        NAudio.Wave.WasapiOut? player = null;
-        var chirpSource = new ChirpTrainSource();
-        long playT0Ms = 0;
+        var probe = new SoftReceiverProbe(session);
         try
         {
             await session.ConnectAsync(macDisplay);
 
             // 发射半边：默认渲染设备播 chirp 训练列（16k mono → 端点混音格式）
-            using (var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator())
-                renderDevice = enumerator.GetDefaultAudioEndpoint(NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.Role.Multimedia);
-            var mixFormat = renderDevice.AudioClient.MixFormat;
-            var resampled = new NAudio.Wave.SampleProviders.WdlResamplingSampleProvider(chirpSource, mixFormat.SampleRate);
-            var gain = new NAudio.Wave.SampleProviders.VolumeSampleProvider(resampled) { Volume = volume };
-            NAudio.Wave.ISampleProvider feed = mixFormat.Channels >= 2
-                ? new NAudio.Wave.SampleProviders.MonoToStereoSampleProvider(gain)
-                : gain;
-            player = new NAudio.Wave.WasapiOut(renderDevice, NAudio.CoreAudioApi.AudioClientShareMode.Shared,
-                useEventSync: true, 40);
-            player.Init(new NAudio.Wave.SampleProviders.SampleToWaveProvider(feed));
-            player.Play();
-            playT0Ms = Environment.TickCount64;
+            probe.Start(volume);
             ConsoleFormatter.Info(
-                $"[SRX-PROBE] chirp 训练列已开播 → [{renderDevice.FriendlyName}]（750ms 周期；音量 {volume:F2}x 系统音量另计）；" +
+                $"[SRX-PROBE] chirp 训练列已开播 → [{probe.RenderDeviceName}]（750ms 周期；音量 {volume:F2}x 系统音量另计）；" +
                 $"收流 {sec}s（语音流须在流：K2/S1 物理触发）…");
 
             await session.StartAsync(cts.Token);
@@ -384,68 +350,36 @@ public class SoftReceiverCommands
         }
         finally
         {
-            if (player != null)
-            {
-                try { player.Stop(); } catch { /* 收尾容错 */ }
-                player.Dispose();
-            }
-            renderDevice?.Dispose();
+            probe.Abort();
             await session.StopAsync();
             await _central.DisconnectAsync();
             ConsoleFormatter.Info("已断开");
         }
 
-        // === 分析 ===
+        // === 分析（连接已断，采集数据在探针内；CLI 与 Desktop 共用 SoftReceiverProbe） ===
         var stats = session.Stats;
         ConsoleFormatter.Info($"[SRX] {stats.Summary()}");
-        if (stats.AudioFramesDecoded < 8)
+        var report = probe.StopAndAnalyze(outPath ?? $"srx_probe_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
+        if (report == null)
         {
             ConsoleFormatter.Warn(
                 $"解码音频帧不足（{stats.AudioFramesDecoded}）：语音流未在流（K2/S1 物理触发）——probe 需要真实上行才能测");
             return 2;
         }
 
-        // 1) 到达走表剖面（传输/缓冲活剖面）
-        List<(long Seq, double ArrivalMs)> pacingCopy;
-        lock (dataLock)
-            pacingCopy = pacingFrames.ToList();
-        var t0 = pacingCopy.Count > 0 ? pacingCopy[0].ArrivalMs : 0;
-        var pacing = StreamPacingAnalyzer.Analyze(
-            pacingCopy.Select(f => (f.Seq, f.ArrivalMs - t0)).ToList(), 7.5);
         ConsoleFormatter.Info(
-            $"[SRX-PROBE] 走表剖面：步长 {pacing.FittedStepMs:F3}ms（PPM {pacing.Ppm:F0}）" +
-            $"偏差 p50 {pacing.P50DevMs:F1}ms / p95 {pacing.P95DevMs:F1}ms / max {pacing.MaxDevMs:F1}ms" +
-            $"（{pacing.Frames} 帧；BLE+Windows 传输/缓冲活剖面，max=最深积压水位）");
-
-        // 2) chirp 网格扫描（形状/PPM 口径）
-        var signal = new short[totalPcmBytes / 2];
-        lock (dataLock)
-        {
-            var pos = 0;
-            foreach (var chunk in pcmChunks)
-            {
-                Buffer.BlockCopy(chunk, 0, signal, pos, chunk.Length);
-                pos += chunk.Length;
-            }
-        }
-        var scan = ChirpScanAnalyzer.ScanByGrid(signal, MsbcDecoder.SampleRate, ChirpTemplate.PeriodSamples);
+            $"[SRX-PROBE] 走表剖面：步长 {report.Pacing.FittedStepMs:F3}ms（PPM {report.Pacing.Ppm:F0}）" +
+            $"偏差 p50 {report.Pacing.P50DevMs:F1}ms / p95 {report.Pacing.P95DevMs:F1}ms / max {report.Pacing.MaxDevMs:F1}ms" +
+            $"（{report.Pacing.Frames} 帧；BLE+Windows 传输/缓冲活剖面，max=最深积压水位）");
         ConsoleFormatter.Info(
-            $"[SRX-PROBE] chirp 检出 {scan.DetectedCount}/{scan.ExpectedCount}（缺失 {scan.MissingSlots.Count} 槽）" +
-            $"PPM {scan.Ppm:F0}（形状口径；绝对延迟含起点相位常量偏置——笔端自由跑钟无共享锚，跨场勿比绝对值）");
-        foreach (var hit in scan.Hits.Take(5))
+            $"[SRX-PROBE] chirp 检出 {report.Scan.DetectedCount}/{report.Scan.ExpectedCount}（缺失 {report.Scan.MissingSlots.Count} 槽）" +
+            $"PPM {report.Scan.Ppm:F0}（形状口径；绝对延迟含起点相位常量偏置——笔端自由跑钟无共享锚，跨场勿比绝对值）");
+        foreach (var hit in report.Scan.Hits.Take(5))
             ConsoleFormatter.Info($"  槽 {hit.Slot}: 峰位 {hit.PeakPos} 质量 {hit.Quality:F2}");
 
-        // 3) WAV 留档（离线深析：绝对锚标定/听感）
-        outPath ??= $"srx_probe_{DateTime.Now:yyyyMMdd_HHmmss}.wav";
-        await using (var writer = new WaveFileWriter(outPath, new WaveFormat(MsbcDecoder.SampleRate, 16, 1)))
-        lock (dataLock)
-        {
-            foreach (var chunk in pcmChunks)
-                writer.Write(chunk);
-        }
-        ConsoleFormatter.Info($"[SRX-PROBE] 解码流 WAV → {outPath}（{totalPcmBytes / 32000.0:F1}s @16k mono；" +
+        ConsoleFormatter.Info($"[SRX-PROBE] 解码流 WAV → {report.WavPath}（{report.TotalPcmBytes / 32000.0:F1}s @16k mono；" +
                               "发射时刻自 playT0 起第 k·750ms——离线可做绝对锚 v2 标定）");
-        return scan.DetectedCount > 0 ? 0 : 3;
+        return report.Scan.DetectedCount > 0 ? 0 : 3;
     }
 
     /// <summary>`srx batt`：查电量（0x41 下行 + RSP 应答，验软件接收器形态的命令/应答链）。</summary>
