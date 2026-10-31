@@ -344,6 +344,12 @@ public partial class ProductHomeViewModel : ObservableObject
 
     // ============ 设备连接命令 ============
 
+    /// <summary>请求连接软件接收器（MainViewModel 承接：切到软件接收器页 + 触发扫描连接）</summary>
+    public event EventHandler? SoftReceiverConnectRequested;
+
+    [RelayCommand]
+    private void ConnectSoftReceiver() => SoftReceiverConnectRequested?.Invoke(this, EventArgs.Empty);
+
     [RelayCommand]
     private async Task ScanDevicesAsync()
     {

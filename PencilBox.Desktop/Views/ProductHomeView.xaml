@@ -88,6 +88,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
                         <TextBlock Grid.Column="0" Text="连接目标：" VerticalAlignment="Center"
@@ -132,6 +133,9 @@
                         <Button Grid.Column="5" Content="清除记录" Command="{Binding ClearPenTargetsCommand}"
                                 Style="{StaticResource ActionButton}" Margin="8,0,0,0" IsEnabled="{Binding HasPenTargets}"
                                 ToolTip="清空本地已知笔端目录（出现/使用历史全部抹掉，长期累积后手动整理用）；不影响已下发到基站的绑定（基站侧解绑走下方 A3 清目标；笔端本体解绑走「串口直达笔端」行的清绑定）"/>
+                        <Button Grid.Column="6" Content="连接软件接收器" Command="{Binding ConnectSoftReceiverCommand}"
+                                Style="{StaticResource ActionButton}" Margin="8,0,0,0"
+                                ToolTip="切到「软件接收器」页并扫描直连键盘（PC 收语音绕过硬件基站）；键盘连着基站时不广播，可去该页填 MAC 直连"/>
                     </Grid>
 
                     <!-- 来源②：串口直达笔端（工厂/产测更可靠）——**笔端动作只在此路径**：

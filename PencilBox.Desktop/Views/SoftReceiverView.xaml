@@ -1,0 +1,100 @@
+<UserControl x:Class="PencilBox.Desktop.Views.SoftReceiverView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             d:DesignHeight="500" d:DesignWidth="800">
+    <!-- 软件接收器页（形态③）：PC 直连键盘收语音，绕过硬件基站。
+         状态卡 + 连接控制 + 事件流；扩音泵出走引擎外源模式（ExternalSource）。
+         布局铁律（坑点速查 §三）：横排用 WrapPanel 防右侧静默裁切，不用横向 StackPanel+禁横滚。 -->
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 状态卡 -->
+        <Border Grid.Row="0" Background="#F4F6F7" BorderBrush="#D5DBDB" BorderThickness="1"
+                CornerRadius="4" Padding="12" Margin="0,0,0,8">
+            <StackPanel>
+                <WrapPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                        <TextBlock Text="连接：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding ConnectionText}" VerticalAlignment="Center" FontWeight="SemiBold">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="#7F8C8D"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                            <Setter Property="Foreground" Value="#1E8449"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                        <TextBlock Text="电量：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding BatteryText}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                        <TextBlock Text="充电：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding ChargeText}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                        <TextBlock Text="笔端状态：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding DevStateText}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                        <TextBlock Text="档位：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding ModeText}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="扩音泵出：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding SpeakerText}" VerticalAlignment="Center"
+                                   Foreground="#0B5345" FontWeight="SemiBold"/>
+                    </StackPanel>
+                </WrapPanel>
+                <TextBlock Text="{Binding StatsText}" FontSize="11" Foreground="#7F8C8D" Margin="0,4,0,0"
+                           TextWrapping="Wrap" ToolTip="会话统计（DATA 帧/解码/CRC/seq 跳/电量/充电）"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 连接控制 -->
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*" MinWidth="160"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="键盘 MAC（空=扫描）：" VerticalAlignment="Center" Foreground="#555"/>
+            <TextBox Grid.Column="1" Text="{Binding MacInput, UpdateSourceTrigger=PropertyChanged}"
+                     VerticalContentAlignment="Center" Margin="0,0,8,0"
+                     ToolTip="显示序 AA:BB:CC:DD:EE:FF；留空则扫描 5s 按 SunVote-R1 前缀取信号最强"/>
+            <Button Grid.Column="2" Content="扫描并连接" Command="{Binding ConnectCommand}"
+                    Style="{StaticResource ActionButton}"
+                    IsEnabled="{Binding IsBusy, Converter={StaticResource InvertBoolConverter}}"/>
+            <Button Grid.Column="3" Content="断开" Command="{Binding DisconnectCommand}"
+                    Style="{StaticResource ActionButton}"
+                    IsEnabled="{Binding IsConnected}"/>
+        </Grid>
+
+        <!-- 事件流 -->
+        <GroupBox Grid.Row="2" Header="事件流（键 / 档位 / 状态槽 / 诊断；最新 200 条）" Padding="4">
+            <ListBox ItemsSource="{Binding EventLog}" FontFamily="Consolas" FontSize="12"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     VirtualizingPanel.ScrollUnit="Pixel">
+                <!-- 坑点速查 §三：禁横滚必须配 TextWrapping，否则长行右侧静默裁切 -->
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </GroupBox>
+    </Grid>
+</UserControl>

@@ -44,6 +44,11 @@ public static class DesktopModuleExtensions
     public static IServiceCollection AddSoftTriggerModule(this IServiceCollection services) =>
         services.AddSingleton<SoftTriggerViewModel>();
 
+    /// <summary>可选域·软件接收器（FeatureCatalog: softreceiver；形态③ PC 直连键盘收语音。
+    /// 页签常驻——连点器先例：随开关隐藏会"关掉后找不到页面"，开关只作目录/裁剪标记）。</summary>
+    public static IServiceCollection AddSoftReceiverModule(this IServiceCollection services) =>
+        services.AddSingleton<SoftReceiverViewModel>();
+
     /// <summary>功能控制台（可选功能总开关；壳与仪表盘共用同一单例）。</summary>
     public static IServiceCollection AddFeaturesModule(this IServiceCollection services) =>
         services.AddSingleton<FeaturesViewModel>();

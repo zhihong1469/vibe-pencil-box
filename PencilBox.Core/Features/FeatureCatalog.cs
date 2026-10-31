@@ -49,6 +49,15 @@ public static class FeatureCatalog
             Description: "全键盘任意键±修饰触发键盘序列回放/连发（纯上位机软件，不插设备也全功能）",
             DefaultEnabled: true,
             CliDomains: ["softtrigger"]),
+
+        // 软件接收器（形态③，2026-10-31）：PC 直连键盘收语音，绕过硬件基站。
+        // 页签常驻（连点器先例：随开关隐藏会"关掉后找不到页面"）；开关只作目录/裁剪标记。
+        new FeatureDescriptor(
+            Id: "softreceiver",
+            Name: "软件接收器",
+            Description: "PC 经 BLE 直连键盘收语音（绕过硬件基站）：mSBC 解码、状态卡/事件流、扩音泵出（GUI 软件接收器页；CLI 域 srx）",
+            DefaultEnabled: true,
+            CliDomains: ["srx"]),
     ];
 
     public static FeatureDescriptor? Find(string featureId) =>

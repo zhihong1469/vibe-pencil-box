@@ -51,9 +51,14 @@
              —— Serial 与 OTA 已从"调试工具"提升到这里，日常使用无需再展开调试面板
              可选功能页签按总开关显隐（14 号：FeaturesViewModel 直出 Visibility；
              核心域 仪表盘/升级 恒显——设备强相关不可关） -->
-        <TabControl Grid.Row="1" Margin="6,4,6,0">
+        <TabControl Grid.Row="1" Margin="6,4,6,0" SelectedIndex="{Binding SelectedTabIndex}">
             <TabItem Header="仪表盘">
                 <v:ProductHomeView DataContext="{Binding ProductHome}"/>
+            </TabItem>
+            <!-- 软件接收器页签常驻（连点器同款先例：随开关隐藏会"关掉后找不到页面"；形态③ 直连键盘收语音） -->
+            <TabItem Header="软件接收器"
+                     ToolTip="软件接收器（srx，CLI 域名不变）——PC 经 BLE 直连键盘收语音，绕过硬件基站：mSBC 解码、状态卡/事件流、扩音泵出">
+                <v:SoftReceiverView DataContext="{Binding SoftReceiver}"/>
             </TabItem>
             <!-- 连点器页签常驻（2026-10-19 指挥官目验反馈：随开关隐藏会"关掉后找不到页面"；
                  启停走页内总开关，与功能控制台/CLI 同一份 features.json） -->

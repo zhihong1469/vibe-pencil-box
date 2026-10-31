@@ -31,6 +31,10 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private DeviceInfo? _currentDevice;
 
+    /// <summary>主窗页签选中位（仪表盘「连接软件接收器」按钮跳页用；TabControl SelectedIndex 直绑）</summary>
+    [ObservableProperty]
+    private int _selectedTabIndex;
+
     public bool IsNotConnected => !IsConnected;
 
     public DevicePageViewModel DevicePage { get; }
@@ -45,6 +49,9 @@ public partial class MainViewModel : ObservableObject
 
     /// <summary>软触发（13 号：纯软件域，零设备依赖）</summary>
     public SoftTriggerViewModel SoftTrigger { get; }
+
+    /// <summary>软件接收器（形态③：PC 直连键盘收语音）</summary>
+    public SoftReceiverViewModel SoftReceiver { get; }
 
     /// <summary>功能控制台（14 号：主窗页签显隐与仪表盘控制台卡共用同一单例）</summary>
     public FeaturesViewModel Features { get; }
@@ -63,6 +70,7 @@ public partial class MainViewModel : ObservableObject
         ProductHomeViewModel productHome,
         AirMouseViewModel airMouse,
         SoftTriggerViewModel softTrigger,
+        SoftReceiverViewModel softReceiver,
         FeaturesViewModel features)
     {
         _deviceService = deviceService;
@@ -79,10 +87,20 @@ public partial class MainViewModel : ObservableObject
         ProductHome = productHome;
         AirMouse = airMouse;
         SoftTrigger = softTrigger;
+        SoftReceiver = softReceiver;
         Features = features;
+
+        // 仪表盘「连接软件接收器」→ 切到软件接收器页并触发扫描连接
+        productHome.SoftReceiverConnectRequested += OnSoftReceiverConnectRequested;
 
         _deviceService.ConnectionStateChanged += OnConnectionStateChanged;
         _deviceService.DeviceInfoChanged += OnDeviceInfoChanged;
+    }
+
+    private void OnSoftReceiverConnectRequested(object? sender, EventArgs e)
+    {
+        SelectedTabIndex = 1;   // TabControl 序：仪表盘(0) → 软件接收器(1) → 连点器(2) …
+        SoftReceiver.ConnectCommand.Execute(null);
     }
 
     private void OnConnectionStateChanged(object? sender, bool connected)
