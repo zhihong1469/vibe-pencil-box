@@ -428,6 +428,222 @@ public class SoftReceiverCommands
         }
     }
 
+    /// <summary>
+    /// `srx bridge`：虚拟麦克风桥（R1PBleAudio 对外腿，桥式路线——适配既有虚拟声卡，免驱动签名）。
+    /// 常规：连接键盘收解码 PCM → 泵进虚拟声卡渲染端（如 VB-Cable "CABLE Input"），
+    /// 第三方软件从同卡采集端（"CABLE Output"）当麦克风录音；延迟增量≈两端 WASAPI 缓冲（15~50ms 可调），
+    /// 不进主链（识别/扩音/测量走进程内直供零新增）。
+    /// --selftest：无键盘自主回环——chirp 训练列进桥渲染端，同卡采集端回采 → ChirpScanAnalyzer 对拍
+    /// （检出率/PPM），验"桥形态+采样率链路"，无需语音流、无需键盘在位。
+    /// </summary>
+    public async Task<int> BridgeAsync(string? mac, string? name, int sec, string? device, float volume, bool selftest)
+    {
+        // 1) 找桥目标（虚拟声卡渲染端）
+        NAudio.CoreAudioApi.MMDevice? render = null;
+        NAudio.CoreAudioApi.MMDevice? capture = null;
+        using (var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator())
+        {
+            var renders = enumerator.EnumerateAudioEndPoints(NAudio.CoreAudioApi.DataFlow.Render, NAudio.CoreAudioApi.DeviceState.Active).ToList();
+            var captures = enumerator.EnumerateAudioEndPoints(NAudio.CoreAudioApi.DataFlow.Capture, NAudio.CoreAudioApi.DeviceState.Active).ToList();
+            if (!string.IsNullOrWhiteSpace(device))
+            {
+                render = renders.FirstOrDefault(d => d.FriendlyName.Contains(device, StringComparison.OrdinalIgnoreCase));
+                if (render == null)
+                {
+                    ConsoleFormatter.Error($"--device \"{device}\" 无匹配渲染设备。现有：\n  " +
+                        string.Join("\n  ", renders.Select(d => d.FriendlyName)));
+                    return 1;
+                }
+                // 手指渲染端时按同族括注自动配采集端（物理声学回环/同卡配对均可）
+                capture = captures.FirstOrDefault(d => SrxBridgePump.NameCandidatesMatch(render.FriendlyName, d.FriendlyName));
+            }
+            else
+            {
+                var (ri, ci) = SrxBridgePump.SelectPair(
+                    renders.Select(d => d.FriendlyName).ToList(), captures.Select(d => d.FriendlyName).ToList());
+                if (ri < 0)
+                {
+                    ConsoleFormatter.Error("未发现虚拟声卡配对端点（CABLE Input/Output 类）。现有渲染设备：\n  " +
+                        string.Join("\n  ", renders.Select(d => d.FriendlyName)) +
+                        "\n现有采集设备：\n  " + string.Join("\n  ", captures.Select(d => d.FriendlyName)) +
+                        "\n安装 VB-Cable（免费）后重试，或用 --device <名字片段> 手指渲染设备");
+                    return 1;
+                }
+                render = renders[ri];
+                capture = captures[ci];
+            }
+        }
+
+        using var renderDev = render;
+        using var captureDev = capture;
+        ConsoleFormatter.Info($"[SRX-BRIDGE] 渲染端（泵入）[{render.FriendlyName}]；采集端（第三方录音口）" +
+            $"{(capture != null ? $"[{capture.FriendlyName}]" : "（--device 指定模式，未配对，自测不可用）")}");
+
+        // 2a) 自测：chirp 进桥 → 同卡回采 → 对拍
+        if (selftest)
+        {
+            if (captureDev == null)
+            {
+                ConsoleFormatter.Error("自测需配对采集端（--device 单指定渲染端不可用）；装 VB-Cable 后免参重试");
+                return 1;
+            }
+            return RunBridgeSelftest(renderDev, captureDev, Math.Clamp(sec, 5, 60), volume);
+        }
+
+        // 2b) 常规：键盘解码 PCM → 桥
+        var macDisplay = await ResolveTargetAsync(mac, name);
+        if (macDisplay == null)
+            return 1;
+
+        var session = new SoftReceiverSession(_central, msg => ConsoleFormatter.Info($"[SRX] {msg}"));
+        var pump = new SrxBridgePump();
+        using var cts = new CancellationTokenSource();
+        if (sec > 0)
+            cts.CancelAfter(TimeSpan.FromSeconds(sec));
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+        session.AudioFrameReady += (_, f) => pump.WritePcm(f.Pcm);
+
+        try
+        {
+            await session.ConnectAsync(macDisplay);
+            pump.Start(renderDev, volume);
+            ConsoleFormatter.Info(
+                $"[SRX-BRIDGE] 已开播：键盘解码 PCM → [{render.FriendlyName}]；" +
+                $"第三方软件选麦克风「{(captureDev != null ? captureDev.FriendlyName : render.FriendlyName + " 对应采集端")}」即可收 R1 人声（延迟增量≈两端缓冲 15~50ms）");
+            ConsoleFormatter.Info($"[SRX-BRIDGE] 泵流 {sec}s（语音流须在流：K2/S1 物理触发）…");
+
+            var hb = Task.Run(async () =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    await Task.Delay(2000, cts.Token);
+                    ConsoleFormatter.Info($"[SRX-BRIDGE] 环深 {pump.RingDepthMs:F0}ms 欠载块 {pump.UnderrunBlocks} 已泵 {pump.PumpedSamples / 16000.0:F1}s 音频");
+                }
+            }, CancellationToken.None);
+            _ = hb.ContinueWith(_ => { }, TaskScheduler.Default);
+
+            await session.StartAsync(cts.Token);
+        }
+        catch (InvalidOperationException ex)
+        {
+            ConsoleFormatter.Error(ex.Message);
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常收尾
+        }
+        catch (Exception ex)
+        {
+            ConsoleFormatter.Error($"bridge 异常中断：{ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            pump.Dispose();
+            await session.StopAsync();
+            await _central.DisconnectAsync();
+            ConsoleFormatter.Info("已断开");
+        }
+
+        ConsoleFormatter.Info($"[SRX] {session.Stats.Summary()}");
+        if (pump.PumpedSamples == 0)
+        {
+            ConsoleFormatter.Warn("泵入 0 帧：语音流未在流（K2/S1 物理触发）——桥形态已通，等真实上行即可对外供音");
+            return 2;
+        }
+        ConsoleFormatter.Success(
+            $"桥收尾：泵入 {pump.PumpedSamples / 16000.0:F1}s 音频（{pump.PumpedSamples} 样本）欠载块 {pump.UnderrunBlocks}——" +
+            "第三方软件从该采集端录音即 R1 麦克风形态");
+        return 0;
+    }
+
+    /// <summary>桥自测：chirp 训练列→渲染端→同卡采集端回采→16k 重采样→网格对拍（无键盘自主回环）。</summary>
+    private static int RunBridgeSelftest(NAudio.CoreAudioApi.MMDevice render, NAudio.CoreAudioApi.MMDevice capture, int sec, float volume)
+    {
+        var pump = new SrxBridgePump();
+        var capBuffer = new MemoryStream();
+        long capBytes = 0;
+        NAudio.CoreAudioApi.WasapiCapture? recorder = null;
+        try
+        {
+            pump.Start(render, volume);
+
+            // 发射：chirp 训练列 → PCM16 → 环（Stopwatch 精确实时节拍——
+            // Sleep(100)/100ms 块慢于实时会欠载拉长网格，首测 PPM 81781 实证）
+            var chirp = new ChirpTrainSource();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(sec));
+            var gen = Task.Run(() =>
+            {
+                var buf = new float[160]; // 10ms @16k
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                long fed = 0;
+                var total = (long)sec * MsbcDecoder.SampleRate;
+                while (!cts.IsCancellationRequested && fed < total)
+                {
+                    var target = Math.Min(total, (long)(sw.Elapsed.TotalSeconds * MsbcDecoder.SampleRate));
+                    while (fed < target)
+                    {
+                        var n = chirp.Read(buf, 0, (int)Math.Min(buf.Length, target - fed));
+                        var bytes = new byte[n * 2];
+                        for (var i = 0; i < n; i++)
+                        {
+                            var s = (short)Math.Clamp(buf[i] * volume * 32767f, short.MinValue, short.MaxValue);
+                            bytes[i * 2] = (byte)s;
+                            bytes[(i * 2) + 1] = (byte)(s >> 8);
+                        }
+                        pump.WritePcm(bytes);
+                        fed += n;
+                    }
+                    Thread.Sleep(5);
+                }
+            }, CancellationToken.None);
+
+            // 回采：同卡采集端
+            var capFormat = capture.AudioClient.MixFormat;
+            recorder = new NAudio.CoreAudioApi.WasapiCapture(capture) { WaveFormat = capFormat };
+            recorder.DataAvailable += (_, e) =>
+            {
+                capBuffer.Write(e.Buffer, 0, e.BytesRecorded);
+                Interlocked.Add(ref capBytes, e.BytesRecorded);
+            };
+            recorder.StartRecording();
+            ConsoleFormatter.Info($"[SRX-BRIDGE-SELFTEST] chirp 进 [{render.FriendlyName}] {sec}s，回采 [{capture.FriendlyName}]（{capFormat.SampleRate}Hz/{capFormat.Channels}ch/{capFormat.Encoding}）…");
+            gen.Wait(CancellationToken.None);
+            recorder.StopRecording();
+            Thread.Sleep(200);
+
+            // 混音格式 → mono short @16k（整数比盒式平均抽取）
+            var ratio = capFormat.SampleRate / 16000;
+            if (capFormat.SampleRate != ratio * 16000)
+            {
+                ConsoleFormatter.Warn($"回采率 {capFormat.SampleRate}Hz 非 16k 整数倍，跳过对拍（回采 {capBytes / 1000.0:F0}kB 已证链路通）");
+                return 3;
+            }
+            var mono = SrxBridgePump.ExtractMonoShort(capBuffer.ToArray(), capFormat);
+            var sig16k = SrxBridgePump.DecimateTo16k(mono, ratio);
+            var rms = Math.Sqrt(sig16k.Average(x => (double)x * x));
+            ConsoleFormatter.Info($"[SRX-BRIDGE-SELFTEST] 回采 {capBytes / 1000.0:F0}kB → mono {mono.Length} 样本 → 16k {sig16k.Length} 样本（RMS {rms:F0}/32767）；chirp 泵入 {pump.PumpedSamples / 16000.0:F1}s");
+
+            var scan = ChirpScanAnalyzer.ScanByGrid(sig16k, MsbcDecoder.SampleRate, ChirpTemplate.PeriodSamples);
+            ConsoleFormatter.Info(
+                $"[SRX-BRIDGE-SELFTEST] 对拍：检出 {scan.DetectedCount}/{scan.ExpectedCount}（缺失 {scan.MissingSlots.Count} 槽）PPM {scan.Ppm:F0}" +
+                "（形状口径；绝对延迟=渲染端缓冲+采集端缓冲，含起点常量偏置）");
+            return scan.DetectedCount > 0 ? 0 : 3;
+        }
+        catch (Exception ex)
+        {
+            ConsoleFormatter.Error($"selftest 异常：{ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
+        finally
+        {
+            try { recorder?.StopRecording(); } catch { /* 收尾容错 */ }
+            recorder?.Dispose();
+            pump.Dispose();
+        }
+    }
+
     /// <summary>目标解析：--mac 直接用；否则扫描 5s 按 SunVote 笔端识别推荐（复用 ble 域口径）。</summary>
     private async Task<string?> ResolveTargetAsync(string? mac, string? name)
     {

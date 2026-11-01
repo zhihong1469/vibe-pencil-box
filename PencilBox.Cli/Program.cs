@@ -367,6 +367,11 @@ public class Program
                 GetOptionInt(rest, "--sec", 12), GetOption(rest, "--out"),
                 ParseVolume(GetOption(rest, "--volume"))),
 
+            "bridge" => await cmd.BridgeAsync(
+                GetOption(rest, "--mac"), GetOption(rest, "--name"),
+                GetOptionInt(rest, "--sec", 60), GetOption(rest, "--device"),
+                ParseVolume(GetOption(rest, "--volume")), HasFlag(rest, "--selftest")),
+
             "batt" or "battery" => await cmd.BattAsync(
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
                 GetOptionInt(rest, "--timeout", 10_000)),
