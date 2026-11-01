@@ -62,9 +62,28 @@
                                 IsEnabled="{Binding CanToggleSpeaker}"
                                 ToolTip="键盘麦克风人声实时扩音到本机扬声器（解码 PCM→扩音引擎外源泵→扬声器）；CLI 等价=srx amp"/>
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                        <TextBlock Text="虚拟麦克风：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding BridgeDeviceText}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="#0B5345" FontWeight="SemiBold"
+                                   ToolTip="开桥后第三方软件选此采集端录音即 R1 人声"/>
+                        <Button Content="{Binding BridgeText}" Command="{Binding ToggleBridgeCommand}"
+                                Style="{StaticResource ActionButton}"
+                                IsEnabled="{Binding CanToggleBridge}"
+                                ToolTip="开桥=解码 PCM 泵进虚拟声卡渲染端，第三方软件从同卡采集端当麦克风录音（R1PBleAudio 桥式形态）；需先装 VB-Cable；CLI 等价=srx bridge"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="录制 WAV：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <Button Content="{Binding RecordText}" Command="{Binding ToggleRecordCommand}" Margin="0,0,0,0"
+                                Style="{StaticResource ActionButton}"
+                                IsEnabled="{Binding IsConnected}"
+                                ToolTip="解码 PCM 直落 WAV（16k/16bit/mono，exe 目录 srx_record\）；语音流须在流（K2/S1）"/>
+                    </StackPanel>
                 </WrapPanel>
                 <TextBlock Text="{Binding StatsText}" FontSize="11" Foreground="#7F8C8D" Margin="0,4,0,0"
                            TextWrapping="Wrap" ToolTip="会话统计（DATA 帧/解码/CRC/seq 跳/电量/充电）"/>
+                <TextBlock Text="{Binding BridgeInfoText}" FontSize="11" Foreground="#7F8C8D" Margin="0,2,0,0"
+                           TextWrapping="Wrap" ToolTip="桥运行态（开桥时每秒刷新：环深/泵入/欠载）"/>
             </StackPanel>
         </Border>
 

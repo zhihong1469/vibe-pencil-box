@@ -10,6 +10,8 @@ using System.Text;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using NAudio.CoreAudioApi;
+using NAudio.Wave;
 using PencilBox.Core.Ble;
 using PencilBox.Core.Ble.SoftReceiver;
 using PencilBox.Core.Communication;
@@ -50,9 +52,12 @@ public partial class SoftReceiverViewModel : ObservableObject
 
     // ---- 连接状态卡 ----
     [NotifyPropertyChangedFor(nameof(CanProbe))]
+    [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
+    [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [ObservableProperty] private bool _isBusy;
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
+    [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _connectionText = "未连接";
     [ObservableProperty] private string _macInput = "";
@@ -66,13 +71,31 @@ public partial class SoftReceiverViewModel : ObservableObject
     [ObservableProperty] private bool _isSpeakerOn;
     [ObservableProperty] private string _speakerText = "关";
 
+    // ---- 虚拟麦克风桥（R1PBleAudio 桥式腿，复用 SrxBridgePump） ----
+    [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
+    [ObservableProperty] private bool _isBridgeOn;
+    [ObservableProperty] private string _bridgeText = "关";
+    [ObservableProperty] private string _bridgeDeviceText = "—";
+    [ObservableProperty] private string _bridgeInfoText = "—";
+
+    // ---- 收流录制 WAV（receive 腿） ----
+    [ObservableProperty] private bool _isRecording;
+    [ObservableProperty] private string _recordText = "录制 WAV";
+
     // ---- 延迟实测（chirp 回环，复用 SoftReceiverProbe） ----
     [NotifyPropertyChangedFor(nameof(CanProbe))]
+    [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
+    [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [ObservableProperty] private bool _isProbing;
     [ObservableProperty] private string _probeSecondsInput = "30";
     [ObservableProperty] private string _probeResultText = "（未测）";
 
     private CancellationTokenSource? _probeCts;
+    private SrxBridgePump? _bridge;
+    private WaveFileWriter? _recordWriter;
+    private readonly object _recordLock = new();
+    private long _recordFrames;
+    private Stopwatch? _recordSw;
 
     /// <summary>「开始延迟实测」可用 = 已连接且未在测未忙（按钮 IsEnabled 直绑，勿用转换器）</summary>
     public bool CanProbe => IsConnected && !IsProbing && !IsBusy;
@@ -82,6 +105,9 @@ public partial class SoftReceiverViewModel : ObservableObject
 
     /// <summary>扩音按钮文案随态翻转</summary>
     public string SpeakerButtonText => IsSpeakerOn ? "关扩音" : "开扩音";
+
+    /// <summary>「虚拟麦克风桥」按钮可用 = 已连接，或桥正开着（允许随时关）；实测中锁死</summary>
+    public bool CanToggleBridge => (IsConnected || IsBridgeOn) && !IsProbing && !IsBusy;
 
     /// <summary>事件流（最新在下；容量裁剪防长会话膨胀）</summary>
     public ObservableCollection<string> EventLog { get; } = [];
@@ -220,6 +246,11 @@ public partial class SoftReceiverViewModel : ObservableObject
             StatsText = "—";
             if (IsSpeakerOn)
                 ToggleSpeakerExecute();
+            if (IsBridgeOn)
+                StopBridge("断开");
+            if (IsRecording)
+                StopRecord();
+            _speakerStatsTimer?.Stop();
         }
     }
 
@@ -249,12 +280,12 @@ public partial class SoftReceiverViewModel : ObservableObject
     {
         if (IsSpeakerOn)
         {
-            _speakerStatsTimer?.Stop();
             _speakerClock.Reset();
             _ = _passthrough.StopAsync();
             IsSpeakerOn = false;
             SpeakerText = "关";
             Log("扩音泵出已关");
+            MaybeStopStatsTimer();
             return;
         }
         try
@@ -272,8 +303,7 @@ public partial class SoftReceiverViewModel : ObservableObject
             IsSpeakerOn = true;
             SpeakerText = "开（外源泵 16k）";
             _speakerClock.Restart();
-            _speakerStatsTimer ??= CreateSpeakerStatsTimer();
-            _speakerStatsTimer.Start();
+            EnsureStatsTimer();
             Log("扩音泵出已开（16k 外源泵→处理链→扬声器）");
         }
         catch (Exception ex)
@@ -290,8 +320,23 @@ public partial class SoftReceiverViewModel : ObservableObject
             var s = _passthrough.GetStats();
             StatsText = $"泵出运行 {_speakerClock.Elapsed.TotalSeconds:F0}s：" +
                         $"环深 {s.RingDepthMs:F0}ms / 估计延迟 {s.EstimatedLatencyMs:F0}ms / 欠载 {s.UnderrunEvents}";
+            var b = _bridge;
+            BridgeInfoText = b == null ? "—" :
+                $"环深 {b.RingDepthMs:F0}ms / 泵入 {b.PumpedSamples / 16000.0:F1}s / 欠载块 {b.UnderrunBlocks}";
         };
         return timer;
+    }
+
+    private void EnsureStatsTimer()
+    {
+        _speakerStatsTimer ??= CreateSpeakerStatsTimer();
+        _speakerStatsTimer.Start();
+    }
+
+    private void MaybeStopStatsTimer()
+    {
+        if (!IsSpeakerOn && _bridge == null)
+            _speakerStatsTimer?.Stop();
     }
 
     // ---- 延迟实测（chirp 回环） ----
@@ -323,6 +368,11 @@ public partial class SoftReceiverViewModel : ObservableObject
             {
                 ToggleSpeakerExecute();
                 Log("[延迟实测] 自动关扩音（防 chirp 混叠/啸叫）");
+            }
+            if (IsBridgeOn)
+            {
+                StopBridge("延迟实测前自动关");
+                Log("[延迟实测] 自动关虚拟麦克风桥（chirp 勿外泄给第三方）");
             }
             probe.Start(1.0f);
             Log($"[延迟实测] chirp 已开播 → [{probe.RenderDeviceName}]，收流 {sec}s（语音流须在流：K2/S1 物理触发）…");
@@ -378,12 +428,136 @@ public partial class SoftReceiverViewModel : ObservableObject
     private static string BuildProbeWavPath() =>
         Path.Combine(AppContext.BaseDirectory, "srx_probe", $"srx_probe_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
+    // ---- 虚拟麦克风桥（R1PBleAudio 桥式腿） ----
+
+    /// <summary>
+    /// 开/关桥：解码 PCM → 虚拟声卡渲染端，第三方软件从同卡采集端当麦克风录音。
+    /// 复用 <see cref="SrxBridgePump"/>（CLI srx bridge 同一份逻辑）；设备枚举每次开桥时刷新。
+    /// </summary>
+    [RelayCommand]
+    private void ToggleBridge()
+    {
+        if (IsBridgeOn)
+        {
+            StopBridge("手动关桥");
+            return;
+        }
+        if (!IsConnected || Session == null)
+        {
+            Log("先连接键盘再开桥");
+            return;
+        }
+        using var enumerator = new MMDeviceEnumerator();
+        var renders = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active).ToList();
+        var captures = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active).ToList();
+        var (ri, ci) = SrxBridgePump.SelectPair(
+            renders.Select(d => d.FriendlyName).ToList(), captures.Select(d => d.FriendlyName).ToList());
+        if (ri < 0)
+        {
+            Log("未发现虚拟声卡配对端点（CABLE Input/Output 类）——安装 VB-Cable 后重试");
+            return;
+        }
+        try
+        {
+            var pump = new SrxBridgePump();
+            pump.Start(renders[ri], 1.0f);
+            _bridge = pump;
+            IsBridgeOn = true;
+            BridgeText = "开";
+            BridgeDeviceText = captures[ci].FriendlyName;
+            EnsureStatsTimer();
+            Log($"桥已开：解码 PCM → [{renders[ri].FriendlyName}]；第三方软件选麦克风「{captures[ci].FriendlyName}」即 R1 人声（增量≈15~50ms）");
+        }
+        catch (Exception ex)
+        {
+            Log($"桥启动失败：{ex.Message}");
+        }
+    }
+
+    private void StopBridge(string reason)
+    {
+        var pump = _bridge;
+        _bridge = null;
+        if (pump != null)
+        {
+            var pumped = pump.PumpedSamples / 16000.0;
+            pump.Dispose();
+            Log($"桥已关（{reason}）：本场泵入 {pumped:F1}s 音频");
+        }
+        IsBridgeOn = false;
+        BridgeText = "关";
+        BridgeDeviceText = "—";
+        BridgeInfoText = "—";
+        MaybeStopStatsTimer();
+    }
+
+    // ---- 收流录制 WAV（receive 腿） ----
+
+    /// <summary>录制/停止：解码 PCM 直落 WAV（16k/16bit/mono），存 exe 目录 srx_record\。</summary>
+    [RelayCommand]
+    private void ToggleRecord()
+    {
+        if (IsRecording)
+        {
+            StopRecord();
+            return;
+        }
+        if (!IsConnected || Session == null)
+        {
+            Log("先连接键盘再录制");
+            return;
+        }
+        var dir = Path.Combine(AppContext.BaseDirectory, "srx_record");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"srx_record_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
+        try
+        {
+            _recordWriter = new WaveFileWriter(path, new WaveFormat(MsbcDecoder.SampleRate, 16, 1));
+            _recordFrames = 0;
+            _recordSw = Stopwatch.StartNew();
+            IsRecording = true;
+            RecordText = "停止录制";
+            Log($"开始录制 WAV → {path}（16k/16bit/mono；语音流须在流）");
+        }
+        catch (Exception ex)
+        {
+            Log($"录制启动失败：{ex.Message}");
+        }
+    }
+
+    private void StopRecord()
+    {
+        WaveFileWriter? writer;
+        lock (_recordLock)
+        {
+            writer = _recordWriter;
+            _recordWriter = null;
+        }
+        _recordSw?.Stop();
+        IsRecording = false;
+        RecordText = "录制 WAV";
+        if (writer == null)
+            return;
+        var seconds = _recordFrames * 7.5 / 1000.0;
+        try { writer.Dispose(); } catch { /* 收尾容错 */ }
+        Log($"录制完成：{_recordFrames} 帧 ≈ {seconds:F1}s（{Path.GetFileName(writer.Filename)}）");
+    }
+
     // ---- 会话事件 → UI（WinRT 线程池回调，一律调度回 UI 线程） ----
 
     private void OnAudioFrameReady(object? sender, SoftReceiverAudioFrame frame)
     {
         if (IsSpeakerOn)
             _ = _passthrough.WriteExternalPcm(frame.Pcm);
+        _bridge?.WritePcm(frame.Pcm);
+        lock (_recordLock)
+        {
+            if (_recordWriter != null)
+            {
+                _recordWriter.Write(frame.Pcm);
+                _recordFrames++;
+            }
+        }
     }
 
     private void OnKeyEvent(object? sender, SoftReceiverKeyEvent k) =>
