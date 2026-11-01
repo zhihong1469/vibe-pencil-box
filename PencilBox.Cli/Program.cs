@@ -352,7 +352,8 @@ public class Program
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
                 GetOption(rest, "--out"), GetOptionInt(rest, "--sec", 0),
                 voiceState,
-                GetOptionInt(rest, "--timeout", 10_000)),
+                GetOptionInt(rest, "--timeout", 10_000),
+                HasFlag(rest, "--actions")),
 
             "amp" => await cmd.AmpAsync(
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
@@ -360,7 +361,8 @@ public class Program
                 ParseVolume(GetOption(rest, "--volume")),
                 GetOptionInt(rest, "--latency", 40),
                 !HasFlag(rest, "--no-aec"), !HasFlag(rest, "--no-ans"), HasFlag(rest, "--afc"),
-                GetOptionInt(rest, "--hpf", 80), GetOptionInt(rest, "--lpf", 0)),
+                GetOptionInt(rest, "--hpf", 80), GetOptionInt(rest, "--lpf", 0),
+                HasFlag(rest, "--actions")),
 
             "probe" => await cmd.ProbeAsync(
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),

@@ -13,6 +13,14 @@ public sealed record SoftReceiverAudioFrame(byte[] Pcm, byte AudioSeq, long Loca
 /// <summary>编码按键事件（0x11/0x12，软件接收器形态）。</summary>
 public sealed record SoftReceiverKeyEvent(byte Page, byte KeyCode, byte Modifier, bool IsDown, long LocalTimestampMs);
 
+/// <summary>语义键动作事件（0x13 [key_id][action]，笔端 CONFIG_DONGLE_MODE=1 实发口径：
+/// K2 语音边界、K3-K6 翻页/音量的单击/双击/长按连发/松手）。</summary>
+public sealed record SoftReceiverKeyActionEvent(byte KeyNum, byte Action, long LocalTimestampMs);
+
+/// <summary>鼠标键沿事件（鼠标槽 buttons 变化沿才报；bit0=左键 bit1=右键，
+/// 空鼠开时 K3/K4 物理按键经此通道到达）。</summary>
+public sealed record SoftReceiverMouseButtonEvent(bool Left, bool Right, long LocalTimestampMs);
+
 /// <summary>档位切换事件（0x16，收到即报，无防重）。</summary>
 public sealed record SoftReceiverSwitchEvent(byte Mode, long LocalTimestampMs);
 
@@ -39,13 +47,18 @@ public sealed class SoftReceiverStats
     public byte? LastChargeState { get; internal set; }
     public bool KeyboardMode { get; internal set; }
     public bool MouseMode { get; internal set; }
+    /// <summary>语义键动作（0x13）累计条数（含 K2 边界；长按连发逐条计）。</summary>
+    public long KeyActions { get; internal set; }
+    /// <summary>鼠标槽 buttons 变化沿次数（按下+释放各计一条）。</summary>
+    public long MouseButtonEdges { get; internal set; }
 
     /// <summary>人类可读汇总行（CLI 收尾打印）。</summary>
     public string Summary() =>
         $"DATA帧={DataFrames} 音频DATA={AudioDataFrames} 解码={AudioFramesDecoded} " +
         $"CRC错={CrcErrors} 同步错={SyncErrors} 解析错={ParseErrors} seq跳={SeqJumps}(缺{SeqGapFrames}帧) " +
         $"电量={LastBattery?.ToString() ?? "—"} 充电={LastChargeState?.ToString() ?? "—"} " +
-        $"键={(KeyboardMode ? "有" : "无")}/鼠={(MouseMode ? "有" : "无")}";
+        $"键={(KeyboardMode ? "有" : "无")}/鼠={(MouseMode ? "有" : "无")}" +
+        $" 键动作={KeyActions} 鼠键沿={MouseButtonEdges}";
 }
 
 /// <summary>
@@ -65,6 +78,7 @@ public sealed class SoftReceiverSession
     private readonly byte[] _slotLast = new byte[16];   // 状态槽防抖缓存（对齐基站 0xFF 哨兵）
     private byte _lastAudioSeq = 0xFF;
     private bool _hasLastSeq;
+    private byte _lastMouseButtons;
     private CancellationTokenSource? _subscribeCts;
     private Task? _dataSubscribeTask;
     private Task? _rspSubscribeTask;
@@ -80,6 +94,8 @@ public sealed class SoftReceiverSession
     // ---- 事件 ----
     public event EventHandler<SoftReceiverAudioFrame>? AudioFrameReady;
     public event EventHandler<SoftReceiverKeyEvent>? KeyEvent;
+    public event EventHandler<SoftReceiverKeyActionEvent>? KeyAction;
+    public event EventHandler<SoftReceiverMouseButtonEvent>? MouseButton;
     public event EventHandler<SoftReceiverSwitchEvent>? SwitchChanged;
     public event EventHandler<SoftReceiverSlotEvent>? SlotChanged;
     public event EventHandler<SoftReceiverRspEvent>? ResponseReceived;
@@ -290,10 +306,28 @@ public sealed class SoftReceiverSession
                     SwitchChanged?.Invoke(this, new SoftReceiverSwitchEvent(
                         data.Length > 0 ? data[0] : (byte)0, ts));
                     break;
+                case VpProtocol.EvtKeyAction:
+                    Stats.KeyActions++;
+                    KeyAction?.Invoke(this, new SoftReceiverKeyActionEvent(
+                        data.Length > 0 ? data[0] : (byte)0,
+                        data.Length > 1 ? data[1] : (byte)0, ts));
+                    break;
             }
         }
         if (frame.MouseSlotValid)
+        {
             Stats.MouseMode = true;
+            // 鼠标键沿：buttons 字节变化才报（槽 50Hz 全零空转期不刷事件）。
+            // bit0=左键 bit1=右键（笔端 app_mouse_data_report 实锤）。
+            byte buttons = frame.MouseSlot.Span[0];
+            if (buttons != _lastMouseButtons)
+            {
+                _lastMouseButtons = buttons;
+                Stats.MouseButtonEdges++;
+                MouseButton?.Invoke(this, new SoftReceiverMouseButtonEvent(
+                    (buttons & 0x01) != 0, (buttons & 0x02) != 0, ts));
+            }
+        }
     }
 
     private void DecodeAudio(VpDataFrame frame)
@@ -332,6 +366,7 @@ public sealed class SoftReceiverSession
     {
         _lastAudioSeq = 0xFF;
         _hasLastSeq = false;
+        _lastMouseButtons = 0;
         Array.Fill(_slotLast, (byte)0xFF);
         _decoder.Reset();
     }

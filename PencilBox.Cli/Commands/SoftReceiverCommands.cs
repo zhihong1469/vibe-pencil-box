@@ -14,6 +14,7 @@ using PencilBox.Core.Dsp;
 using PencilBox.Core.Models;
 using PencilBox.Core.Services;
 using PencilBox.Infrastructure.Audio;
+using PencilBox.Infrastructure.Platform;
 
 namespace PencilBox.Cli.Commands;
 
@@ -95,11 +96,40 @@ public class SoftReceiverCommands
     }
 
     /// <summary>
+    /// 键动作层（--actions）：0x13 语义键 → <see cref="SrxKeyActionRouter"/> 映射 → Win32 注入；
+    /// 鼠标槽 buttons 沿 → 鼠标键注入。事件与执行结果逐条落日志（真机对拍实录口径）。
+    /// 注入进前台焦点——收流/扩音期间按键会真实作用于当前活动窗口（即"影响到电脑上生效"）。
+    /// </summary>
+    private static void AttachKeyActions(SoftReceiverSession session)
+    {
+        var injector = new SystemInputInjector();
+        ConsoleFormatter.Info(
+            "[SRX] 键动作层已启用：K5/K6=音量加减、K3/K4=前后翻页（单击/双击/长按连发=硬件接收器同语义）；" +
+            "K2=语音边界（识别链接入前只记录）；空鼠开时 K3/K4=鼠标左/右键");
+        session.KeyAction += (_, a) =>
+        {
+            var plan = SrxKeyActionRouter.Map(a.KeyNum, a.Action);
+            ConsoleFormatter.Info(
+                $"[SRX] 键动作 {SrxKeyActionRouter.KeyName(a.KeyNum)} {SrxKeyActionRouter.ActionName(a.Action)}" +
+                $"（0x{a.Action:X2}）→ {plan.Note}");
+            var vk = SystemInputInjector.VkOf(plan.Kind);
+            if (vk != null && plan.Presses > 0)
+                injector.KeyTap(vk.Value, plan.Presses);
+        };
+        session.MouseButton += (_, m) =>
+        {
+            ConsoleFormatter.Info($"[SRX] 鼠标键沿 左={(m.Left ? "按下" : "释放")} 右={(m.Right ? "按下" : "释放")}");
+            injector.MouseButton(true, m.Left);
+            injector.MouseButton(false, m.Right);
+        };
+    }
+
+    /// <summary>
     /// `srx receive`：收流解码落 WAV。语音须键盘自己在识别/扩音模式（或 --voice-state 触发），
-    /// Ctrl+C 或 --sec 到点收尾出统计。
+    /// Ctrl+C 或 --sec 到点收尾出统计。--actions 开键动作层（0x13 语义键→系统注入）。
     /// </summary>
     public async Task<int> ReceiveAsync(string? mac, string? name, string? outPath, int sec,
-        byte? voiceState, int timeoutMs)
+        byte? voiceState, int timeoutMs, bool actions = false)
     {
         var macDisplay = await ResolveTargetAsync(mac, name);
         if (macDisplay == null)
@@ -147,6 +177,8 @@ public class SoftReceiverCommands
                     ConsoleFormatter.Info($"[SRX] 键 {(k.IsDown ? "DOWN" : "UP  ")} page=0x{k.Page:X2} code=0x{k.KeyCode:X2} mod=0x{k.Modifier:X2}");
                 session.ResponseReceived += (_, r) =>
                     ConsoleFormatter.Info($"[SRX] RSP cmd=0x{r.CmdId:X2} status={r.Status} data={Convert.ToHexString(r.Data)}");
+                if (actions)
+                    AttachKeyActions(session);
 
                 if (voiceState is byte vs && !await session.SendVoiceStateAsync(vs))
                     ConsoleFormatter.Warn("[SRX] 无 CMD 特征，--voice-state 未下发（手动让键盘进识别/扩音模式）");
@@ -184,7 +216,8 @@ public class SoftReceiverCommands
     /// 会显形为最大隙远超 7.5ms，是"直连净收益"议题的关键证据。
     /// </summary>
     public async Task<int> AmpAsync(string? mac, string? name, int sec, byte? voiceState,
-        float volume, int latencyMs, bool aec, bool ans, bool afc, int hpfHz, int lpfHz)
+        float volume, int latencyMs, bool aec, bool ans, bool afc, int hpfHz, int lpfHz,
+        bool actions = false)
     {
         var macDisplay = await ResolveTargetAsync(mac, name);
         if (macDisplay == null)
@@ -214,6 +247,8 @@ public class SoftReceiverCommands
         };
         session.SwitchChanged += (_, s) =>
             ConsoleFormatter.Info($"[SRX] 档位切换 → {s.Mode}（0=IDLE 1=识别 2=扩音）");
+        if (actions)
+            AttachKeyActions(session);
 
         using var cts = new CancellationTokenSource();
         if (sec > 0)

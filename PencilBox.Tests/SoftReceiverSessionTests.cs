@@ -156,6 +156,8 @@ public class SoftReceiverSessionTests
         public long DataFrames;
         public List<SoftReceiverAudioFrame> Audio = new();
         public List<SoftReceiverKeyEvent> Keys = new();
+        public List<SoftReceiverKeyActionEvent> KeyActions = new();
+        public List<SoftReceiverMouseButtonEvent> MouseButtons = new();
         public List<SoftReceiverSwitchEvent> Switches = new();
         public List<SoftReceiverSlotEvent> Slots = new();
         public List<SoftReceiverRspEvent> Rsps = new();
@@ -167,6 +169,8 @@ public class SoftReceiverSessionTests
             session.DataFrameParsed += (_, _) => DataFrames++;
             session.AudioFrameReady += (_, f) => Audio.Add(f);
             session.KeyEvent += (_, k) => Keys.Add(k);
+            session.KeyAction += (_, a) => KeyActions.Add(a);
+            session.MouseButton += (_, m) => MouseButtons.Add(m);
             session.SwitchChanged += (_, s) => Switches.Add(s);
             session.SlotChanged += (_, s) => Slots.Add(s);
             session.ResponseReceived += (_, r) => Rsps.Add(r);
@@ -255,6 +259,32 @@ public class SoftReceiverSessionTests
         Assert.True(collector.Keys[0].IsDown);
         Assert.Single(collector.Switches);
         Assert.Equal(0x02, collector.Switches[0].Mode);
+    }
+
+    [Fact]
+    public async Task Receive_KeyActionAndMouseButtonEdges()
+    {
+        var central = new FakeCentral();
+        // K5（VOL+）单击语义键 + 鼠标键沿序列：无→左(0x01)→左+右(0x03)（变化沿）→同值不重报
+        var actionSlot = new byte[] { VpProtocol.EvtKeyAction, 0x02, 0x05, 0x01 };
+        var (session, collector) = await RunSessionAsync(central,
+            BuildDataBlob(commonSlot: actionSlot),
+            BuildDataBlob(mouseSlot: new byte[] { 0x00, 0x00, 0x00, 0x00 }),
+            BuildDataBlob(mouseSlot: new byte[] { 0x01, 0x00, 0x00, 0x00 }),
+            BuildDataBlob(mouseSlot: new byte[] { 0x03, 0x00, 0x00, 0x00 }),   // 左保持 + 右按下 → 又一条沿
+            BuildDataBlob(mouseSlot: new byte[] { 0x03, 0x00, 0x00, 0x00 }));  // 同值不重报
+
+        var action = Assert.Single(collector.KeyActions);
+        Assert.Equal((byte)5, action.KeyNum);
+        Assert.Equal((byte)0x01, action.Action);
+        Assert.Equal(1, session.Stats.KeyActions);
+
+        Assert.Equal(2, collector.MouseButtons.Count);
+        Assert.True(collector.MouseButtons[0].Left);
+        Assert.False(collector.MouseButtons[0].Right);
+        Assert.True(collector.MouseButtons[1].Right);
+        Assert.Equal(2, session.Stats.MouseButtonEdges);
+        Assert.True(session.Stats.MouseMode);
     }
 
     [Fact]
