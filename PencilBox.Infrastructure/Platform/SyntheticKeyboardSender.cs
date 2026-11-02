@@ -55,8 +55,9 @@ public sealed class SyntheticKeyboardSender : ISyntheticKeyboard
         return vks.ToArray();
     }
 
-    /// <summary>HID usage → Win32 VK（与 KeyboardUsageMap.FromVirtualKey 互逆的发送侧；未知 usage 抛异常）。</summary>
-    internal static int UsageToVirtualKey(byte usage) => usage switch
+    /// <summary>HID usage → Win32 VK（与 KeyboardUsageMap.FromVirtualKey 互逆的发送侧；未知 usage 抛异常）。
+    /// 公开给 <see cref="SystemInputInjector.TapUsage"/> 复用（Keymap Keyboard 条目同表，防两处漂移）。</summary>
+    public static int UsageToVirtualKey(byte usage) => usage switch
     {
         >= 0x04 and <= 0x1D => usage - 0x04 + 0x41,              // A~Z
         >= 0x1E and <= 0x26 => usage - 0x1E + 0x31,              // 1~9

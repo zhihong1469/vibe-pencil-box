@@ -25,10 +25,12 @@ public sealed class SystemInputInjector
     private const uint InputKeyboard = 1;
     private const uint InputMouse = 0;
     private const uint KeyeventfKeyup = 0x0002;
+    private const uint MouseeventfMove = 0x0001;
     private const uint MouseeventfLeftDown = 0x0002;
     private const uint MouseeventfLeftUp = 0x0004;
     private const uint MouseeventfRightDown = 0x0008;
     private const uint MouseeventfRightUp = 0x0010;
+    private const uint MouseeventfWheel = 0x0800;
 
     /// <summary>虚拟键 tap N 次（down→保持→up；音量键连 tap 即系统连续调量）。</summary>
     public void KeyTap(int vk, int presses = 1, int holdMs = 20)
@@ -59,13 +61,59 @@ public sealed class SystemInputInjector
                 $"SendInput(鼠标) 失败（left={left} down={down}，Win32 错误码 {Marshal.GetLastWin32Error()}）");
     }
 
-    /// <summary>抽象动作 → Win32 VK（None/VoiceBoundary 无 VK，返回 null）。</summary>
-    public static int? VkOf(SrxActionKind kind) => kind switch
+    /// <summary>相对位移注入（空鼠槽 x/y 直通；s8 相对量，正=右/下）。</summary>
+    public void MouseMoveRel(int dx, int dy)
     {
-        SrxActionKind.VolumeUp => VkVolumeUp,
-        SrxActionKind.VolumeDown => VkVolumeDown,
-        SrxActionKind.PageUp => VkPageUp,
-        SrxActionKind.PageDown => VkPageDown,
+        var inputs = new INPUT[1];
+        inputs[0].Type = InputMouse;
+        inputs[0].U.Mi = new MOUSEINPUT { Dx = dx, Dy = dy, DwFlags = MouseeventfMove };
+        if (SendInput(1, inputs, Marshal.SizeOf<INPUT>()) != 1)
+            throw new InvalidOperationException(
+                $"SendInput(位移) 失败（dx={dx} dy={dy}，Win32 错误码 {Marshal.GetLastWin32Error()}）");
+    }
+
+    /// <summary>滚轮注入（delta 为 WHEEL_DELTA 的倍数；正=前滚）。</summary>
+    public void MouseWheel(int delta)
+    {
+        var inputs = new INPUT[1];
+        inputs[0].Type = InputMouse;
+        inputs[0].U.Mi = new MOUSEINPUT { MouseData = unchecked((uint)delta), DwFlags = MouseeventfWheel };
+        if (SendInput(1, inputs, Marshal.SizeOf<INPUT>()) != 1)
+            throw new InvalidOperationException(
+                $"SendInput(滚轮) 失败（delta={delta}，Win32 错误码 {Marshal.GetLastWin32Error()}）");
+    }
+
+    /// <summary>HID usage tap（Keymap Keyboard 条目；usage→VK 映射见 <see cref="SyntheticKeyboardSender.UsageToVirtualKey"/>，未知 usage 抛异常）。</summary>
+    public void TapUsage(byte usage, byte modifier, int taps = 1)
+    {
+        var vk = SyntheticKeyboardSender.UsageToVirtualKey(usage);
+        // 修饰键位 = HID 修饰字节低四位（bit0 Ctrl / bit1 Shift / bit2 Alt / bit3 Win），
+        // 与 SyntheticKeyboardSender 的 SoftTrigger 修饰掩码同约定（出厂表 modifier 全 0）。
+        var modifiers = new List<int>(4);
+        if ((modifier & 0x01) != 0) modifiers.Add(0x11);
+        if ((modifier & 0x02) != 0) modifiers.Add(0x10);
+        if ((modifier & 0x04) != 0) modifiers.Add(0x12);
+        if ((modifier & 0x08) != 0) modifiers.Add(0x5B);
+
+        for (var i = 0; i < Math.Max(1, taps); i++)
+        {
+            foreach (var m in modifiers)
+                SendKey(m, down: true);
+            SendKey(vk, down: true);
+            Thread.Sleep(20);
+            SendKey(vk, down: false);
+            for (var j = modifiers.Count - 1; j >= 0; j--)
+                SendKey(modifiers[j], down: false);
+            if (i < taps - 1)
+                Thread.Sleep(20);
+        }
+    }
+
+    /// <summary>Consumer 键值 → Win32 VK（目前音量族；其余 null=注入侧未支持，调用方日志降级）。</summary>
+    public static int? ConsumerVk(byte codeLo, byte codeHi) => (codeLo, codeHi) switch
+    {
+        (0xE9, _) => VkVolumeUp,    // Consumer Volume Increment
+        (0xEA, _) => VkVolumeDown,  // Consumer Volume Decrement
         _ => null,
     };
 

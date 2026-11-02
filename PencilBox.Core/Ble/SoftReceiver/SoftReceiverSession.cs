@@ -21,6 +21,10 @@ public sealed record SoftReceiverKeyActionEvent(byte KeyNum, byte Action, long L
 /// 空鼠开时 K3/K4 物理按键经此通道到达）。</summary>
 public sealed record SoftReceiverMouseButtonEvent(bool Left, bool Right, long LocalTimestampMs);
 
+/// <summary>鼠标逐帧事件（每个带鼠标槽的 DATA 一条；x/y=相对位移 s8，wheel=滚轮 s8 ±1 格，
+/// 释放包携带的 ±1 X nudge 属笔端原样透传）。软件鼠标的移动/滚轮数据源。</summary>
+public sealed record SoftReceiverMouseFrame(byte Buttons, sbyte X, sbyte Y, sbyte Wheel, long LocalTimestampMs);
+
 /// <summary>档位切换事件（0x16，收到即报，无防重）。</summary>
 public sealed record SoftReceiverSwitchEvent(byte Mode, long LocalTimestampMs);
 
@@ -96,6 +100,7 @@ public sealed class SoftReceiverSession
     public event EventHandler<SoftReceiverKeyEvent>? KeyEvent;
     public event EventHandler<SoftReceiverKeyActionEvent>? KeyAction;
     public event EventHandler<SoftReceiverMouseButtonEvent>? MouseButton;
+    public event EventHandler<SoftReceiverMouseFrame>? MouseFrame;
     public event EventHandler<SoftReceiverSwitchEvent>? SwitchChanged;
     public event EventHandler<SoftReceiverSlotEvent>? SlotChanged;
     public event EventHandler<SoftReceiverRspEvent>? ResponseReceived;
@@ -317,9 +322,13 @@ public sealed class SoftReceiverSession
         if (frame.MouseSlotValid)
         {
             Stats.MouseMode = true;
+            var slot = frame.MouseSlot.Span;
+            // 逐帧事件（移动/滚轮数据源；零位移帧也报——注入侧自行滤零）
+            MouseFrame?.Invoke(this, new SoftReceiverMouseFrame(
+                slot[0], (sbyte)slot[1], (sbyte)slot[2], (sbyte)slot[3], ts));
             // 鼠标键沿：buttons 字节变化才报（槽 50Hz 全零空转期不刷事件）。
             // bit0=左键 bit1=右键（笔端 app_mouse_data_report 实锤）。
-            byte buttons = frame.MouseSlot.Span[0];
+            byte buttons = slot[0];
             if (buttons != _lastMouseButtons)
             {
                 _lastMouseButtons = buttons;

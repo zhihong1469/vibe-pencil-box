@@ -12,6 +12,7 @@ using PencilBox.Core.Ble.SoftReceiver;
 using PencilBox.Core.Communication;
 using PencilBox.Core.Dsp;
 using PencilBox.Core.Models;
+using PencilBox.Core.Protocol;
 using PencilBox.Core.Services;
 using PencilBox.Infrastructure.Audio;
 using PencilBox.Infrastructure.Platform;
@@ -96,31 +97,103 @@ public class SoftReceiverCommands
     }
 
     /// <summary>
-    /// 键动作层（--actions）：0x13 语义键 → <see cref="SrxKeyActionRouter"/> 映射 → Win32 注入；
-    /// 鼠标槽 buttons 沿 → 鼠标键注入。事件与执行结果逐条落日志（真机对拍实录口径）。
-    /// 注入进前台焦点——收流/扩音期间按键会真实作用于当前活动窗口（即"影响到电脑上生效"）。
+    /// 软件键鼠层（--actions）：键盘腿=0x13 语义键 + S1 档位 → <see cref="SrxKeyActionRouter"/>
+    /// 查 Keymap 表（出厂真值，与硬件 Dongle 同源）→ Win32 注入；鼠标腿=空鼠槽逐帧直通
+    /// （相对位移/滚轮/键沿 → SendInput，无需虚拟 HID 设备）。
+    /// 事件与执行结果逐条落日志（真机对拍实录口径）。注入进前台焦点。
     /// </summary>
     private static void AttachKeyActions(SoftReceiverSession session)
     {
+        var router = SrxKeyActionRouter.FromFactory();
         var injector = new SystemInputInjector();
+        var lastSwitch = 0xFF;   // 未初始化哨兵：首条 0x16 只建基线不注入（防建连 3 连报假切换）
         ConsoleFormatter.Info(
-            "[SRX] 键动作层已启用：K5/K6=音量加减、K3/K4=前后翻页（单击/双击/长按连发=硬件接收器同语义）；" +
-            "K2=语音边界（识别链接入前只记录）；空鼠开时 K3/K4=鼠标左/右键");
+            "[SRX] 软件键鼠已启用（Keymap 出厂表驱动）：K3/K4=翻页 K5/K6=音量 K2=F13/F14 会话边界 S1=F15/F16；" +
+            "空鼠=相对移动/左右键/滚轮直注（原始数据透传，无虚拟设备）");
         session.KeyAction += (_, a) =>
         {
-            var plan = SrxKeyActionRouter.Map(a.KeyNum, a.Action);
-            ConsoleFormatter.Info(
-                $"[SRX] 键动作 {SrxKeyActionRouter.KeyName(a.KeyNum)} {SrxKeyActionRouter.ActionName(a.Action)}" +
-                $"（0x{a.Action:X2}）→ {plan.Note}");
-            var vk = SystemInputInjector.VkOf(plan.Kind);
-            if (vk != null && plan.Presses > 0)
-                injector.KeyTap(vk.Value, plan.Presses);
+            var entry = router.Map(a.KeyNum, a.Action);
+            if (entry == null)
+            {
+                ConsoleFormatter.Info(
+                    $"[SRX] 键动作 {SrxKeyActionRouter.KeyName(a.KeyNum)} {SrxKeyActionRouter.ActionName(a.Action)} → 表无此配置，不注入");
+                return;
+            }
+            var taps = a.Action == 0x02 ? 2 : 1;   // DoubleClick 条目命中时 tap 两下
+            try
+            {
+                switch (entry.ActionType)
+                {
+                    case KeyActionType.Keyboard:
+                        injector.TapUsage(entry.CodeLo, entry.Modifier, taps);
+                        break;
+                    case KeyActionType.Consumer:
+                        var vk = SystemInputInjector.ConsumerVk(entry.CodeLo, entry.CodeHi)
+                            ?? throw new NotSupportedException(
+                                $"Consumer 0x{((entry.CodeHi << 8) | entry.CodeLo):X3} 注入侧未支持");
+                        injector.KeyTap(vk, taps);
+                        break;
+                    default:
+                        throw new NotSupportedException($"动作类型 {entry.ActionType} 注入侧未支持");
+                }
+                ConsoleFormatter.Info(
+                    $"[SRX] 键动作 {SrxKeyActionRouter.KeyName(a.KeyNum)} {SrxKeyActionRouter.ActionName(a.Action)}" +
+                    $" → {SrxKeyActionRouter.DescribeEntry(entry)} 已注入");
+            }
+            catch (Exception ex)
+            {
+                ConsoleFormatter.Warn($"[SRX] 键动作注入失败：{ex.Message}");
+            }
+        };
+        session.SwitchChanged += (_, s) =>
+        {
+            if (lastSwitch == 0xFF)
+            {
+                lastSwitch = s.Mode;   // 建连基线
+                return;
+            }
+            if (s.Mode == lastSwitch)
+                return;
+            lastSwitch = s.Mode;
+            var entry = router.MapSwitch(s.Mode);
+            if (entry == null)
+                return;
+            try
+            {
+                injector.TapUsage(entry.CodeLo, entry.Modifier, 1);
+                ConsoleFormatter.Info($"[SRX] S1 档位 → {s.Mode} 注入 usage 0x{entry.CodeLo:X2}");
+            }
+            catch (Exception ex)
+            {
+                ConsoleFormatter.Warn($"[SRX] S1 档位注入失败：{ex.Message}");
+            }
+        };
+        session.MouseFrame += (_, m) =>
+        {
+            try
+            {
+                if (m.X != 0 || m.Y != 0)
+                    injector.MouseMoveRel(m.X, m.Y);
+                if (m.Wheel != 0)
+                    injector.MouseWheel(m.Wheel * 120);   // ±1 格 = ±WHEEL_DELTA
+            }
+            catch (Exception ex)
+            {
+                ConsoleFormatter.Warn($"[SRX] 鼠标注入失败：{ex.Message}");
+            }
         };
         session.MouseButton += (_, m) =>
         {
-            ConsoleFormatter.Info($"[SRX] 鼠标键沿 左={(m.Left ? "按下" : "释放")} 右={(m.Right ? "按下" : "释放")}");
-            injector.MouseButton(true, m.Left);
-            injector.MouseButton(false, m.Right);
+            try
+            {
+                injector.MouseButton(true, m.Left);
+                injector.MouseButton(false, m.Right);
+                ConsoleFormatter.Info($"[SRX] 鼠标键沿 左={(m.Left ? "按下" : "释放")} 右={(m.Right ? "按下" : "释放")}");
+            }
+            catch (Exception ex)
+            {
+                ConsoleFormatter.Warn($"[SRX] 鼠标键注入失败：{ex.Message}");
+            }
         };
     }
 

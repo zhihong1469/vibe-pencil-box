@@ -4,75 +4,93 @@
 //   See LICENSE file in the project root for full license information.
 // </copyright>
 using PencilBox.Core.Ble.SoftReceiver;
+using PencilBox.Core.Models;
+using PencilBox.Core.Protocol;
 using PencilBox.Infrastructure.Platform;
 
 namespace PencilBox.Tests;
 
 /// <summary>
-/// 语义键动作映射单测：0x13 [key_id][action] → PC 抽象动作
-/// （口径=笔端 app_key_action.c CONFIG_DONGLE_MODE=1 实发表；默认表对齐硬件接收器语义）。
+/// Keymap 表驱动键路由单测：0x13/S1 → 出厂表条目（口径=固件 srv_keymap.c 出厂真值镜像）；
+/// 注入侧纯映射（usage→VK、Consumer→VK）对拍。
 /// </summary>
 public class SrxKeyActionRouterTests
 {
-    [Theory]
-    [InlineData((byte)5, SrxActionKind.VolumeUp)]
-    [InlineData((byte)6, SrxActionKind.VolumeDown)]
-    [InlineData((byte)3, SrxActionKind.PageUp)]
-    [InlineData((byte)4, SrxActionKind.PageDown)]
-    public void Map_Click_MapsToHardwareEquivalent(byte keyNum, SrxActionKind expected)
+    private readonly SrxKeyActionRouter _router = SrxKeyActionRouter.FromFactory();
+
+    [Fact]
+    public void FactoryTable_K3K4Click_MapToPageKeys()
     {
-        var plan = SrxKeyActionRouter.Map(keyNum, SrxKeyActionRouter.ActClick);
-        Assert.Equal(expected, plan.Kind);
-        Assert.Equal(1, plan.Presses);
+        var k3 = _router.Map(3, 0x01);
+        Assert.NotNull(k3);
+        Assert.Equal(KeyActionType.Keyboard, k3.ActionType);
+        Assert.Equal(0x4B, k3.CodeLo);          // PageUp usage
+
+        var k4 = _router.Map(4, 0x01);
+        Assert.NotNull(k4);
+        Assert.Equal(0x4E, k4.CodeLo);          // PageDown usage
     }
 
     [Fact]
-    public void Map_DoubleClick_PressesTwice()
+    public void FactoryTable_K5K6_MapToConsumerVolume()
     {
-        var plan = SrxKeyActionRouter.Map(5, SrxKeyActionRouter.ActDoubleClick);
-        Assert.Equal(SrxActionKind.VolumeUp, plan.Kind);
-        Assert.Equal(2, plan.Presses);
+        var k5 = _router.Map(5, 0x01);
+        Assert.NotNull(k5);
+        Assert.Equal(KeyActionType.Consumer, k5.ActionType);
+        Assert.Equal(0xE9, k5.CodeLo);          // Volume Increment
+
+        var k6 = _router.Map(6, 0x03);          // 长按连发条目
+        Assert.NotNull(k6);
+        Assert.Equal(0xEA, k6.CodeLo);          // Volume Decrement
     }
 
     [Fact]
-    public void Map_LongPress_IsSingleTapPerEvent_ContinuousVolumeViaPenRepeat()
+    public void FactoryTable_K2SessionBoundary_F13F14()
     {
-        // 笔端长按按 REPEAT_MS 节流连发 0x03，PC 每条执行一次即连续调量
-        var plan = SrxKeyActionRouter.Map(6, SrxKeyActionRouter.ActLongPress);
-        Assert.Equal(SrxActionKind.VolumeDown, plan.Kind);
-        Assert.Equal(1, plan.Presses);
+        var start = _router.Map(2, 0x03);       // 会话开始 [2][0x03]
+        Assert.NotNull(start);
+        Assert.Equal(0x68, start.CodeLo);       // F13
+
+        var end = _router.Map(2, 0x04);         // 会话结束 [2][0x04]
+        Assert.NotNull(end);
+        Assert.Equal(0x69, end.CodeLo);         // F14
     }
 
     [Fact]
-    public void Map_LongRelease_IsEndSentinel_NoInjection()
+    public void Map_DoubleClick_NoFactoryRow_Null()
     {
-        var plan = SrxKeyActionRouter.Map(5, SrxKeyActionRouter.ActLongRelease);
-        Assert.Equal(SrxActionKind.VolumeUp, plan.Kind);
-        Assert.Equal(0, plan.Presses);
+        // 出厂表无 DOUBLE 行=双击不动作（与硬件一致）；有独立配置行时可查到
+        Assert.Null(_router.Map(5, 0x02));
     }
 
     [Fact]
-    public void Map_VoiceKey_IsBoundaryOnly()
+    public void Map_K1AndUnknown_NoInjection()
     {
-        var plan = SrxKeyActionRouter.Map(2, SrxKeyActionRouter.ActLongPress);
-        Assert.Equal(SrxActionKind.VoiceBoundary, plan.Kind);
-        Assert.Equal(0, plan.Presses);
+        Assert.Null(_router.Map(1, 0x01));      // K1 飞鼠开关零空口不落表
+        Assert.Null(_router.Map(9, 0x01));      // 未知键
+        Assert.Null(_router.Map(5, 0x05));      // LongSpecial 不映射
+        Assert.Null(_router.Map(5, 0xFF));      // 未知动作码
     }
 
     [Fact]
-    public void Map_AirmouseKey_IsLocalControl_NoAirAction()
+    public void MapSwitch_FactoryS1_F15F16()
     {
-        var plan = SrxKeyActionRouter.Map(1, SrxKeyActionRouter.ActClick);
-        Assert.Equal(SrxActionKind.None, plan.Kind);
-        Assert.Equal(0, plan.Presses);
+        Assert.Equal((byte)0x6A, _router.MapSwitch(0x02)?.CodeLo);   // 扩音 → F15
+        Assert.Equal((byte)0x6B, _router.MapSwitch(0x01)?.CodeLo);   // 识别 → F16
+        Assert.Equal((byte)0x6B, _router.MapSwitch(0x00)?.CodeLo);   // 待机 → F16
+        Assert.Null(_router.MapSwitch(0x03));
     }
 
     [Fact]
-    public void Map_UnknownKeyNum_Ignored()
+    public void CustomTable_OverridesFactory()
     {
-        var plan = SrxKeyActionRouter.Map(9, SrxKeyActionRouter.ActClick);
-        Assert.Equal(SrxActionKind.None, plan.Kind);
-        Assert.Equal(0, plan.Presses);
+        var custom = new SrxKeyActionRouter(
+        [
+            new() { KeyId = 0x03, EventType = KeyEventType.Click, ActionType = KeyActionType.Keyboard, CodeLo = 0x04 }
+        ]);
+        var entry = custom.Map(3, 0x01);
+        Assert.Equal((byte)0x04, entry?.CodeLo);
+        Assert.Null(custom.Map(5, 0x01));       // 自定义表没配的键不注入
     }
 
     [Fact]
@@ -85,14 +103,21 @@ public class SrxKeyActionRouterTests
     }
 
     [Fact]
-    public void VkOf_CoversInjectableKindsOnly()
+    public void UsageToVirtualKey_CoversKeymapUsages()
     {
-        // SystemInputInjector 的纯静态映射（P/Invoke 实例方法不在单测面）
-        Assert.Equal(0xAF, SystemInputInjector.VkOf(SrxActionKind.VolumeUp));
-        Assert.Equal(0xAE, SystemInputInjector.VkOf(SrxActionKind.VolumeDown));
-        Assert.Equal(0x21, SystemInputInjector.VkOf(SrxActionKind.PageUp));
-        Assert.Equal(0x22, SystemInputInjector.VkOf(SrxActionKind.PageDown));
-        Assert.Null(SystemInputInjector.VkOf(SrxActionKind.VoiceBoundary));
-        Assert.Null(SystemInputInjector.VkOf(SrxActionKind.None));
+        Assert.Equal(0x21, SyntheticKeyboardSender.UsageToVirtualKey(0x4B));   // PageUp
+        Assert.Equal(0x22, SyntheticKeyboardSender.UsageToVirtualKey(0x4E));   // PageDown
+        Assert.Equal(0x7C, SyntheticKeyboardSender.UsageToVirtualKey(0x68));   // F13
+        Assert.Equal(0x7D, SyntheticKeyboardSender.UsageToVirtualKey(0x69));   // F14
+        Assert.Equal(0x7E, SyntheticKeyboardSender.UsageToVirtualKey(0x6A));   // F15
+        Assert.Equal(0x7F, SyntheticKeyboardSender.UsageToVirtualKey(0x6B));   // F16
+    }
+
+    [Fact]
+    public void ConsumerVk_VolumeFamilyOnly()
+    {
+        Assert.Equal(0xAF, SystemInputInjector.ConsumerVk(0xE9, 0x00));        // VOL+
+        Assert.Equal(0xAE, SystemInputInjector.ConsumerVk(0xEA, 0x00));        // VOL−
+        Assert.Null(SystemInputInjector.ConsumerVk(0xB5, 0x00));               // Scan Next Track=未支持
     }
 }

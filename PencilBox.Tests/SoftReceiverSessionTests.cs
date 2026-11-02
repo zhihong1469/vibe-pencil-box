@@ -158,6 +158,7 @@ public class SoftReceiverSessionTests
         public List<SoftReceiverKeyEvent> Keys = new();
         public List<SoftReceiverKeyActionEvent> KeyActions = new();
         public List<SoftReceiverMouseButtonEvent> MouseButtons = new();
+        public List<SoftReceiverMouseFrame> MouseFrames = new();
         public List<SoftReceiverSwitchEvent> Switches = new();
         public List<SoftReceiverSlotEvent> Slots = new();
         public List<SoftReceiverRspEvent> Rsps = new();
@@ -171,6 +172,7 @@ public class SoftReceiverSessionTests
             session.KeyEvent += (_, k) => Keys.Add(k);
             session.KeyAction += (_, a) => KeyActions.Add(a);
             session.MouseButton += (_, m) => MouseButtons.Add(m);
+            session.MouseFrame += (_, m) => MouseFrames.Add(m);
             session.SwitchChanged += (_, s) => Switches.Add(s);
             session.SlotChanged += (_, s) => Slots.Add(s);
             session.ResponseReceived += (_, r) => Rsps.Add(r);
@@ -285,6 +287,14 @@ public class SoftReceiverSessionTests
         Assert.True(collector.MouseButtons[1].Right);
         Assert.Equal(2, session.Stats.MouseButtonEdges);
         Assert.True(session.Stats.MouseMode);
+
+        // 逐帧事件：4 条鼠标槽帧（含零位移帧）各报一条；x/y/wheel s8 解读
+        Assert.Equal(4, collector.MouseFrames.Count);
+        Assert.Equal(1, collector.MouseFrames[1].Buttons);
+        Assert.Equal(3, collector.MouseFrames[2].Buttons);
+        var signed = BuildDataBlob(mouseSlot: new byte[] { 0x00, 0xFF, 0x02, 0xFF });
+        Assert.True(VpFrameParser.TryParseData(signed, out var sf, out _));
+        Assert.Equal(-1, (sbyte)sf!.MouseSlot.Span[1]);
     }
 
     [Fact]
