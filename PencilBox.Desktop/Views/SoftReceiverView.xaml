@@ -126,14 +126,15 @@
                 <TextBox Text="{Binding ProbeResultText, Mode=OneWay}" IsReadOnly="True"
                          FontFamily="Consolas" FontSize="11" Margin="0,6,0,0"
                          TextWrapping="Wrap" AcceptsReturn="True"
-                         MaxHeight="110" VerticalScrollBarVisibility="Auto"
+                         MinHeight="120" MaxHeight="320" VerticalScrollBarVisibility="Auto"
                          Background="#FBFBFB" BorderBrush="#E5E5E5"/>
             </StackPanel>
         </GroupBox>
 
-        <!-- 事件流 -->
+        <!-- 事件流：MaxHeight 480 压缩占比（指挥官 11-02 反馈：事件流框太大挤占实测结果阅读区） -->
         <GroupBox Grid.Row="3" Header="事件流（键 / 档位 / 状态槽 / 诊断；最新 200 条）" Padding="4">
             <ListBox ItemsSource="{Binding EventLog}" FontFamily="Consolas" FontSize="12"
+                     MaxHeight="480"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      VirtualizingPanel.ScrollUnit="Pixel">

@@ -27,7 +27,7 @@ public sealed record SoftReceiverProbeReport(
 
 /// <summary>
 /// 软件接收器延迟实测探针（CLI <c>srx probe</c> 与 Desktop「延迟实测」共用一份逻辑）：
-/// 挂 <see cref="SoftReceiverSession.AudioFrameReady"/> 采集（seq 解回绕 + 到达时刻 + PCM），
+/// 挂 <see cref="SoftReceiverSession.AudioFrameReady"/> 采集（帧计数 + 到达时刻 + PCM），
 /// 同时默认渲染设备播 chirp 训练列（750ms 周期，固件同源表，笔端麦拾取→BLE 回传闭环）。
 /// <see cref="StopAndAnalyze"/> = 停播 + 走表拟合（StreamPacingAnalyzer）+ chirp 网格扫描
 /// （ChirpScanAnalyzer）+ WAV 留档。
@@ -44,8 +44,7 @@ public sealed class SoftReceiverProbe : IDisposable
     private readonly List<byte[]> _pcmChunks = [];
     private readonly List<(long Seq, double ArrivalMs)> _pacingFrames = [];
     private readonly object _lock = new();
-    private long _unwrappedSeq;
-    private long _prevSeq = -1;
+    private long _frameIndex;
     private MMDevice? _renderDevice;
     private WasapiOut? _player;
     private bool _attached;
@@ -92,11 +91,11 @@ public sealed class SoftReceiverProbe : IDisposable
     {
         lock (_lock)
         {
-            var delta = (f.AudioSeq - (_prevSeq < 0 ? f.AudioSeq : _prevSeq)) & 0xFF;
-            if (delta is > 0 and < 128)
-                _unwrappedSeq += delta;
-            _prevSeq = f.AudioSeq;
-            _pacingFrames.Add((_unwrappedSeq, f.LocalTimestampMs));
+            // 走表 x 轴 = 解码帧计数（每帧标称 7.5ms）。
+            // 真机实证（2026-11-02 首次在流实测）：AudioSeq 是**通知级**序号（每 DATA +1，
+            // 通知内 N=2 帧同 seq）——按 seq 做走表会把 15ms 通知节拍读成 2× 标称步长
+            // （PPM 伪值 ≈+1e6）。帧计数不受打包影响；丢帧时斜率失真可由 seq 跳/缺口另察。
+            _pacingFrames.Add((_frameIndex++, f.LocalTimestampMs));
             _pcmChunks.Add(f.Pcm);
         }
     }

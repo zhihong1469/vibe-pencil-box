@@ -121,6 +121,8 @@ public partial class SoftReceiverViewModel : ObservableObject
             {
                 _session.AudioFrameReady -= OnAudioFrameReady;
                 _session.KeyEvent -= OnKeyEvent;
+                _session.KeyAction -= OnKeyAction;
+                _session.MouseButton -= OnMouseButton;
                 _session.SwitchChanged -= OnSwitchChanged;
                 _session.SlotChanged -= OnSlotChanged;
                 _session.ResponseReceived -= OnResponseReceived;
@@ -133,6 +135,8 @@ public partial class SoftReceiverViewModel : ObservableObject
             {
                 _session.AudioFrameReady += OnAudioFrameReady;
                 _session.KeyEvent += OnKeyEvent;
+                _session.KeyAction += OnKeyAction;
+                _session.MouseButton += OnMouseButton;
                 _session.SwitchChanged += OnSwitchChanged;
                 _session.SlotChanged += OnSlotChanged;
                 _session.ResponseReceived += OnResponseReceived;
@@ -562,6 +566,13 @@ public partial class SoftReceiverViewModel : ObservableObject
 
     private void OnKeyEvent(object? sender, SoftReceiverKeyEvent k) =>
         AppendLog($"键 {(k.IsDown ? "DOWN" : "UP")} page=0x{k.Page:X2} code=0x{k.KeyCode:X2} mod=0x{k.Modifier:X2}");
+
+    // 0x13 语义键（DONGLE_MODE=1 笔端实发）：只显示不注入——注入开关按 CLI-first 待真机对拍后接 GUI
+    private void OnKeyAction(object? sender, SoftReceiverKeyActionEvent a) =>
+        AppendLog($"键动作 {SrxKeyActionRouter.KeyName(a.KeyNum)} {SrxKeyActionRouter.ActionName(a.Action)}（key={a.KeyNum} act=0x{a.Action:X2}）");
+
+    private void OnMouseButton(object? sender, SoftReceiverMouseButtonEvent m) =>
+        AppendLog($"鼠标键沿 左={(m.Left ? "按下" : "释放")} 右={(m.Right ? "按下" : "释放")}（空鼠 K3/K4）");
 
     private void OnSwitchChanged(object? sender, SoftReceiverSwitchEvent s)
     {
