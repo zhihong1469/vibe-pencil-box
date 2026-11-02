@@ -9,15 +9,18 @@ namespace PencilBox.Core.SoftTrigger;
 /// 软触发值域与校验（13 号防失控律）。
 ///
 /// v2（指挥官 2026-10-19 目验反馈"软触发一定要足够自由"）：
-/// 触发键池=**全键盘可映射键 ± 修饰组合**（F13~F16 除外——笔端工作状态自管保留段，回放会误扰两轴）；
+/// 触发键池=**全键盘可映射键 ± 修饰组合**；
 /// 动作（序列步）=可映射键，允许 F17~F24（动态预留律管着：只要没有启用定义把它当触发键，回放无害）；
 /// 防回环升级为**动态预留全局律**（<see cref="ValidateGlobal"/>）：
 /// 所有启用定义的触发键（usage+modifier 精确对）∉ 任何启用定义的动作序列——
 /// 触发集合 ∩ 动作集合 = ∅ ⇒ 按触发键只会命中触发、回放永不触发，天然无环、级联禁止。
+/// v2.4（2026-11-02 指挥官裁决"可以标注，但不能完全删掉"）：
+/// F13~F16 回归**触发**池（工作状态占用只标注不拦截——设备映射将来会变，删死=自断后路）；
+/// **动作**仍禁入 F13~F16（回放会真实驱动工作状态两轴，那条边界不动）。
 /// </summary>
 public static class SoftTriggerKeys
 {
-    /// <summary>工作状态自管保留段：F13~F16（0x68~0x6B）——触发键与动作双双禁入</summary>
+    /// <summary>工作状态保留段：F13~F16（0x68~0x6B）——v2.4 起触发可用（标注慎选），动作仍禁入</summary>
     public const byte WorkStateLo = 0x68;
     public const byte WorkStateHi = 0x6B;
 
@@ -36,14 +39,14 @@ public static class SoftTriggerKeys
             or 0x49 or 0x4A or 0x4B or 0x4C or 0x4D or 0x4E             // Ins Home PgUp Del End PgDn
             or 0x4F or 0x50 or 0x51 or 0x52;                            // → ↓ ↑ ←
 
-    /// <summary>触发键候选=可映射且不在工作状态保留段（v2 全键盘池）。</summary>
-    public static bool IsTriggerCandidate(byte usage) => IsMappableUsage(usage) && usage is < WorkStateLo or > WorkStateHi;
+    /// <summary>触发键候选=全部可映射键（v2.4：F13~F16 回池，工作状态占用由 UI 标注提示，不做硬拦）。</summary>
+    public static bool IsTriggerCandidate(byte usage) => IsMappableUsage(usage);
 
-    /// <summary>工作状态保留段（F13~F16）——触发/动作双双禁入。</summary>
+    /// <summary>工作状态占用段（F13~F16）——触发可用（标注）、动作禁入。</summary>
     public static bool IsWorkStateReserved(byte usage) => usage is >= WorkStateLo and <= WorkStateHi;
 
-    /// <summary>修饰位合法（0x0F 内的位和：0x01=Ctrl 0x02=Shift 0x04=Alt 0x08=Win）。</summary>
-    public static bool IsValidModifier(byte modifier) => (modifier & ~0x0F) == 0;
+    /// <summary>修饰组合合法（ushort，v2.4 侧别编码见 <see cref="SoftTriggerModifiers"/>；同通道通用+侧别混设拒）。</summary>
+    public static bool IsValidModifier(ushort modifier) => SoftTriggerModifiers.IsValid(modifier);
 
     /// <summary>usage → 键名（与 SoftTriggerDescriber.MainKeyName 同一张表的快捷面；不可映射出 hex）。</summary>
     public static string UsageName(byte usage) => Models.SoftTriggerDescriber.MainKeyName(usage);
@@ -54,12 +57,9 @@ public static class SoftTriggerKeys
         if (string.IsNullOrWhiteSpace(def.Name))
             throw new ArgumentException("软触发名不能为空");
         if (!IsTriggerCandidate(def.TriggerUsageId))
-            throw new ArgumentException(
-                IsWorkStateReserved(def.TriggerUsageId)
-                    ? $"触发键 0x{def.TriggerUsageId:X2}（F{def.TriggerUsageId - WorkStateLo + 13}）属工作状态保留段（F13~F16），不可作软触发"
-                    : $"触发键 0x{def.TriggerUsageId:X2} 不可用——须为可映射键盘键（F13~F16 工作状态保留除外）");
+            throw new ArgumentException($"触发键 0x{def.TriggerUsageId:X2} 不可用——须为可映射键盘键");
         if (!IsValidModifier(def.TriggerModifier))
-            throw new ArgumentException($"触发修饰位非法：0x{def.TriggerModifier:X2}（可用 ctrl/shift/alt/win 位和）");
+            throw new ArgumentException($"触发修饰组合非法：0x{def.TriggerModifier:X4}（ctrl/shift/alt/win 及 l/r 侧别，同通道通用+侧别不得混设）");
         if (def.Steps.Count == 0)
             throw new ArgumentException("回放序列为空——至少一步");
         if (def.Steps.Count > MaxSteps)
@@ -77,7 +77,7 @@ public static class SoftTriggerKeys
                 throw new ArgumentException(
                     $"动作含本定义触发键 {Models.SoftTriggerDescriber.DescribeStep(new SoftTriggerStep(def.TriggerUsageId, def.TriggerModifier))}——按下即自触发回环——「{def.Name}」");
             if (!IsValidModifier(step.Modifier))
-                throw new ArgumentException($"序列步修饰位非法：0x{step.Modifier:X2}——「{def.Name}」");
+                throw new ArgumentException($"序列步修饰组合非法：0x{step.Modifier:X4}——「{def.Name}」");
             if (step.DelayMsBefore is < 0 or > MaxStepDelayMs)
                 throw new ArgumentException($"步前延时越界（0~{MaxStepDelayMs}ms）：{step.DelayMsBefore}ms——「{def.Name}」");
         }
@@ -92,7 +92,7 @@ public static class SoftTriggerKeys
     /// </summary>
     public static void ValidateGlobal(IReadOnlyList<SoftTriggerDefinition> enabledDefs)
     {
-        var triggers = new HashSet<(byte Usage, byte Modifier)>();
+        var triggers = new HashSet<(byte Usage, ushort Modifier)>();
         foreach (var def in enabledDefs)
             triggers.Add((def.TriggerUsageId, def.TriggerModifier));
 

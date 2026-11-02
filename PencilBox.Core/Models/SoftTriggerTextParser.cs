@@ -12,12 +12,11 @@ namespace PencilBox.Core.Models;
 /// 语法：逗号分步；步内 `修饰+主键[@步前延时ms]`，如 `F2`、`ALT+L`、`F2@100`、`CTRL+SHIFT+S@250`
 /// （@ms=本步回放【前】等待，v2.3 起步前语义——触发源后第一步设延时可防回放键夹进触发键按压）。
 /// 主键：A~Z / 0~9 / F1~F24 / ENTER SPACE ESC TAB BACKSPACE DELETE INSERT HOME END PGUP PGDN 方向键。
-/// v2：触发键池=全键盘（F13~F16 工作状态保留除外，校验层拦）。
+/// v2.4：触发键池=全键盘含 F13~F16（工作状态占用由 UI 标注）；修饰键支持左右侧别
+/// `LCTRL/RCTRL/LSHIFT/RSHIFT/LALT/RALT/LWIN/RWIN`（物理键盘侧别精确匹配；设备注入只有通用位）。
 /// </summary>
 public static class SoftTriggerTextParser
 {
-    private const byte ModCtrl = 0x01, ModShift = 0x02, ModAlt = 0x04, ModWin = 0x08;
-
     /// <summary>解析整串（"F2,ALT+L" → 两步）；语法错抛 <see cref="ArgumentException"/>。</summary>
     public static List<SoftTriggerStep> ParseSequence(string text)
     {
@@ -31,10 +30,10 @@ public static class SoftTriggerTextParser
         return steps;
     }
 
-    /// <summary>解析单步（"ALT+L" / "F2@100"——@后为步前延时 ms：本步回放前等待）。</summary>
+    /// <summary>解析单步（"ALT+L" / "LCTRL+A" / "F2@100"——@后为步前延时 ms：本步回放前等待）。</summary>
     public static SoftTriggerStep ParseStep(string text)
     {
-        byte modifier = 0;
+        ushort modifier = 0;
         string main = text.Trim();
 
         // @步前延时：主键后缀 "F2@100"
@@ -56,11 +55,20 @@ public static class SoftTriggerTextParser
         {
             modifier |= parts[i].ToLowerInvariant() switch
             {
-                "ctrl" or "control" => ModCtrl,
-                "shift" => ModShift,
-                "alt" => ModAlt,
-                "win" or "gui" or "windows" => ModWin,
-                _ => throw new ArgumentException($"未知修饰键「{parts[i]}」（可用 ctrl/shift/alt/win）：{text}"),
+                "ctrl" or "control" => SoftTriggerModifiers.Ctrl,
+                "shift" => SoftTriggerModifiers.Shift,
+                "alt" => SoftTriggerModifiers.Alt,
+                "win" or "gui" or "windows" => SoftTriggerModifiers.Win,
+                "lctrl" or "lcontrol" => SoftTriggerModifiers.LCtrl,
+                "rctrl" or "rcontrol" => SoftTriggerModifiers.RCtrl,
+                "lshift" => SoftTriggerModifiers.LShift,
+                "rshift" => SoftTriggerModifiers.RShift,
+                "lalt" => SoftTriggerModifiers.LAlt,
+                "ralt" => SoftTriggerModifiers.RAlt,
+                "lwin" => SoftTriggerModifiers.LWin,
+                "rwin" => SoftTriggerModifiers.RWin,
+                _ => throw new ArgumentException(
+                    $"未知修饰键「{parts[i]}」（可用 ctrl/shift/alt/win 或 l/r 侧别前缀 lctrl/rshift…）：{text}"),
             };
         }
 
@@ -68,8 +76,8 @@ public static class SoftTriggerTextParser
         return new SoftTriggerStep(usage, modifier, delay);
     }
 
-    /// <summary>解析触发键（"ALT+F2" → (usage, modifier)；裸键修饰=0）；F13~F16 留给校验层点名拦截。</summary>
-    public static (byte Usage, byte Modifier) ParseTrigger(string text)
+    /// <summary>解析触发键（"ALT+F2" / "RSHIFT+F5" → (usage, modifier)；裸键修饰=0）。</summary>
+    public static (byte Usage, ushort Modifier) ParseTrigger(string text)
     {
         var step = ParseStep(text);
         return (step.Usage, step.Modifier);
@@ -112,31 +120,21 @@ public static class SoftTriggerTextParser
     }
 }
 
-/// <summary>步骤/定义 → 可读文本（出方向；GUI 列表与 CLI 回显共用）。</summary>
+/// <summary>步骤/定义 → 可读文本（出方向；GUI 列表与 CLI 回显共用；修饰文本走 <see cref="SoftTriggerModifiers"/> 单点，侧别=左Ctrl/右Shift）。</summary>
 public static class SoftTriggerDescriber
 {
     public static string DescribeStep(SoftTriggerStep step)
     {
-        var parts = new List<string>(5);
-        if ((step.Modifier & 0x01) != 0) parts.Add("Ctrl");
-        if ((step.Modifier & 0x02) != 0) parts.Add("Shift");
-        if ((step.Modifier & 0x04) != 0) parts.Add("Alt");
-        if ((step.Modifier & 0x08) != 0) parts.Add("Win");
-        parts.Add(MainKeyName(step.Usage));
-        var text = string.Join("+", parts);
+        var mod = SoftTriggerModifiers.Describe(step.Modifier);
+        var text = mod.Length == 0 ? MainKeyName(step.Usage) : $"{mod}+{MainKeyName(step.Usage)}";
         return step.DelayMsBefore > 0 ? $"{text}@{step.DelayMsBefore}" : text;
     }
 
-    /// <summary>触发键可读文本（修饰+键名，如 "Alt+F2"；与 ParseTrigger 互逆）。</summary>
-    public static string DescribeTrigger(byte usage, byte modifier)
+    /// <summary>触发键可读文本（修饰+键名，如 "Alt+F2"、"左Ctrl+F5"；与 ParseTrigger 互逆）。</summary>
+    public static string DescribeTrigger(byte usage, ushort modifier)
     {
-        var parts = new List<string>(5);
-        if ((modifier & 0x01) != 0) parts.Add("Ctrl");
-        if ((modifier & 0x02) != 0) parts.Add("Shift");
-        if ((modifier & 0x04) != 0) parts.Add("Alt");
-        if ((modifier & 0x08) != 0) parts.Add("Win");
-        parts.Add(MainKeyName(usage));
-        return string.Join("+", parts);
+        var mod = SoftTriggerModifiers.Describe(modifier);
+        return mod.Length == 0 ? MainKeyName(usage) : $"{mod}+{MainKeyName(usage)}";
     }
 
     public static string DescribeSequence(IReadOnlyList<SoftTriggerStep> steps) =>

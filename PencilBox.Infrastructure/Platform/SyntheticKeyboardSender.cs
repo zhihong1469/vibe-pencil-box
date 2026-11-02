@@ -30,10 +30,10 @@ public sealed class SyntheticKeyboardSender : ISyntheticKeyboard
         }
     }
 
-    /// <summary>单步：修饰 DOWN → 主键 DOWN/保持/UP → 修饰逆序 UP。</summary>
+    /// <summary>单步：修饰 DOWN → 主键 DOWN/保持/UP → 修饰逆序 UP（v2.4：侧别修饰注入对应侧扩展 VK，映射单点 <see cref="SoftTriggerModifiers"/>）。</summary>
     private static void SendStep(SoftTriggerStep step)
     {
-        var modifierVks = ModifierVks(step.Modifier);
+        var modifierVks = SoftTriggerModifiers.DownVks(step.Modifier);
         foreach (var vk in modifierVks)
             SendKey(vk, down: true);
 
@@ -43,16 +43,6 @@ public sealed class SyntheticKeyboardSender : ISyntheticKeyboard
 
         for (var i = modifierVks.Length - 1; i >= 0; i--)
             SendKey(modifierVks[i], down: false);
-    }
-
-    private static int[] ModifierVks(byte modifier)
-    {
-        var vks = new List<int>(4);
-        if ((modifier & 0x01) != 0) vks.Add(0x11);   // VK_CONTROL
-        if ((modifier & 0x02) != 0) vks.Add(0x10);   // VK_SHIFT
-        if ((modifier & 0x04) != 0) vks.Add(0x12);   // VK_MENU (Alt)
-        if ((modifier & 0x08) != 0) vks.Add(0x5B);   // VK_LWIN
-        return vks.ToArray();
     }
 
     /// <summary>HID usage → Win32 VK（与 KeyboardUsageMap.FromVirtualKey 互逆的发送侧；未知 usage 抛异常）。

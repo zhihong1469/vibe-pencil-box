@@ -8,6 +8,7 @@ using PencilBox.Core.Features;
 using PencilBox.Core.Models;
 using PencilBox.Core.Services;
 using PencilBox.Core.SoftTrigger;
+using PencilBox.Infrastructure.Config;
 
 namespace PencilBox.Cli.Commands;
 
@@ -22,17 +23,52 @@ public class SoftTriggerCommands
     private readonly ISoftTriggerEngine _engine;
     private readonly ISyntheticKeyboard _sender;
     private readonly IFeatureToggleService _toggles;
+    private readonly ISoftTriggerSettings _settings;
 
     public SoftTriggerCommands(
         ISoftTriggerStore store,
         ISoftTriggerEngine engine,
         ISyntheticKeyboard sender,
-        IFeatureToggleService toggles)
+        IFeatureToggleService toggles,
+        ISoftTriggerSettings settings)
     {
         _store = store;
         _engine = engine;
         _sender = sender;
         _toggles = toggles;
+        _settings = settings;
+    }
+
+    /// <summary>
+    /// 松开等待手感参数（v2.4）：触发键按下后引擎等它松开再回放（防回放键夹进按压=目标软件热键判定被夹断），
+    /// 本值=最长等待封顶。无参=查当前；`--ms N` 设置（0=不等立即回放；合法域 0~2000；默认 800）。
+    /// </summary>
+    public int Wait(string? msText)
+    {
+        try
+        {
+            if (msText == null)
+            {
+                var current = _settings.ReleaseWaitMs;
+                ConsoleFormatter.Info($"触发键松开等待上限：{current}ms（0=按下立即回放；默认 800）");
+                ConsoleFormatter.Info("语义：触发键按下→引擎等它【松开】→再回放序列（长按=等多久回放多慢，封顶后照放不吞动作）——");
+                ConsoleFormatter.Info("这是防「回放键夹进触发键按压」的手感参数：连击要跟手就调小，目标软件热键老失效就调大。设置：softtrigger wait --ms 300");
+                return 0;
+            }
+
+            if (!int.TryParse(msText, out var ms) || ms < 0)
+                throw new ArgumentException($"等待时长非法（非负整数 ms，0~{SoftTriggerSettingsStore.MaxReleaseWaitMs}）：{msText}");
+            _settings.SetReleaseWaitMs(ms);
+            ConsoleFormatter.Success(
+                $"已设置松开等待上限={_settings.ReleaseWaitMs}ms" +
+                (_settings.ReleaseWaitMs == 0 ? "（不等松开，按下立即回放——旧手感，回放键可能夹进按压）" : "（长按超过此时长也照放不吞）"));
+            return 0;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            ConsoleFormatter.Error(ex.Message);
+            return 1;
+        }
     }
 
     public int List()

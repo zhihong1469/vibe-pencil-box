@@ -13,6 +13,7 @@ using PencilBox.Core.Models;
 using PencilBox.Core.Services;
 using PencilBox.Core.SoftTrigger;
 using PencilBox.Desktop.Helpers;
+using PencilBox.Infrastructure.Config;
 using PencilBox.Desktop.Views;
 
 namespace PencilBox.Desktop.ViewModels;
@@ -28,6 +29,7 @@ public partial class SoftTriggerViewModel : ObservableObject
     private readonly ISoftTriggerStore _store;
     private readonly ISoftTriggerEngine _engine;
     private readonly IFeatureToggleService _toggles;
+    private readonly ISoftTriggerSettings _settings;
     private readonly ILogger<SoftTriggerViewModel> _logger;
 
     public ObservableCollection<SoftTriggerItemViewModel> Definitions { get; } = [];
@@ -36,7 +38,7 @@ public partial class SoftTriggerViewModel : ObservableObject
     public ObservableCollection<SoftTriggerEvent> Events { get; } = [];
 
     [ObservableProperty]
-    private string _lastMessage = "点右上角「＋ 新建连点器」创建第一个；触发键=全键盘池±修饰（F13~F16 工作状态保留），防回环由动态预留律把关。";
+    private string _lastMessage = "点右上角「＋ 新建连点器」创建第一个；触发键=全键盘池±修饰（含 F13~F16，工作状态占用已标注），防回环由动态预留律把关。";
 
     public bool FeatureEnabled => _toggles.IsEnabled("softtrigger");
 
@@ -56,13 +58,16 @@ public partial class SoftTriggerViewModel : ObservableObject
         ISoftTriggerStore store,
         ISoftTriggerEngine engine,
         IFeatureToggleService toggles,
+        ISoftTriggerSettings settings,
         ILogger<SoftTriggerViewModel> logger)
     {
         _store = store;
         _engine = engine;
         _toggles = toggles;
+        _settings = settings;
         _logger = logger;
 
+        _releaseWaitMs = settings.ReleaseWaitMs;    // 直接落字段（不走 setter 免落盘回写）
         _engine.EventLogged += OnEngineEvent;
         _toggles.Changed += OnToggleChanged;
         Refresh();
@@ -176,6 +181,29 @@ public partial class SoftTriggerViewModel : ObservableObject
         OnPropertyChanged(nameof(EngineRunning));
         OnPropertyChanged(nameof(EngineStatusText));
         OnPropertyChanged(nameof(EmptyHintVisibility));
+    }
+
+    // ===== 松开等待手感参数（v2.4：触发键按下后等它松开再回放，防回放键夹进按压） =====
+
+    /// <summary>
+    /// 触发键松开等待上限 ms（0=按下立即回放）。TextBox 默认 LostFocus 提交——改完移焦/回车落盘；
+    /// 越界夹取 0~2000。引擎每次派发实读设置文件，CLI `softtrigger wait --ms` 与本框同源即改即生效。
+    /// </summary>
+    [ObservableProperty]
+    private int _releaseWaitMs;
+
+    partial void OnReleaseWaitMsChanged(int value)
+    {
+        var clamped = Math.Clamp(value, 0, SoftTriggerSettingsStore.MaxReleaseWaitMs);
+        if (clamped != value)
+        {
+            _releaseWaitMs = clamped;               // 夹回后再通知一次（防循环：值已合法）
+            OnPropertyChanged(nameof(ReleaseWaitMs));
+        }
+        _settings.SetReleaseWaitMs(clamped);
+        LastMessage = clamped == 0
+            ? "松开等待=0：按下立即回放（旧手感，回放键可能夹进触发键按压——目标软件热键失效就调回来）"
+            : $"松开等待上限={clamped}ms：触发键松开即回放；长按超过此时长也照放（不吞动作）。调小更跟手，调大更稳";
     }
 
     // ===== 总开关（页上直控，2026-10-19 指挥官目验反馈） =====

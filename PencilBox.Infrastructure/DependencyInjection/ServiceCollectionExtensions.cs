@@ -165,6 +165,7 @@ public static class ServiceCollectionExtensions
         // 存储：configs/softtriggers/ 一条一 JSON；发腿：SendInput 合成键盘；引擎：共享键盘钩子观测（触发域 F17~F24）
         services.AddSingleton<Core.Services.ISyntheticKeyboard, Platform.SyntheticKeyboardSender>();
         services.AddSingleton<ISoftTriggerStore, Config.SoftTriggerStore>();
+        services.AddSingleton<ISoftTriggerSettings, Config.SoftTriggerSettingsStore>();
         services.AddSingleton<ISoftTriggerEngine, Services.SoftTriggerEngine>();
 
         // DSP service

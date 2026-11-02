@@ -14,10 +14,11 @@ using PencilBox.Core.SoftTrigger;
 namespace PencilBox.Infrastructure.Services;
 
 /// <summary>
-/// <see cref="ISoftTriggerEngine"/> 实现（动作库键盘族 13 号，2026-10-19；v2 同日）。
+/// <see cref="ISoftTriggerEngine"/> 实现（动作库键盘族 13 号，2026-10-19；v2 同日；v2.4=2026-11-02）。
 /// 观测腿=共享全局键盘钩子（工作状态监听共用一条 WH_KEYBOARD_LL）；发腿=<see cref="ISyntheticKeyboard"/>（SendInput）。
 /// v2：触发键全键盘池 ± 修饰——钩子收到 VK 后按定义的触发修饰**精确匹配**（要求的都按着、没要求的都没按，
 /// GetAsyncKeyState 实时查询，防打字误触）；同触发键多条按 Priority 降序派发；
+/// v2.4：修饰匹配/注入升级左右侧别语义（<see cref="SoftTriggerModifiers"/> 单点）；
 /// 防回环=动态预留全局律（触发∩动作=∅）在装载处兜底：贪心装载，与已装载集冲突的定义拒载并记事件。
 /// </summary>
 public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
@@ -29,6 +30,7 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
     private readonly IGlobalKeyboardHook _hook;
     private readonly ISyntheticKeyboard _sender;
     private readonly IFeatureToggleService _toggles;
+    private readonly ISoftTriggerSettings _settings;
     private readonly ILogger<SoftTriggerEngine> _logger;
 
     private readonly object _gate = new();
@@ -43,12 +45,14 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
         IGlobalKeyboardHook hook,
         ISyntheticKeyboard sender,
         IFeatureToggleService toggles,
+        ISoftTriggerSettings settings,
         ILogger<SoftTriggerEngine> logger)
     {
         _store = store;
         _hook = hook;
         _sender = sender;
         _toggles = toggles;
+        _settings = settings;
         _logger = logger;
 
         // 总开关联动：任何一侧（CLI/GUI）关掉 softtrigger → 引擎即停（14 号：关闭=运行中引擎即停）
@@ -166,7 +170,8 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
         if (candidates is not { Count: > 0 })
             return;
 
-        // 修饰精确匹配：要求的都按着、没要求的都没按（注入回放期间合成修饰也被看到，动态预留律保证那是"动作键"而非触发键）
+        // 修饰精确匹配（v2.4 侧别语义走 SoftTriggerModifiers 单点）：要求的都按着、没要求的都没按
+        //（注入回放期间合成修饰也被看到，动态预留律保证那是"动作键"而非触发键）
         var matches = candidates.Where(d => ModifierMatches(d.TriggerModifier)).ToList();
         if (matches.Count == 0)
             return;
@@ -183,32 +188,32 @@ public sealed class SoftTriggerEngine : ISoftTriggerEngine, IDisposable
     /// <summary>测试注入口：触发键"是否仍按着"（默认 null=GetAsyncKeyState 实查；单测注假态验证等待与放行）。</summary>
     public static Func<int, bool>? IsKeyDownOverride;
 
+    /// <summary>测试注入口：修饰键键态（默认 null=GetAsyncKeyState 实查；单测注假态验证侧别精确匹配）。</summary>
+    public static Func<int, bool>? KeyStateOverride;
+
+    private static bool IsKeyDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
     /// <summary>
-    /// 等触发键松开（上限 800ms，10ms 步进）：回放键若插在触发键仍按着时注入，目标软件
-    /// "F2 按下且无其他键"类热键判定（RegisterHotKey/轮询族）会被夹断——观感即"触发键被勾走"
-    /// （2026-10-19 指挥官 F2→Shift+Alt+L 经常失效实锤）。等松开=目标先收到干净的触发键按压，
-    /// 再收回放序列；用户主动长按触发键时 800ms 后照放（不吞动作，只隔离时序）。
+    /// 等触发键松开（10ms 步进；上限=设置 <see cref="ISoftTriggerSettings.ReleaseWaitMs"/>，默认 800，
+    /// 0=不等——v2.4 指挥官"等待时长给用户自己调"，每次派发实读设置，CLI/GUI 改动即时生效）：
+    /// 回放键若插在触发键仍按着时注入，目标软件"F2 按下且无其他键"类热键判定
+    /// （RegisterHotKey/轮询族）会被夹断——观感即"触发键被勾走"（2026-10-19 指挥官 F2→Shift+Alt+L
+    /// 经常失效实锤）。等松开=目标先收到干净的触发键按压，再收回放序列；长按触发键时封顶后照放
+    /// （不吞动作，只隔离时序——指挥官"长按触发慢一点"的观感即本机制）。
     /// </summary>
-    private static void WaitTriggerReleased(int triggerVk)
+    private void WaitTriggerReleased(int triggerVk)
     {
-        var isDown = IsKeyDownOverride ?? (vk => (GetAsyncKeyState(vk) & 0x8000) != 0);
-        for (var waited = 0; waited < 800 && isDown(triggerVk); waited += 10)
+        var cap = _settings.ReleaseWaitMs;                       // 实读：跨进程改等待即时生效
+        if (cap <= 0)
+            return;
+        var isDown = IsKeyDownOverride ?? IsKeyDown;
+        for (var waited = 0; waited < cap && isDown(triggerVk); waited += 10)
             Thread.Sleep(10);
     }
 
-    /// <summary>GetAsyncKeyState 实时查询：要求的修饰位全按下、其余修饰位全抬起。</summary>
-    private static bool ModifierMatches(byte required)
-    {
-        foreach (var (bit, vks) in new[] { ((byte)0x01, new[] { 0x11 }), ((byte)0x02, new[] { 0x10 }), ((byte)0x04, new[] { 0x12 }), ((byte)0x08, new[] { 0x5B, 0x5C }) })
-        {
-            var pressed = vks.Any(vk => (GetAsyncKeyState(vk) & 0x8000) != 0);
-            if ((required & bit) != 0 && !pressed)
-                return false;
-            if ((required & bit) == 0 && pressed)
-                return false;
-        }
-        return true;
-    }
+    /// <summary>修饰精确匹配（ushort 侧别语义单点 <see cref="SoftTriggerModifiers.Matches"/>；键态实时查询可注入）。</summary>
+    private static bool ModifierMatches(ushort required) =>
+        SoftTriggerModifiers.Matches(required, KeyStateOverride ?? IsKeyDown);
 
     private void Dispatch(SoftTriggerDefinition def, int triggerVk = 0)
     {

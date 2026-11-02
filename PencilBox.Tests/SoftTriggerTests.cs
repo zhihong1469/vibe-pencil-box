@@ -70,11 +70,11 @@ public class SoftTriggerTests : IDisposable
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
 
         def = ValidDef();
-        def.TriggerUsageId = 0x68;                             // F13：工作状态保留段
-        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
+        def.TriggerUsageId = 0x68;                             // F13：v2.4 起触发合法（工作状态占用=标注不拦）
+        SoftTriggerKeys.Validate(def);
 
         def = ValidDef();
-        def.Steps = [new SoftTriggerStep(0x6A, 0)];            // 动作=F15：工作状态保留段禁
+        def.Steps = [new SoftTriggerStep(0x6A, 0)];            // 动作=F15：工作状态保留段禁（动作侧边界不动）
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
     }
 
@@ -139,16 +139,17 @@ public class SoftTriggerTests : IDisposable
             Sent.Add((steps, 0));
     }
 
-    private (SoftTriggerEngine Engine, FakeHook Hook, FakeSender Sender, FeatureToggleService Toggles) CreateEngine()
+    private (SoftTriggerEngine Engine, FakeHook Hook, FakeSender Sender, FeatureToggleService Toggles, SoftTriggerSettingsStore Settings) CreateEngine()
     {
         var toggles = new FeatureToggleService(NullLogger<FeatureToggleService>.Instance, baseDirectory: _dir);
         var hook = new FakeHook();
         var sender = new FakeSender();
+        var settings = new SoftTriggerSettingsStore(NullLogger<SoftTriggerSettingsStore>.Instance, baseDirectory: _dir);
         var engine = new SoftTriggerEngine(
             new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir),
-            hook, sender, toggles,
+            hook, sender, toggles, settings,
             NullLogger<SoftTriggerEngine>.Instance);
-        return (engine, hook, sender, toggles);
+        return (engine, hook, sender, toggles, settings);
     }
 
     // ===== v2：步后延时 / 全键盘触发池 / 动态预留全局律 =====
@@ -165,26 +166,23 @@ public class SoftTriggerTests : IDisposable
     }
 
     [Fact]
-    public void TriggerPool_FullKeyboard_ExceptWorkState()
+    public void TriggerPool_FullKeyboard_IncludesWorkStateAsTrigger()
     {
         Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x04));  // A
         Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x3B));  // F2
         Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x6C));  // F17
         Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x28));  // Enter
-        Assert.False(SoftTriggerKeys.IsTriggerCandidate(0x68)); // F13 工作状态保留
-        Assert.False(SoftTriggerKeys.IsTriggerCandidate(0x6B)); // F16
+        Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x68));  // F13：v2.4 回池（占用=标注不删）
+        Assert.True(SoftTriggerKeys.IsTriggerCandidate(0x6B));  // F16
         Assert.False(SoftTriggerKeys.IsTriggerCandidate(0x00)); // 未知
+        Assert.True(SoftTriggerKeys.IsWorkStateReserved(0x68)); // F13 仍属工作状态段（动作禁入+UI 标注）
         Assert.False(SoftTriggerKeys.IsWorkStateReserved(0x6C));// F17 不属工作状态段
     }
 
     [Fact]
-    public void Validate_RejectsWorkStateTriggerAndSelfTrigger()
+    public void Validate_RejectsSelfTrigger()
     {
         var def = ValidDef();
-        def.TriggerUsageId = 0x69;                              // F14 工作状态保留
-        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
-
-        def = ValidDef();
         def.TriggerUsageId = SoftTriggerTextParser.ParseTrigger("F2").Usage;
         def.Steps = [new SoftTriggerStep(0x3B, 0)];             // 动作含自己触发键 F2
         Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
@@ -314,7 +312,7 @@ public class SoftTriggerTests : IDisposable
     [Fact]
     public async Task Engine_TriggerKeyReplaysSequence()
     {
-        var (engine, hook, sender, _) = CreateEngine();
+        var (engine, hook, sender, _, _) = CreateEngine();
         var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
         store.Save(ValidDef());
         engine.Start();
@@ -335,7 +333,7 @@ public class SoftTriggerTests : IDisposable
     [Fact]
     public async Task Engine_WaitsForTriggerReleaseBeforeReplay()
     {
-        var (engine, hook, sender, _) = CreateEngine();
+        var (engine, hook, sender, _, _) = CreateEngine();
         var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
         store.Save(ValidDef());
         engine.Start();
@@ -361,7 +359,7 @@ public class SoftTriggerTests : IDisposable
     [Fact]
     public async Task Engine_NonTriggerKeyIgnored()
     {
-        var (engine, hook, sender, _) = CreateEngine();
+        var (engine, hook, sender, _, _) = CreateEngine();
         var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
         store.Save(ValidDef());
         engine.Start();
@@ -377,7 +375,7 @@ public class SoftTriggerTests : IDisposable
     [Fact]
     public async Task Engine_ToggleTwoPress_StartThenStop()
     {
-        var (engine, hook, sender, _) = CreateEngine();
+        var (engine, hook, sender, _, _) = CreateEngine();
         var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
         var def = ValidDef();
         def.RepeatMode = SoftTriggerRepeatMode.Toggle;
@@ -405,7 +403,7 @@ public class SoftTriggerTests : IDisposable
     [Fact]
     public void Engine_StartRejectedWhenFeatureOff()
     {
-        var (engine, _, _, toggles) = CreateEngine();
+        var (engine, _, _, toggles, _) = CreateEngine();
         toggles.SetEnabled("softtrigger", false);
 
         Assert.Throws<InvalidOperationException>(() => engine.Start());
@@ -415,7 +413,7 @@ public class SoftTriggerTests : IDisposable
     [Fact]
     public async Task Engine_FeatureOffWhileRunning_StopsImmediately()
     {
-        var (engine, hook, sender, toggles) = CreateEngine();
+        var (engine, hook, sender, toggles, _) = CreateEngine();
         var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
         store.Save(ValidDef());
         engine.Start();
@@ -433,7 +431,7 @@ public class SoftTriggerTests : IDisposable
     [Fact]
     public void Engine_Fire_DisabledDefRejected()
     {
-        var (engine, _, sender, _) = CreateEngine();
+        var (engine, _, sender, _, _) = CreateEngine();
         var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
         var def = ValidDef();
         def.Enabled = false;
@@ -443,5 +441,141 @@ public class SoftTriggerTests : IDisposable
         Assert.Empty(sender.Sent);
 
         Assert.Throws<KeyNotFoundException>(() => engine.Fire("不存在"));
+    }
+
+    // ===== v2.4：左右侧别修饰（SoftTriggerModifiers 单点） =====
+
+    [Fact]
+    public void SideModifiers_ParseDescribeRoundTrip()
+    {
+        var step = SoftTriggerTextParser.ParseStep("LCTRL+A");
+        Assert.Equal(SoftTriggerModifiers.LCtrl, step.Modifier);
+        Assert.Equal("左Ctrl+A", SoftTriggerDescriber.DescribeStep(step));
+
+        var trig = SoftTriggerTextParser.ParseTrigger("RShift+F5");
+        Assert.Equal(SoftTriggerModifiers.RShift, trig.Modifier);
+        Assert.Equal("右Shift+F5", SoftTriggerDescriber.DescribeTrigger(trig.Usage, trig.Modifier));
+
+        // 侧别与通用可组合（不同通道）；裸键描述无前导 +
+        var combo = SoftTriggerTextParser.ParseStep("LCTRL+SHIFT+L@150");
+        Assert.Equal(SoftTriggerModifiers.LCtrl | SoftTriggerModifiers.Shift, combo.Modifier);
+        Assert.Equal("左Ctrl+Shift+L@150", SoftTriggerDescriber.DescribeStep(combo));
+        Assert.Equal("F2", SoftTriggerDescriber.DescribeStep(SoftTriggerTextParser.ParseStep("F2")));
+        Assert.Equal("F2", SoftTriggerDescriber.DescribeTrigger(0x3B, 0));
+    }
+
+    [Fact]
+    public void SideModifiers_Validation()
+    {
+        Assert.True(SoftTriggerKeys.IsValidModifier(SoftTriggerModifiers.LCtrl));                    // 单侧别
+        Assert.True(SoftTriggerKeys.IsValidModifier(SoftTriggerModifiers.LAlt | SoftTriggerModifiers.RAlt)); // 左右同按合法
+        Assert.False(SoftTriggerKeys.IsValidModifier((ushort)(SoftTriggerModifiers.LCtrl | SoftTriggerModifiers.Ctrl))); // 同通道通用+侧别混设
+
+        var def = ValidDef();
+        def.TriggerModifier = SoftTriggerModifiers.RCtrl | SoftTriggerModifiers.Shift;
+        def.Steps = [new SoftTriggerStep(0x10, 0)];
+        SoftTriggerKeys.Validate(def);
+
+        def.TriggerModifier = SoftTriggerModifiers.LShift | SoftTriggerModifiers.Shift;              // 非法组合
+        Assert.Throws<ArgumentException>(() => SoftTriggerKeys.Validate(def));
+    }
+
+    [Fact]
+    public void SideModifiers_DownVks()
+    {
+        Assert.Equal(new[] { 0x11 }, SoftTriggerModifiers.DownVks(SoftTriggerModifiers.Ctrl));       // 通用=VK_CONTROL
+        Assert.Equal(new[] { 0xA2 }, SoftTriggerModifiers.DownVks(SoftTriggerModifiers.LCtrl));      // 左=VK_LCONTROL
+        Assert.Equal(new[] { 0xA3 }, SoftTriggerModifiers.DownVks(SoftTriggerModifiers.RCtrl));      // 右=VK_RCONTROL
+        Assert.Equal(new[] { 0x5C }, SoftTriggerModifiers.DownVks(SoftTriggerModifiers.RWin));
+        Assert.Equal(new[] { 0xA2, 0x10 }, SoftTriggerModifiers.DownVks(SoftTriggerModifiers.LCtrl | SoftTriggerModifiers.Shift));
+    }
+
+    [Fact]
+    public void SideModifiers_MatchPrecision()
+    {
+        var down = new HashSet<int>();
+        bool Is(int vk) => down.Contains(vk);
+        // 注入态契约：镜像真实 GetAsyncKeyState——物理侧键按下时，其中性聚合 VK（0x11/0x10/0x12）同亮
+        void PressSide(int sideVk, int neutralVk)
+        {
+            down.Add(sideVk);
+            if (neutralVk > 0)
+                down.Add(neutralVk);
+        }
+
+        // 要求左Ctrl：只有左按下→命中；右也按着→不命中（精确侧别）
+        PressSide(0xA2, 0x11);
+        Assert.True(SoftTriggerModifiers.Matches(SoftTriggerModifiers.LCtrl, Is));
+        down.Add(0xA3);
+        Assert.False(SoftTriggerModifiers.Matches(SoftTriggerModifiers.LCtrl, Is));
+        down.Remove(0xA3);
+
+        // 要求通用 Ctrl：右按下（中性聚合同亮）即命中
+        down.Clear();
+        PressSide(0xA3, 0x11);
+        Assert.True(SoftTriggerModifiers.Matches(SoftTriggerModifiers.Ctrl, Is));
+
+        // 无要求通道必须整通道没按：要求左Shift，多按了左 Ctrl（聚合 0x11 亮）→ 不命中
+        down.Clear();
+        PressSide(0xA0, 0x10);
+        PressSide(0xA2, 0x11);
+        Assert.False(SoftTriggerModifiers.Matches(SoftTriggerModifiers.LShift, Is));
+
+        // 侧别要求 + 无多余通道 → 命中
+        down.Clear();
+        PressSide(0xA0, 0x10);
+        Assert.True(SoftTriggerModifiers.Matches(SoftTriggerModifiers.LShift, Is));
+
+        // 空 required：任何修饰按下都不命中（防打字误触的"其余都没按"）
+        down.Clear();
+        down.Add(0x11);
+        Assert.False(SoftTriggerModifiers.Matches(0, Is));
+        down.Clear();
+        Assert.True(SoftTriggerModifiers.Matches(0, Is));
+    }
+
+    [Fact]
+    public void SettingsStore_RoundTripAndClamp()
+    {
+        var settings = new SoftTriggerSettingsStore(NullLogger<SoftTriggerSettingsStore>.Instance, baseDirectory: _dir);
+        Assert.Equal(800, settings.ReleaseWaitMs);             // 缺文件=默认
+
+        settings.SetReleaseWaitMs(300);
+        Assert.Equal(300, settings.ReleaseWaitMs);
+
+        settings.SetReleaseWaitMs(99_999);                     // 越界夹取
+        Assert.Equal(2000, settings.ReleaseWaitMs);
+
+        settings.SetReleaseWaitMs(-5);
+        Assert.Equal(0, settings.ReleaseWaitMs);
+
+        settings.SetReleaseWaitMs(500);
+        Assert.Equal(500, settings.ReleaseWaitMs);             // 回归正常值
+    }
+
+    [Fact]
+    public async Task Engine_ZeroReleaseWait_ReplaysImmediately()
+    {
+        var (engine, hook, sender, _, settings) = CreateEngine();
+        var store = new SoftTriggerStore(NullLogger<SoftTriggerStore>.Instance, baseDirectory: _dir);
+        store.Save(ValidDef());
+        settings.SetReleaseWaitMs(0);                          // 0=不等松开（旧手感）
+        engine.Start();
+
+        var polls = 0;
+        SoftTriggerEngine.IsKeyDownOverride = _ => { polls++; return true; };   // 恒"按着"——不等则一次都不该查
+        try
+        {
+            hook.Press(0x80);
+            await WaitForAsync(
+                () => engine.RecentEvents(20).FirstOrDefault(e => e.Kind == SoftTriggerEvent.KindReplayed),
+                "Replayed 事件");
+            Assert.Equal(0, polls);
+            Assert.Single(sender.Sent);
+        }
+        finally
+        {
+            SoftTriggerEngine.IsKeyDownOverride = null;
+        }
     }
 }

@@ -880,6 +880,9 @@ public class Program
                 GetOption(rest, "--keys") ?? throw new ArgumentException("缺少序列：send --keys \"CTRL+SHIFT+S\""),
                 GetOptionInt(rest, "--interval", 60)),
 
+            // wait：触发键松开等待手感参数（v2.4；无参=查，--ms N=设，0=不等）
+            "wait" => cmd.Wait(GetOption(rest, "--ms")),
+
             // selftest：进程内拉引擎 → 注入 F24 → 钩子捕获 → 回放 F7 → 事件断言（CLI-first 零设备验收路径）
             "selftest" or "test" => await cmd.Selftest(),
             _ => UnknownCommand($"softtrigger {action}")
@@ -980,19 +983,21 @@ public class Program
                      list                                           功能清单（ID/默认/当前/管辖域）
                      on <id> / off <id>                             启用/停用（id 见 list；停用后 GUI 入口隐藏、
                                                                     管辖 CLI 域拒绝并指路；核心域不受管）
-            softtrigger 软触发（13 号动作库键盘族；纯软件域零设备依赖，本机键击回放）【可关：feature off softtrigger】
+            softtrigger 软触发/连点器（13 号动作库键盘族；纯软件域零设备依赖，本机键击回放）【可关：feature off softtrigger】
                      list                                           定义清单（触发键→序列/优先级/启用/备注）
                      add <名> --trigger ALT+F2 --keys "F2@100,ALT+L"
-                                                                    新建：触发键=全键盘池±修饰（F13~F16 工作状态保留除外）；
+                                                                    新建：触发键=全键盘池±修饰（含 F13~F16，工作状态占用标注慎选）；
                           [--mode once|toggle]                      防回环=动态预留律（启用集内触发键∩动作键=∅，冲突点名拒）
-                          [--repeat-interval 200] [--priority 0]    步语法=修饰+主键[@步前延时ms]，周期穿插步间
-                          [--step-interval N]（旧参数：摊给未@步）
+                          [--repeat-interval 200] [--priority 0]    步语法=修饰+主键[@步前延时ms]，修饰支持左右侧别
+                          [--step-interval N]（旧参数：摊给未@步）  lctrl/rshift…（设备注入只有通用位，侧别匹配物理键盘）
                           [--note ".."] [--disabled]
                      on/off/remove <名>                             启用/停用/删除（Desktop 引擎随重载生效；
                                                                     启用冲突=动态预留律拒绝并指出冲突定义）
                      run <名> [--count N]                           手动试射：不经钩子直接回放（键击进前台窗口）
                      send --keys "CTRL+SHIFT+S" [--interval 60]     裸发送键序列（试手感；F13~F16 拒发；
                                                                     撞启用定义触发键=[WARN] 会真实触发）
+                     wait [--ms N]                                  松开等待手感参数：触发键松开后再回放的最长等待
+                                                                    （默认 800ms；0=按下立即回放；长按=等多久回放多慢）
                      selftest                                       回环自证：注入 F24→钩子捕获→回放 F7→事件断言
                                                                     （零设备零人工，CLI-first 验收路径）
                     identify | pair read/write/enter/factory/clear | ota | raw | status

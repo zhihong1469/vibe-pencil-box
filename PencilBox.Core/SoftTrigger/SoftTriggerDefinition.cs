@@ -17,11 +17,13 @@ public enum SoftTriggerRepeatMode
 
 /// <summary>
 /// 序列一步 = 修饰键 + 单主键 + 步前延时（HID usage；顺序=数组序，13 号：顺序/周期自由编排）。
+/// Modifier=ushort（v2.4 左右侧别，编码见 <see cref="SoftTriggerModifiers"/>：低 4 位通用/H 字节侧别；
+/// 旧 byte 存储值即低 4 位，JSON 数字直读兼容）。
 /// DelayMsBefore=本步回放【前】等待的毫秒数（0=立即）——周期穿插在步间；
 /// 触发源后的第一步设 200~300ms 可避免回放键与触发键按压交错（v2.3，指挥官 F2→Shift+Alt+L
 /// 回放夹进 F2 按压导致目标软件热键判定经常失效的教训；引擎另有"等触发键松开再回放"双保险）。
 /// </summary>
-public sealed record SoftTriggerStep(byte Usage, byte Modifier, int DelayMsBefore = 0);
+public sealed record SoftTriggerStep(byte Usage, ushort Modifier, int DelayMsBefore = 0);
 
 /// <summary>
 /// 一条软触发定义（动作库键盘族，13 号；纯软件域——零设备依赖）。
@@ -37,11 +39,11 @@ public sealed class SoftTriggerDefinition
     public string Name { get; set; } = "";
     public bool Enabled { get; set; } = true;
 
-    /// <summary>触发键（HID usage；全键盘池——可映射键、F13~F16 工作状态保留段除外）</summary>
+    /// <summary>触发键（HID usage；v2.4 全键盘池含 F13~F16——工作状态占用已在下拉标注，设备映射将来会变，不删死）</summary>
     public byte TriggerUsageId { get; set; }
 
-    /// <summary>触发修饰组合（0x01=Ctrl 0x02=Shift 0x04=Alt 0x08=Win 位和；钩子侧精确匹配防误触）</summary>
-    public byte TriggerModifier { get; set; }
+    /// <summary>触发修饰组合（ushort 位和，v2.4 支持左右侧别；编码见 <see cref="SoftTriggerModifiers"/>；钩子侧精确匹配防误触）</summary>
+    public ushort TriggerModifier { get; set; }
 
     /// <summary>回放序列（步=修饰+主键+步前延时）</summary>
     public List<SoftTriggerStep> Steps { get; set; } = [];
