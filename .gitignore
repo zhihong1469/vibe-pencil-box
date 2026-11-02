@@ -107,3 +107,13 @@ _share/
 **/*.wav
 # 临时试验脚本/合成 WAV（根锚定）
 /_scratch/
+
+# ---------- 驱动构建中间产物（R1PBleAudioDriver，根锚定） ----------
+/R1PBleAudioDriver/**/obj/
+/R1PBleAudioDriver/**/x64/
+/R1PBleAudioDriver/**/*.sys
+/R1PBleAudioDriver/**/*.cer
+/R1PBleAudioDriver/**/*.pfx
+/R1PBleAudioDriver/**/*.pvk
+/R1PBleAudioDriver/**/*.cat
+/R1PBleAudioDriver/**/*.pdb

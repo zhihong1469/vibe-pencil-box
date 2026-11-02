@@ -1,0 +1,28 @@
+; R1PBleAudio.inf — root 枚举虚拟声卡安装信息（PortCls waveRT capture 单端点）
+; v0.1 模板：节结构与字段按 PortCls 音频 INF 规范（sysvad 模板同源）；
+; M1/M2 编译安装时按 WDK 建议校订（CatalogFileName/供货商 GUID/版本号等）。
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+CatalogFile = R1PBleAudio.cat
+DriverVer   = 11/02/2026,0.1.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%R1PBleAudio.DeviceDesc% = R1PBleAudio.Installation, Root\R1PBleAudio
+
+; M1：Installation 节按 PortCls 模板补全——
+;   CopyFiles(sys/cat)、AddReg（PortCls 驱动注册：LowerFilters 不需要，
+;   用 KS 注册表 KeyboardProfile/Topology 节点指向 .sys 的 miniport 工厂）；
+;   Interfaces 节声明 IMiniportWaveRT/IMiniportTopology 工厂；
+;   关键：Root 枚举设备由设备管理器"添加过时硬件"或 pnputil 安装（signing.md §3.5）。
+
+[Strings]
+ProviderName       = "PencilBox"
+ManufacturerName   = "PencilBox"
+R1PBleAudio.DeviceDesc = "R1PBleAudio"
