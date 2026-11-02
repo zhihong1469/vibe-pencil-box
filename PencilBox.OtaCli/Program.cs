@@ -58,6 +58,8 @@ internal static class Program
                 "hash" => HashAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "repair" or "fix" => RepairAsync().GetAwaiter().GetResult(),
                 "pair" => PairAsync(GetOption(rest, "--serial")).GetAwaiter().GetResult(),
+                "pairinfo" => PairInfoAsync(GetOption(rest, "--serial"),
+                    byte.TryParse(GetOption(rest, "--no"), out var no) ? no : (byte)0).GetAwaiter().GetResult(),
                 "ota" or "upgrade" => OtaAsync(rest).GetAwaiter().GetResult(),
                 "help" or "--help" or "-h" => Usage(),
                 _ => UnknownCommand(action)
@@ -189,6 +191,32 @@ internal static class Program
             return 1;
         }
         Out.Ok($"配对成功：MAC {mac ?? "—"}    名称 \"{name ?? "—"}\"");
+        return 0;
+    }
+
+    // ================= pairinfo =================
+
+    /// <summary>读基站配对表（0x51/01 只读秒回）：查询当前绑定对端 MAC+名称，与配对（0x52）互不影响。退出码：0=成功，1=失败。</summary>
+    private static async Task<int> PairInfoAsync(string? serial, byte no)
+    {
+        var candidates = await Engine.EnumerateCandidatesAsync();
+        var selection = HidDeviceSelection.Select(candidates, serial);
+        if (selection.Error != null || selection.Selected == null)
+        {
+            Out.Error(selection.Error ?? "设备选择失败");
+            PrintCandidates(selection.Candidates);
+            return selection.Candidates.Count > 1 && string.IsNullOrWhiteSpace(serial) ? 2 : 1;
+        }
+
+        var device = selection.Selected;
+        Out.Info($"读 0x51/01 配对表（NO={no}）← {device.InterfaceLabel}（SN {Show(device.SerialNumber)}）");
+        var (ok, slot, mac, name, msg) = await Engine.PairInfoReadAsync(device, no, Cts.Token);
+        if (!ok)
+        {
+            Out.Error(msg);
+            return 1;
+        }
+        Out.Ok($"SN {Show(device.SerialNumber)}  配对表 NO={slot}  MAC={mac}    名称 \"{name}\"");
         return 0;
     }
 
@@ -546,6 +574,7 @@ internal static class Program
               ota-tool hash [--serial SN|位置]               读 Git hash（0x04，仅基站 USB 直达；量产固件裁剪时无应答属预期）
               ota-tool repair                               异常台自动重置（软件拔插，治"无法启动(Code10)"；需管理员权限，失败给指引）
               ota-tool pair [--serial SN|位置]              用户自主配对（0x52 手动逐台）：发指令→人工让键盘进配对（上电按住 K1 约 2s）→等结果回 MAC
+              ota-tool pairinfo [--serial SN|位置] [--no 0]  读基站配对表（0x51/01 只读秒回）：查当前绑定对端 MAC+名称
               ota-tool ota <fw.bin> [选项]                   升级（多台逐支队列；--parallel N 台并行）
 
             ota 选项：

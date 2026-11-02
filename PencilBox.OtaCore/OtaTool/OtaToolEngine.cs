@@ -273,6 +273,37 @@ public sealed class OtaToolEngine
         }
     }
 
+    /// <summary>
+    /// 读基站配对表（`0x51` PARAM=01，只读秒回）：查询当前绑定的对端（NO 槽位 0x00~0x03，
+    /// 键盘 dongle 单配对通常在 NO=0）。与配对（0x52，60s 学习窗）语义分开——指挥官 11-02
+    /// 拆分裁决的基础；也是 0x52/02 上行 MAC 的独立对拍源（配对表里的记录=基站实际绑定值）。
+    /// </summary>
+    public async Task<(bool Ok, byte No, string Mac, string Name, string Message)> PairInfoReadAsync(
+        HidDeviceInfo device, byte no = 0, CancellationToken cancellationToken = default)
+    {
+        if (!await OpenChannelAsync(device))
+            return (false, 0, "", "", "连接 USB 命令通道失败");
+        try
+        {
+            var requester = new CommandRequester(_clock, _config);
+            var resp = await requester.RequestAsync(_channel!, _codec.EncodePairRead(no), CompanyCmd.PairInfo, cancellationToken)
+                .ConfigureAwait(false);
+            if (resp == null)
+                return (false, 0, "", "", $"读配对表超时（0x51/01 无应答——旧固件无此命令或该台正忙）");
+            if (!_codec.TryParsePairReadResp(resp, out var status, out var info))
+                return (false, 0, "", "", "配对表应答解析失败");
+            if (status != CompanyStatus.Ok || info == null)
+                return (false, 0, "", "", $"读配对表失败：STATUS=0x{status:X2}（该槽位未绑定或读失败）");
+            var mac = MacAddress.FormatDisplay(info.MacDisplay6);
+            return (true, info.No, mac, info.BtName,
+                $"NO={info.No} MAC={mac} 名称=\"{info.BtName}\"");
+        }
+        finally
+        {
+            CloseChannel();
+        }
+    }
+
     // ================= 固件包装载 =================
 
     /// <summary>

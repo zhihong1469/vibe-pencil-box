@@ -55,9 +55,9 @@ internal sealed class MainForm : Form
         Text = "多支同升 · USB 升级小工具（PencilBox 裁剪版）";
         Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
         StartPosition = FormStartPosition.CenterScreen;
-        // 最小宽=全列和不裁切（sn200+loc200+ch70+ver100+hash300+status280+pair80≈1230+滚动条余量）
-        MinimumSize = new System.Drawing.Size(1290, 560);
-        Size = new System.Drawing.Size(1360, 700);
+        // 最小宽=全列和不裁切（sn200+loc200+ch70+ver100+hash300+status280+pair150≈1300+滚动条余量）
+        MinimumSize = new System.Drawing.Size(1330, 560);
+        Size = new System.Drawing.Size(1400, 700);
 
         _ui = new Progress<OtaToolUpdate>(OnUpdate);
         _engine = new OtaToolEngine(_ui);
@@ -212,10 +212,11 @@ internal sealed class MainForm : Form
         _list.Columns.Add("当前版本", 100).Name = "ver";
         _list.Columns.Add("Hash（0x04 全 40 位）", 300).Name = "hash";
         _list.Columns.Add("状态", 280).Name = "status";
-        _list.Columns.Add("操作", 80).Name = "pair";
+        _list.Columns.Add("操作", 150).Name = "pair";
         _pairColIndex = _list.Columns.Count - 1;
 
-        // 行内「配对」按钮：OwnerDraw 只接管按钮列，其余子项 DrawDefault（探针取证：勾选框/文本不受影响）
+        // 行内「配对|查询」双按钮（指挥官 11-02 拆分裁决）：配对=0x52 学习窗，查询=0x51/01 只读秒回。
+        // OwnerDraw 只接管按钮列，其余子项 DrawDefault（探针取证：勾选框/文本不受影响）
         typeof(ListView).GetProperty("DoubleBuffered",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
             !.SetValue(_list, true);
@@ -231,7 +232,11 @@ internal sealed class MainForm : Form
             var state = _busy
                 ? System.Windows.Forms.VisualStyles.PushButtonState.Disabled
                 : System.Windows.Forms.VisualStyles.PushButtonState.Normal;
-            ButtonRenderer.DrawButton(e.Graphics, e.Bounds, pairing ? "配对中…" : "配对", _list.Font, false, state);
+            var w = e.Bounds.Width / 2;
+            ButtonRenderer.DrawButton(e.Graphics, new System.Drawing.Rectangle(e.Bounds.X, e.Bounds.Y, w - 1, e.Bounds.Height),
+                pairing ? "配对中…" : "配对", _list.Font, false, state);
+            ButtonRenderer.DrawButton(e.Graphics, new System.Drawing.Rectangle(e.Bounds.X + w, e.Bounds.Y, e.Bounds.Width - w, e.Bounds.Height),
+                "查询", _list.Font, false, state);
         };
         _list.MouseClick += (_, e) =>
         {
@@ -243,10 +248,14 @@ internal sealed class MainForm : Form
                 return;
             if (_busy)
             {
-                LogLine("配对：升级进行中——升级结束后再点行内「配对」");
+                LogLine("升级进行中——升级结束后再用行内「配对/查询」");
                 return;
             }
-            _ = PairRowAsync(hit.Item);
+            var cell = hit.SubItem.Bounds;
+            if (e.X >= cell.X + cell.Width / 2)
+                _ = QueryPairRowAsync(hit.Item);   // 右半格=查询（0x51/01 只读）
+            else
+                _ = PairRowAsync(hit.Item);        // 左半格=配对（0x52 学习窗）
         };
 
         // ---- 日志区 ----
@@ -530,6 +539,43 @@ internal sealed class MainForm : Form
             _pairCts!.Dispose();
             _pairCts = null;
             UpdateCancelBtn();
+        }
+    }
+
+    /// <summary>
+    /// 行内「查询」：读基站配对表（0x51/01，只读秒回，指挥官 11-02 拆分裁决）——查这台当前
+    /// 绑定的对端 MAC+名称；也是配对成功显示的独立对拍源（配对表=基站实际绑定值）。
+    /// 后台执行不锁界面（与配对同哲学）；该台正在配对时通道被占，拒绝并提示。
+    /// </summary>
+    private async Task QueryPairRowAsync(ListViewItem item)
+    {
+        if (_pairItem != null && ReferenceEquals(item, _pairItem))
+        {
+            LogLine("查询：该台正在配对——配对成功会自动显示 MAC；要现在查就先点「取消」");
+            return;
+        }
+        var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
+        Cell(item, "status").Text = "查询配对表…";
+        LogLine($"读 0x51/01 配对表 ← 位置 {dev.LocationToken}");
+        var engine = new OtaToolEngine(_ui);   // 独立实例：只读快进快出，不占全局闸
+        try
+        {
+            var (ok, slot, mac, name, msg) = await engine.PairInfoReadAsync(dev, 0);
+            if (ok)
+            {
+                Cell(item, "status").Text = $"配对表 NO={slot}：{mac}    \"{name}\"";
+                LogLine($"查询配对（位置 {dev.LocationToken}）：NO={slot} MAC={mac}    名称 \"{name}\"");
+            }
+            else
+            {
+                Cell(item, "status").Text = "配对表未读到";
+                LogLine($"查询配对失败（位置 {dev.LocationToken}）：{msg}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Cell(item, "status").Text = "查询异常";
+            LogLine($"查询配对异常（位置 {dev.LocationToken}）：{ex.Message}");
         }
     }
 
