@@ -406,6 +406,19 @@ public sealed class OtaToolEngine
             Say("info", $"SN={Show(sn)} 轨道：B1 透传（PC → USB → 基站 BLE 中转 → 键盘自校验/切区/复位；" +
                         "PC 对链路无感、块语义不变；键盘须已与该基站配对，否则不进 DFU）");
 
+        // 升级前身份快照（2026-11-02 指挥官现场：1.0.2→1.0.3 复位后 USB 实例 ID 三变——路径/
+        // 组键/位置段全变（老批次序列号形态 7&*），复核按旧身份永找不回）：快照供"新面孔"兜底
+        HashSet<string> beforePaths;
+        try
+        {
+            beforePaths = (await EnumerateCandidatesAsync()).Select(d => d.DevicePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            beforePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { device.DevicePath };
+        }
+
         // OTA 会话（与主线 CLI 同一 FSM：R1/R2/终态窗/终态丢失判定零漂移）
         Phase("传输固件");
         var fsm = new CompanyOtaFsm(_codec, _channel!, _clock, _config);
@@ -486,8 +499,10 @@ public sealed class OtaToolEngine
         string? afterText = null;
         string? lastErr = null;
         var groupKey = HidDeviceSelection.DeviceGroupKey(device);
+        var newcomerSaid = false;
         var deadline = DateTime.UtcNow.AddMilliseconds(RecheckTimeoutMs);
         var probes = 0;
+        Say("info", $"SN={Show(sn)} 复位重枚举实测可慢达约 2 分钟——若刷后 USB 序列号/位置变化（新固件唯一序列号生效），会自动按新出现的设备找回");
         while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
         {
             await SleepAsync(ProbeIntervalMs, cancellationToken);
@@ -499,6 +514,25 @@ public sealed class OtaToolEngine
             var probe = candidates.FirstOrDefault(d =>
                     string.Equals(d.DevicePath, device.DevicePath, StringComparison.OrdinalIgnoreCase))
                 ?? candidates.FirstOrDefault(d => HidDeviceSelection.DeviceGroupKey(d) == groupKey);
+            if (probe == null)
+            {
+                // 新面孔兜底（2026-11-02 实证：固件升级后 USB 实例 ID 可能整个变，旧身份认不出）：
+                // 枚举中恰有一台"升级前不在场"的新设备且唯一 → 按它找回；多张新面孔不猜（并行
+                // 升级多台同时复位时勿串），保持等待/待确认
+                var newcomers = candidates
+                    .Where(d => !beforePaths.Contains(d.DevicePath))
+                    .ToList();
+                if (newcomers.Count == 1)
+                {
+                    probe = newcomers[0];
+                    if (!newcomerSaid)
+                    {
+                        newcomerSaid = true;
+                        Say("warn", $"SN={Show(sn)} 升级后设备 USB 身份已变（实例 ID/序列号/位置可能全变）" +
+                                    $"——已按新出现设备找回复核（现位置 {probe.LocationToken}，现报 SN {Show(probe.SerialNumber)}）");
+                    }
+                }
+            }
             if (probe == null)
             {
                 lastErr = "枚举中暂无该设备（疑似复位后掉线，稍候自动复核）";
