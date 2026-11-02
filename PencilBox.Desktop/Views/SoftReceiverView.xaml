@@ -79,6 +79,15 @@
                                 IsEnabled="{Binding IsConnected}"
                                 ToolTip="解码 PCM 直落 WAV（16k/16bit/mono，exe 目录 srx_record\）；语音流须在流（K2/S1）"/>
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="软件键鼠：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <TextBlock Text="{Binding KeyActionsText}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="#0B5345" FontWeight="SemiBold"/>
+                        <Button Content="{Binding KeyActionsButtonText}" Command="{Binding ToggleKeyActionsCommand}"
+                                Style="{StaticResource ActionButton}"
+                                IsEnabled="{Binding CanToggleKeyActions}"
+                                ToolTip="键盘腿=按 Keymap 出厂表注入：K3/K4=翻页 K5/K6=音量 K2 语音边界=F13/F14 S1 档位=F15/F16；鼠标腿=空鼠槽直注（相对移动/左右键/滚轮）。注入进前台焦点，点哪算哪；断开自动关；CLI 等价=srx receive --actions"/>
+                    </StackPanel>
                 </WrapPanel>
                 <TextBlock Text="{Binding StatsText}" FontSize="11" Foreground="#7F8C8D" Margin="0,4,0,0"
                            TextWrapping="Wrap" ToolTip="会话统计（DATA 帧/解码/CRC/seq 跳/电量/充电）"/>

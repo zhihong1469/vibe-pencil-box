@@ -20,6 +20,7 @@ using PencilBox.Core.Protocol.Company;
 using PencilBox.Core.Services;
 using PencilBox.Desktop.Helpers;
 using PencilBox.Infrastructure.Audio;
+using PencilBox.Infrastructure.Platform;
 
 namespace PencilBox.Desktop.ViewModels;
 
@@ -42,6 +43,9 @@ public partial class SoftReceiverViewModel : ObservableObject
     private SoftReceiverSession? _session;
     private readonly Stopwatch _speakerClock = new();
     private DispatcherTimer? _speakerStatsTimer;
+    private SrxKeyActionExecutor? _keyActions;
+    /// <summary>最近一次 S1 档位（0xFF=尚未见过；开软件键鼠时预置基线防假切换）</summary>
+    private byte _lastSwitchMode = 0xFF;
 
     public SoftReceiverViewModel(IBleCentral central, IBleScanner scanner, IAudioPassthrough passthrough)
     {
@@ -54,10 +58,12 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
+    [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
     [ObservableProperty] private bool _isBusy;
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
+    [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _connectionText = "未连接";
     [ObservableProperty] private string _macInput = "";
@@ -82,10 +88,17 @@ public partial class SoftReceiverViewModel : ObservableObject
     [ObservableProperty] private bool _isRecording;
     [ObservableProperty] private string _recordText = "录制 WAV";
 
+    // ---- 软件键鼠（键盘腿=Keymap 表驱动注入；鼠标腿=空鼠槽直通；默认关） ----
+    [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
+    [NotifyPropertyChangedFor(nameof(KeyActionsButtonText))]
+    [ObservableProperty] private bool _isKeyActionsOn;
+    [ObservableProperty] private string _keyActionsText = "关";
+
     // ---- 延迟实测（chirp 回环，复用 SoftReceiverProbe） ----
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
+    [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
     [ObservableProperty] private bool _isProbing;
     [ObservableProperty] private string _probeSecondsInput = "30";
     [ObservableProperty] private string _probeResultText = "（未测）";
@@ -109,6 +122,12 @@ public partial class SoftReceiverViewModel : ObservableObject
     /// <summary>「虚拟麦克风桥」按钮可用 = 已连接，或桥正开着（允许随时关）；实测中锁死</summary>
     public bool CanToggleBridge => (IsConnected || IsBridgeOn) && !IsProbing && !IsBusy;
 
+    /// <summary>「软件键鼠」按钮可用 = 已连接，或正开着（允许随时关）；实测/忙时锁死</summary>
+    public bool CanToggleKeyActions => (IsConnected || IsKeyActionsOn) && !IsProbing && !IsBusy;
+
+    /// <summary>软件键鼠按钮文案随态翻转</summary>
+    public string KeyActionsButtonText => IsKeyActionsOn ? "关软件键鼠" : "开软件键鼠";
+
     /// <summary>事件流（最新在下；容量裁剪防长会话膨胀）</summary>
     public ObservableCollection<string> EventLog { get; } = [];
 
@@ -123,6 +142,7 @@ public partial class SoftReceiverViewModel : ObservableObject
                 _session.KeyEvent -= OnKeyEvent;
                 _session.KeyAction -= OnKeyAction;
                 _session.MouseButton -= OnMouseButton;
+                _session.MouseFrame -= OnMouseFrame;
                 _session.SwitchChanged -= OnSwitchChanged;
                 _session.SlotChanged -= OnSlotChanged;
                 _session.ResponseReceived -= OnResponseReceived;
@@ -137,6 +157,7 @@ public partial class SoftReceiverViewModel : ObservableObject
                 _session.KeyEvent += OnKeyEvent;
                 _session.KeyAction += OnKeyAction;
                 _session.MouseButton += OnMouseButton;
+                _session.MouseFrame += OnMouseFrame;
                 _session.SwitchChanged += OnSwitchChanged;
                 _session.SlotChanged += OnSlotChanged;
                 _session.ResponseReceived += OnResponseReceived;
@@ -254,6 +275,14 @@ public partial class SoftReceiverViewModel : ObservableObject
                 StopBridge("断开");
             if (IsRecording)
                 StopRecord();
+            if (IsKeyActionsOn)
+            {
+                _keyActions = null;
+                IsKeyActionsOn = false;
+                KeyActionsText = "关";
+                Log("软件键鼠已随断开自动关");
+            }
+            _lastSwitchMode = 0xFF;
             _speakerStatsTimer?.Stop();
         }
     }
@@ -495,6 +524,41 @@ public partial class SoftReceiverViewModel : ObservableObject
         MaybeStopStatsTimer();
     }
 
+    // ---- 软件键鼠（键盘腿 Keymap 表驱动 + 鼠标腿空鼠直通，与 CLI --actions 同一份执行器） ----
+
+    /// <summary>
+    /// 开/关软件键鼠：委托 <see cref="SrxKeyActionExecutor"/>（CLI <c>srx receive --actions</c> 同一份逻辑）。
+    /// 键盘腿=0x13 语义键 + S1 档位查 Keymap 出厂表 → Win32 注入进前台焦点；
+    /// 鼠标腿=空鼠槽原始量直通（相对位移/滚轮/键沿）。默认关；断开自动关。
+    /// </summary>
+    [RelayCommand]
+    private void ToggleKeyActions()
+    {
+        if (IsKeyActionsOn)
+        {
+            _keyActions = null;
+            IsKeyActionsOn = false;
+            KeyActionsText = "关";
+            Log("软件键鼠已关（键/空鼠不再注入，事件流继续显示）");
+            return;
+        }
+        if (!IsConnected || Session == null)
+        {
+            Log("先连接键盘再开软件键鼠");
+            return;
+        }
+        var executor = new SrxKeyActionExecutor(
+            msg => AppendLog(msg),
+            msg => AppendLog($"⚠ {msg}"));
+        if (_lastSwitchMode != 0xFF)
+            executor.SeedSwitchBaseline(_lastSwitchMode);   // 中途开启：预置档位基线防假切换
+        _keyActions = executor;
+        IsKeyActionsOn = true;
+        KeyActionsText = "开";
+        Log("软件键鼠已开（Keymap 出厂表）：K3/K4=翻页 K5/K6=音量 K2=F13/F14 会话边界 S1=F15/F16；" +
+            "空鼠=相对移动/左右键/滚轮直注，注入进前台焦点（点哪算哪，注意当前窗口）");
+    }
+
     // ---- 收流录制 WAV（receive 腿） ----
 
     /// <summary>录制/停止：解码 PCM 直落 WAV（16k/16bit/mono），存 exe 目录 srx_record\。</summary>
@@ -567,15 +631,36 @@ public partial class SoftReceiverViewModel : ObservableObject
     private void OnKeyEvent(object? sender, SoftReceiverKeyEvent k) =>
         AppendLog($"键 {(k.IsDown ? "DOWN" : "UP")} page=0x{k.Page:X2} code=0x{k.KeyCode:X2} mod=0x{k.Modifier:X2}");
 
-    // 0x13 语义键（DONGLE_MODE=1 笔端实发）：只显示不注入——注入开关按 CLI-first 待真机对拍后接 GUI
-    private void OnKeyAction(object? sender, SoftReceiverKeyActionEvent a) =>
+    // 0x13 语义键（DONGLE_MODE=1 笔端实发）：软件键鼠开=转发执行器（查表注入+逐条日志），关=只显示
+    private void OnKeyAction(object? sender, SoftReceiverKeyActionEvent a)
+    {
+        var executor = _keyActions;
+        if (executor != null)
+        {
+            executor.HandleKeyAction(a);   // 执行器日志经 AppendLog 上 UI 线程
+            return;
+        }
         AppendLog($"键动作 {SrxKeyActionRouter.KeyName(a.KeyNum)} {SrxKeyActionRouter.ActionName(a.Action)}（key={a.KeyNum} act=0x{a.Action:X2}）");
+    }
 
-    private void OnMouseButton(object? sender, SoftReceiverMouseButtonEvent m) =>
+    private void OnMouseButton(object? sender, SoftReceiverMouseButtonEvent m)
+    {
+        var executor = _keyActions;
+        if (executor != null)
+        {
+            executor.HandleMouseButton(m.Left, m.Right);
+            return;
+        }
         AppendLog($"鼠标键沿 左={(m.Left ? "按下" : "释放")} 右={(m.Right ? "按下" : "释放")}（空鼠 K3/K4）");
+    }
+
+    /// <summary>空鼠槽逐帧（50Hz）：只转发执行器注入，不出日志（会刷爆事件流）；采样前 8 帧由执行器露线。</summary>
+    private void OnMouseFrame(object? sender, SoftReceiverMouseFrame m) => _keyActions?.HandleMouseFrame(m);
 
     private void OnSwitchChanged(object? sender, SoftReceiverSwitchEvent s)
     {
+        _lastSwitchMode = s.Mode;   // 记档位，供中途开软件键鼠预置基线
+        _keyActions?.HandleSwitch(s.Mode);   // 变化沿才注入（基线/去重执行器自管），日志经 AppendLog
         MainThreadHelper.EnsureOnMainThread(() =>
         {
             ModeText = s.Mode switch
