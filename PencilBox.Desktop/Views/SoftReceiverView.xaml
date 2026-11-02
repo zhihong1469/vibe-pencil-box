@@ -96,22 +96,71 @@
             </StackPanel>
         </Border>
 
-        <!-- 连接控制 -->
+        <!-- 连接控制（指挥官 11-02：MAC 手填改下拉选设备，扫描/连接分开；复用仪表盘已知笔端目录） -->
         <Grid Grid.Row="1" Margin="0,0,0,8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*" MinWidth="160"/>
+                <ColumnDefinition Width="*" MinWidth="220"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="键盘 MAC（空=扫描）：" VerticalAlignment="Center" Foreground="#555"/>
-            <TextBox Grid.Column="1" Text="{Binding MacInput, UpdateSourceTrigger=PropertyChanged}"
-                     VerticalContentAlignment="Center" Margin="0,0,8,0"
-                     ToolTip="显示序 AA:BB:CC:DD:EE:FF；留空则扫描 5s 按 SunVote-R1 前缀取信号最强"/>
-            <Button Grid.Column="2" Content="扫描并连接" Command="{Binding ConnectCommand}"
-                    Style="{StaticResource ActionButton}"
-                    IsEnabled="{Binding IsBusy, Converter={StaticResource InvertBoolConverter}}"/>
-            <Button Grid.Column="3" Content="断开" Command="{Binding DisconnectCommand}"
+            <TextBlock Grid.Column="0" Text="键盘：" VerticalAlignment="Center" Foreground="#555"/>
+            <ComboBox Grid.Column="1" ItemsSource="{Binding PenOptions}" SelectedItem="{Binding SelectedPen}"
+                      VerticalContentAlignment="Center" Margin="0,0,8,0"
+                      ToolTip="已知笔端目录（与仪表盘同款：BLE 扫描+串口 0x51 读过都入库；排序：上次使用＞使用过＞出现过，层内在场优先）">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding MacDisplayText}" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding LocalName, TargetNullValue=（无名）}" Margin="8,0,0,0" Foreground="#555"/>
+                            <TextBlock Text="{Binding LevelName, StringFormat=[{0}]}" Margin="8,0,0,0" Foreground="#8E44AD"/>
+                            <TextBlock Text="在场" Foreground="#1E8449" Margin="8,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPresent}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{Binding Rssi, StringFormat={}{0} dBm}" Foreground="#1E8449" Margin="4,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPresent}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="（离线）" Foreground="#95A5A6" Margin="8,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPresent}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button Grid.Column="2" Content="扫描" Command="{Binding ScanDevicesCommand}" Margin="0,0,8,0"
+                    Style="{StaticResource ActionButton}" IsEnabled="{Binding CanScan}"
+                    ToolTip="扫 5s 笔端广播并入已知目录（与仪表盘同款一份存储）；键盘连着基站时不广播"/>
+            <Button Grid.Column="3" Content="连接" Command="{Binding ConnectCommand}" Margin="0,0,8,0"
+                    Style="{StaticResource ActionButton}" IsEnabled="{Binding CanConnect}"
+                    ToolTip="连接下拉选中的笔端 MAC（先扫描或从历史目录选）"/>
+            <Button Grid.Column="4" Content="断开" Command="{Binding DisconnectCommand}"
                     Style="{StaticResource ActionButton}"
                     IsEnabled="{Binding IsConnected}"/>
         </Grid>

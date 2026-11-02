@@ -34,10 +34,9 @@ namespace PencilBox.Desktop.ViewModels;
 public partial class SoftReceiverViewModel : ObservableObject
 {
     private const int EventLogCapacity = 200;
-    private const string PenPrefix = BleNameConstants.PenPrefix;
 
     private readonly IBleCentral _central;
-    private readonly IBleScanner _scanner;
+    private readonly IPenBindingService _penBinding;
     private readonly IAudioPassthrough _passthrough;
 
     private SoftReceiverSession? _session;
@@ -47,11 +46,12 @@ public partial class SoftReceiverViewModel : ObservableObject
     /// <summary>最近一次 S1 档位（0xFF=尚未见过；开软件键鼠时预置基线防假切换）</summary>
     private byte _lastSwitchMode = 0xFF;
 
-    public SoftReceiverViewModel(IBleCentral central, IBleScanner scanner, IAudioPassthrough passthrough)
+    public SoftReceiverViewModel(IBleCentral central, IPenBindingService penBinding, IAudioPassthrough passthrough)
     {
         _central = central;
-        _scanner = scanner;
+        _penBinding = penBinding;
         _passthrough = passthrough;
+        _ = LoadKnownPensAsync();   // 启动即载历史目录（仪表盘同款：BLE 扫描+串口 0x51 两源一份存储）
     }
 
     // ---- 连接状态卡 ----
@@ -59,14 +59,30 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
+    [NotifyPropertyChangedFor(nameof(CanScan))]
     [ObservableProperty] private bool _isBusy;
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _connectionText = "未连接";
-    [ObservableProperty] private string _macInput = "";
+
+    // ---- 键盘选择（下拉=仪表盘同款已知笔端目录，两源一份存储；扫描/连接分开） ----
+    /// <summary>下拉选项（每次扫描/载入整体重建；排序=目录三级层级：上次使用＞使用过＞出现过）</summary>
+    public ObservableCollection<KnownPen> PenOptions { get; } = [];
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
+    [ObservableProperty] private KnownPen? _selectedPen;
+    [NotifyPropertyChangedFor(nameof(CanScan))]
+    [ObservableProperty] private bool _isScanningDevices;
+
+    /// <summary>「扫描」可用 = 不忙且没在扫（已连接也允许扫，顺带刷新在场/RSSI）</summary>
+    public bool CanScan => !IsBusy && !IsScanningDevices;
+
+    /// <summary>「连接」可用 = 未连接、不忙、且下拉已选笔端</summary>
+    public bool CanConnect => !IsConnected && !IsBusy && SelectedPen != null;
     [ObservableProperty] private string _batteryText = "—";
     [ObservableProperty] private string _chargeText = "—";
     [ObservableProperty] private string _devStateText = "—";
@@ -168,35 +184,75 @@ public partial class SoftReceiverViewModel : ObservableObject
         }
     }
 
-    /// <summary>扫描并连接（5s 广播扫 SunVote-R1 前缀；填了 MAC 输入框则直连）。</summary>
+    /// <summary>启动载历史目录（仪表盘同款存储：BLE 扫描 + 串口 0x51 读过的 MAC 都在）。</summary>
+    private async Task LoadKnownPensAsync()
+    {
+        try
+        {
+            var pens = await _penBinding.LoadKnownPensAsync();
+            RefreshPenOptions(pens);
+            if (pens.Count > 0)
+                Log($"已载入已知笔端目录 {pens.Count} 支（与仪表盘同款：扫描+串口 0x51 两源一份存储）");
+        }
+        catch (Exception ex)
+        {
+            Log($"载入已知笔端目录失败：{ex.Message}");
+        }
+    }
+
+    private void RefreshPenOptions(IReadOnlyList<KnownPen> pens)
+    {
+        var keep = SelectedPen?.MacDisplayText;
+        PenOptions.Clear();
+        foreach (var p in pens)
+            PenOptions.Add(p);
+        // 优先保住原选中；否则默认选目录第一名（排序已按 层级＞在场＞RSSI）
+        SelectedPen = PenOptions.FirstOrDefault(p =>
+            string.Equals(p.MacDisplayText, keep, StringComparison.OrdinalIgnoreCase))
+            ?? PenOptions.FirstOrDefault();
+    }
+
+    /// <summary>扫描（5s）：SunVote 笔端广播并入已知目录（仪表盘同款），下拉随之刷新。</summary>
+    [RelayCommand]
+    private async Task ScanDevicesAsync()
+    {
+        if (!CanScan) return;
+        IsScanningDevices = true;
+        try
+        {
+            Log("扫描 5s 找笔端广播（并入已知目录）…");
+            var pens = await _penBinding.ScanPensAsync(5);
+            RefreshPenOptions(pens);
+            var present = pens.Count(p => p.IsPresent);
+            Log(present > 0
+                ? $"扫描完成：在场 {present} 支 / 目录共 {pens.Count} 支，默认选中 {SelectedPen?.MacDisplayText}"
+                : $"扫描完成：无笔端广播（键盘连着基站时不广播；目录仍存 {pens.Count} 支历史可选）");
+        }
+        catch (Exception ex)
+        {
+            Log($"扫描失败：{ex.Message}");
+        }
+        finally
+        {
+            IsScanningDevices = false;
+        }
+    }
+
+    /// <summary>连接（与扫描分开）：连下拉选中的笔端 MAC（起连前快照 MAC/名字，防连接期间换选串台）。</summary>
     [RelayCommand]
     private async Task ConnectAsync()
     {
-        if (IsBusy || IsConnected) return;
+        if (!CanConnect || SelectedPen == null) return;
+        var mac = SelectedPen.MacDisplayText;
+        var label = SelectedPen.LocalName ?? SelectedPen.EffectiveBtName;
         IsBusy = true;
         try
         {
-            string? mac = NormalizeMac(MacInput);
-            if (mac == null)
-            {
-                Log("扫描 5s 找笔端广播（或直接填 MAC 直连）…");
-                var devices = await _scanner.ScanAsync(5);
-                mac = devices
-                    .Where(d => (d.LocalName ?? "").StartsWith(PenPrefix, StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(d => d.Rssi)
-                    .FirstOrDefault()?.MacDisplayText;
-                if (mac == null)
-                {
-                    Log("未发现笔端广播：键盘连着基站时不广播；填 MAC 直连，或让键盘脱离基站/进配对态。");
-                    return;
-                }
-            }
-
             var session = new SoftReceiverSession(_central);
             Session = session;
             await session.ConnectAsync(mac);
             IsConnected = true;
-            ConnectionText = $"已连接 {mac}";
+            ConnectionText = $"已连接 {mac}（{label}）";
             Log($"svr1 特征：DATA={(session.DataCharacteristicFound ? "✓" : "✗")} " +
                 $"CMD={(session.CmdCharacteristicFound ? "✓" : "✗")} " +
                 $"RSP={(session.RspCharacteristicFound ? "✓" : "✗")}");
@@ -500,6 +556,12 @@ public partial class SoftReceiverViewModel : ObservableObject
             BridgeDeviceText = captures[ci].FriendlyName;
             EnsureStatsTimer();
             Log($"桥已开：解码 PCM → [{renders[ri].FriendlyName}]；第三方软件选麦克风「{captures[ci].FriendlyName}」即 R1 人声（增量≈15~50ms）");
+            if (SrxBridgePump.IsUuShellName(renders[ri].FriendlyName) ||
+                SrxBridgePump.IsUuShellName(captures[ci].FriendlyName))
+            {
+                Log("⚠ 桥目标=UU远程外壳（第三方软件装的虚拟声卡，依赖其客户端转发，非 PencilBox 设备）——" +
+                    "正式对外请安装 VB-Cable，装完重开桥会自动改选 CABLE Input");
+            }
         }
         catch (Exception ex)
         {
@@ -729,13 +791,4 @@ public partial class SoftReceiverViewModel : ObservableObject
         });
 
     private void Log(string line) => AppendLog(line);
-
-    /// <summary>MAC 输入规整（容错空格/小写）；空输入返回 null 走扫描。</summary>
-    private static string? NormalizeMac(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-        var text = raw.Trim().Replace(" ", "").Replace("-", ":").ToUpperInvariant();
-        return text.Length == 17 && text.Count(c => c == ':') == 5 ? text : raw.Trim();
-    }
 }

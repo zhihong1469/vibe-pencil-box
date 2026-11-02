@@ -88,6 +88,30 @@ public class SrxBridgePumpTests
     }
 
     [Fact]
+    public void SelectPair_UuShellAndCable_PrefersNonUu()
+    {
+        // 指挥官 11-02 裁决：UU 远程外壳不作桥目标；同场有 CABLE 时必须选 CABLE
+        var renders = new[] { "扬声器 (UU远程虚拟音频设备)", "CABLE Input (VB-Audio Virtual Cable)" };
+        var captures = new[] { "麦克风 (UU远程虚拟音频设备)", "CABLE Output (VB-Audio Virtual Cable)" };
+        var (ri, ci) = SrxBridgePump.SelectPair(renders, captures);
+        Assert.Equal(1, ri);
+        Assert.Equal(1, ci);
+    }
+
+    [Fact]
+    public void SelectPair_UuShellOnly_StillReturnsButFlagged()
+    {
+        // 只有 UU 外壳时仍返回（调用方警告，不静默挂错）；IsUuShellName 可判
+        var renders = new[] { "扬声器 (UU远程虚拟音频设备)", "Realtek Speakers" };
+        var captures = new[] { "麦克风 (UU远程虚拟音频设备)", "Realtek Mic" };
+        var (ri, ci) = SrxBridgePump.SelectPair(renders, captures);
+        Assert.Equal(0, ri);
+        Assert.Equal(0, ci);
+        Assert.True(SrxBridgePump.IsUuShellName(renders[ri]));
+        Assert.False(SrxBridgePump.IsUuShellName(renders[1]));
+    }
+
+    [Fact]
     public void ExtractMonoShort_Int16Stereo_TakesFirstChannel()
     {
         // 2 帧×2ch×2B：帧0=(1,-1) 帧1=(2,-2) → 取 ch0 = [1,2]

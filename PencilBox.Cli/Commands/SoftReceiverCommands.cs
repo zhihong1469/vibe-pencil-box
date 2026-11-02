@@ -503,6 +503,12 @@ public class SoftReceiverCommands
         using var captureDev = capture;
         ConsoleFormatter.Info($"[SRX-BRIDGE] 渲染端（泵入）[{render.FriendlyName}]；采集端（第三方录音口）" +
             $"{(capture != null ? $"[{capture.FriendlyName}]" : "（--device 指定模式，未配对，自测不可用）")}");
+        if (SrxBridgePump.IsUuShellName(render.FriendlyName) ||
+            (capture != null && SrxBridgePump.IsUuShellName(capture.FriendlyName)))
+        {
+            ConsoleFormatter.Warn("[SRX-BRIDGE] 桥目标=UU远程外壳（第三方软件装的虚拟声卡，依赖其客户端转发，非 PencilBox 设备）——" +
+                "正式对外请安装 VB-Cable（免费），装完重跑本命令会自动改选 CABLE Input");
+        }
 
         // 2a) 自测：chirp 进桥 → 同卡回采 → 对拍
         if (selftest)

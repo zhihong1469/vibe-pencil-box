@@ -171,8 +171,8 @@ public sealed class SrxBridgePump : IDisposable
     public static (int Render, int Capture) SelectPair(
         IReadOnlyList<string> renderNames, IReadOnlyList<string> captureNames)
     {
-        var renderHit = FindVirtual(renderNames);
-        var captureHit = FindVirtual(captureNames);
+        var renderHit = FindVirtualBest(renderNames);
+        var captureHit = FindVirtualBest(captureNames);
         if (renderHit < 0 || captureHit < 0)
             return (-1, -1);
         return NameCandidatesMatch(renderNames[renderHit], captureNames[captureHit])
@@ -180,15 +180,33 @@ public sealed class SrxBridgePump : IDisposable
             : (-1, -1);
     }
 
-    private static int FindVirtual(IReadOnlyList<string> names)
+    /// <summary>
+    /// 虚拟设备里挑最优：**非 UU 外壳优先**（UU远程=第三方软件装的壳，依赖其客户端转发，
+    /// 指挥官 11-02 裁决不作为 PencilBox 桥目标）；只有 UU 时仍返回（调用方给警告，不静默挂错）。
+    /// </summary>
+    private static int FindVirtualBest(IReadOnlyList<string> names)
     {
+        int nonUu = -1, firstUu = -1;
         for (var i = 0; i < names.Count; i++)
         {
-            if (IsVirtualDeviceName(names[i]))
-                return i;
+            if (!IsVirtualDeviceName(names[i]))
+                continue;
+            if (IsUuShellName(names[i]))
+            {
+                if (firstUu < 0)
+                    firstUu = i;
+            }
+            else if (nonUu < 0)
+            {
+                nonUu = i;
+            }
         }
-        return -1;
+        return nonUu >= 0 ? nonUu : firstUu;
     }
+
+    /// <summary>UU 远程外壳判据（纯函数，可单测）：名字含 "uu"（UU远程虚拟音频设备）。</summary>
+    public static bool IsUuShellName(string name) =>
+        name.Contains("uu", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>两设备名候选词根有交集即视为同族（纯函数，可单测）。</summary>
     public static bool NameCandidatesMatch(string a, string b)
