@@ -44,11 +44,16 @@ R1PBleAudioDriver/
 > `driver/*.c` 当前为 **v0.1 结构骨架**：类型/接口/流程与 DDI 调用点齐全、注释到行，
 > 但**尚未经过编译**——构建前提见下节，编译迭代从 M1 开始。勿在 M1 前当作可工作代码引用。
 
-## 四、构建前提（本机现状：未装）
+## 四、构建前提（本机 2026-11-02 实测）
 
-1. **Visual Studio 2022**（Community 免费版即可）+ 勾选 "Spectre 缓解库" 可不勾
-2. **Windows Driver Kit (WDK) 10, 26100 系**（与 VS 版本配套；微软官网免费下载，约 2~3GB）
-3. 装完后：克隆 Windows-driver-samples，拿 sysvad 的 `.vcxproj` 工程属性做模板建工程（M1）
+| 项 | 状态 |
+|---|---|
+| Visual Studio | ✅ Community **2026**（18.7.11911.148）@ `C:\IDE\VS\Community` |
+| MSBuild/Roslyn | ✅ 在位（`C:\IDE\VS\Community\MSBuild\Current\Bin\MSBuild.exe`） |
+| VC++ 工具集（C++ 桌面工作负载） | ❌ 未装（无 cl.exe）——**M1 缺口①** |
+| Windows Driver Kit（WDK） | ❌ 未装——**M1 缺口②** |
+
+→ 安装步骤、装后验证、sysvad 工程搭建与迭代守则全在 **[docs/M1-build-checklist.md](docs/M1-build-checklist.md)**（接手者先读它）。
 
 ## 五、里程碑
 
