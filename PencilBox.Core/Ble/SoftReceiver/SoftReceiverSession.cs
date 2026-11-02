@@ -55,6 +55,10 @@ public sealed class SoftReceiverStats
     public long KeyActions { get; internal set; }
     /// <summary>鼠标槽 buttons 变化沿次数（按下+释放各计一条）。</summary>
     public long MouseButtonEdges { get; internal set; }
+    /// <summary>鼠标槽有效帧数（bit3=1 的 DATA；空鼠诊断第一指标：0=笔端侧没发）。</summary>
+    public long MouseFrames { get; internal set; }
+    /// <summary>鼠标槽位移非零帧数（x/y 任一非零；0=槽在但无位移=笔端移动计算没出数）。</summary>
+    public long MouseMoveFrames { get; internal set; }
 
     /// <summary>人类可读汇总行（CLI 收尾打印）。</summary>
     public string Summary() =>
@@ -62,7 +66,7 @@ public sealed class SoftReceiverStats
         $"CRC错={CrcErrors} 同步错={SyncErrors} 解析错={ParseErrors} seq跳={SeqJumps}(缺{SeqGapFrames}帧) " +
         $"电量={LastBattery?.ToString() ?? "—"} 充电={LastChargeState?.ToString() ?? "—"} " +
         $"键={(KeyboardMode ? "有" : "无")}/鼠={(MouseMode ? "有" : "无")}" +
-        $" 键动作={KeyActions} 鼠键沿={MouseButtonEdges}";
+        $" 键动作={KeyActions} 鼠键沿={MouseButtonEdges} 鼠帧={MouseFrames}/位移={MouseMoveFrames}";
 }
 
 /// <summary>
@@ -322,7 +326,10 @@ public sealed class SoftReceiverSession
         if (frame.MouseSlotValid)
         {
             Stats.MouseMode = true;
+            Stats.MouseFrames++;
             var slot = frame.MouseSlot.Span;
+            if (slot[1] != 0 || slot[2] != 0)
+                Stats.MouseMoveFrames++;
             // 逐帧事件（移动/滚轮数据源；零位移帧也报——注入侧自行滤零）
             MouseFrame?.Invoke(this, new SoftReceiverMouseFrame(
                 slot[0], (sbyte)slot[1], (sbyte)slot[2], (sbyte)slot[3], ts));

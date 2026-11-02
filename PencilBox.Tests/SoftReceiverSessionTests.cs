@@ -287,6 +287,8 @@ public class SoftReceiverSessionTests
         Assert.True(collector.MouseButtons[1].Right);
         Assert.Equal(2, session.Stats.MouseButtonEdges);
         Assert.True(session.Stats.MouseMode);
+        Assert.Equal(4, session.Stats.MouseFrames);      // 4 条鼠标槽帧
+        Assert.Equal(0, session.Stats.MouseMoveFrames);  // 全零位移
 
         // 逐帧事件：4 条鼠标槽帧（含零位移帧）各报一条；x/y/wheel s8 解读
         Assert.Equal(4, collector.MouseFrames.Count);

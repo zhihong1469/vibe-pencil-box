@@ -33,6 +33,7 @@ public class SoftReceiverCommands
     private readonly IBleCentral _central;
     private readonly IBleScanner _scanner;
     private readonly IAudioPassthrough _passthrough;
+    private static long _mouseSampleCount;   // --actions 鼠标帧采样计数（诊断用，跨会话累加无害）
 
     public SoftReceiverCommands(IBleCentral central, IBleScanner scanner, IAudioPassthrough passthrough)
     {
@@ -172,6 +173,15 @@ public class SoftReceiverCommands
         {
             try
             {
+                // 采样诊断（空鼠没生效判别用）：首 8 帧逐条露原始值——
+                // 8 帧全零 x/y=笔端移动计算没出数；一帧都没有=笔端空鼠没开；有值=看注入
+                var idx = Interlocked.Increment(ref _mouseSampleCount);
+                if (idx <= 8)
+                {
+                    ConsoleFormatter.Info(
+                        $"[SRX] 鼠标帧采样#{idx} buttons=0x{m.Buttons:X2} x={m.X} y={m.Y} wheel={m.Wheel}" +
+                        (idx == 8 ? "（采样完，后续静默；汇总见收尾 鼠帧/位移）" : ""));
+                }
                 if (m.X != 0 || m.Y != 0)
                     injector.MouseMoveRel(m.X, m.Y);
                 if (m.Wheel != 0)
