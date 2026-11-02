@@ -371,8 +371,20 @@ public sealed class OtaToolEngine
             new(sn, outcome, before, detail, sw.Elapsed);
 
         Phase("连接设备");
-        if (!await OpenChannelAsync(device))
-            return Make(OtaDeviceOutcome.Fail, null, "连接 USB 命令通道失败");
+        // 瞬时打开竞争兜底（2026-11-02 真机：5 台并发 4 槽，1 台首开 0s 失败即判死且无重试）：
+        // 3 次 ×500ms 重连，WARN 可见；仍不成才失败并给现场动作
+        var opened = false;
+        for (var attempt = 1; attempt <= 3 && !opened; attempt++)
+        {
+            if (attempt > 1)
+            {
+                Say("warn", $"SN={Show(sn)} 连接 USB 命令通道失败，第 {attempt - 1} 次重连…");
+                await SleepAsync(500, cancellationToken);
+            }
+            opened = await OpenChannelAsync(device);
+        }
+        if (!opened)
+            return Make(OtaDeviceOutcome.Fail, null, "连接 USB 命令通道失败（重连 2 次未成）——拔下重插该台后单独重刷");
 
         Phase(penTrack ? "读键盘当前版本" : "读当前版本");
         var (before, err) = await ReadVersionOpenAsync(target, cancellationToken);
@@ -397,10 +409,19 @@ public sealed class OtaToolEngine
         // OTA 会话（与主线 CLI 同一 FSM：R1/R2/终态窗/终态丢失判定零漂移）
         Phase("传输固件");
         var fsm = new CompanyOtaFsm(_codec, _channel!, _clock, _config);
+        var lastMilestone = -1;
         fsm.Progress += (_, p) =>
         {
             var percent = p.DevicePercent >= 0 ? p.DevicePercent : p.Percent;
             _progress?.Report(new OtaToolUpdate.Percent(percent, p.BlocksDone, p.TotalBlocks));
+            // 进度里程碑进日志（2026-11-02 指挥官：基站升级 ~86s 日志区零输出像卡死；行状态格
+            // 有跳动但日志才是现场主要观测面）：25/50/75 各报一次，100 由终态行收口不重复
+            var milestone = percent / 25;
+            if (milestone > lastMilestone && milestone is >= 1 and <= 3)
+            {
+                lastMilestone = milestone;
+                Say("info", $"SN={Show(sn)} 传输 {percent}%（{p.BlocksDone}/{p.TotalBlocks} 块）");
+            }
         };
         fsm.Warning += (_, w) =>
         {
