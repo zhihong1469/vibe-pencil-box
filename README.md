@@ -2,6 +2,7 @@
 
 > 为「语音翻页笔」系列产品打造的 PC 上位机：USB HID/EP4 命令通道、BLE 扫描与绑定、串口日志统一时间轴、OTA 在线升级、DSP 信号分析、音频采集与扩音直通。
 > 技术栈：**C# · .NET 10 · WPF · HidSharp · NAudio · WinRT BLE · Python DSP**。
+> 第三方组件/依赖来源与许可证登记：[THIRD_PARTY.md](THIRD_PARTY.md)。
 
 ***
 
