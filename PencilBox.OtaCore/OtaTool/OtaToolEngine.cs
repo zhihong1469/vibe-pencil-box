@@ -405,9 +405,12 @@ public sealed class OtaToolEngine
                 $"验证性中断（{abortAfterBlock} 块后退出）：{result.Message}");
         }
 
-        // Unconfirmed（满块后设备重受理 ⇒ FSM 发 DCMD=00 停止，不自动重传）：结果未知，
-        // 复核≠重传——与成功路径同走主动探测读版本对拍收口，读到达标版本即成功
-        if (!result.IsTerminalSuccess && result.Outcome != OtaOutcome.Unconfirmed)
+        // Unconfirmed（满块后设备重受理 ⇒ FSM 发 DCMD=00 停止，不自动重传）：结果未知；
+        // Failed 但满块（2026-11-02 键盘真机三台并行：满块后终态丢失，R2 开始帧超时×3 判 Failed，
+        // 稍后实读三台均已到目标版本）——同为"数据已全发、激活与否未知"，不得直接判死。
+        // 两者复核≠重传——与成功路径同走主动探测读版本对拍收口，读到达标版本即成功；
+        // 未满块的失败（中途断/真不受理）维持直接失败，不烧 2 分钟探测窗。
+        if (!result.ShouldRecheckAfterSession)
         {
             CloseChannel();
             return Make(OtaDeviceOutcome.Fail, beforeText, result.Message);
@@ -481,7 +484,9 @@ public sealed class OtaToolEngine
 
         var sessionNote = result.Outcome == OtaOutcome.Unconfirmed
             ? "升级会话结果未知（已停止不自动重传）"
-            : "升级会话成功";
+            : result.IsTerminalSuccess
+                ? "升级会话成功"
+                : $"升级会话终态未达（满块 {result.BlocksDone}/{result.TotalBlocks}，已探测复核 {probes} 次仍未见目标版本）";
         if (cancellationToken.IsCancellationRequested)
         {
             return Make(OtaDeviceOutcome.Unconfirmed, beforeText,

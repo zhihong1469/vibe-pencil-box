@@ -93,6 +93,17 @@ public sealed record OtaResult(
     bool TerminalLost = false)
 {
     public bool IsTerminalSuccess => Outcome is OtaOutcome.Succeeded or OtaOutcome.Skipped;
+
+    /// <summary>
+    /// 会话后是否进入"主动探测读版本对拍"收口（复核≠重传）：
+    /// 成功终态走常规复核；Unconfirmed（满块后重受理，结果未知）与满块后的 Failed
+    /// （2026-11-02 键盘真机：满块后终态丢失，R2 开始帧超时判 Failed，实读已是目标版本）
+    /// 同为"数据已全发、激活与否未知"，不得直接判死；未满块的失败（中途断/真不受理）直接失败。
+    /// </summary>
+    public bool ShouldRecheckAfterSession =>
+        IsTerminalSuccess
+        || Outcome == OtaOutcome.Unconfirmed
+        || (Outcome == OtaOutcome.Failed && TotalBlocks > 0 && BlocksDone >= TotalBlocks);
 }
 
 public enum OtaOutcome
