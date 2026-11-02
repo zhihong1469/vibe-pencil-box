@@ -30,6 +30,7 @@ internal sealed class MainForm : Form
     private readonly System.Diagnostics.Stopwatch _pairWatch = new();
     private System.Windows.Forms.Timer? _pairTimer;
     private ListViewItem? _pairItem;
+    private CancellationTokenSource? _pairCts;   // 配对等待的取消源（与升级 _cts 互不干扰，取消绝对优先）
     private int _pairColIndex = -1;
     private readonly Button _upgradeAllBtn;
     private readonly Button _upgradeCheckedBtn;
@@ -133,6 +134,14 @@ internal sealed class MainForm : Form
         _cancelBtn = new Button { Text = "取消", AutoSize = true, Enabled = false };
         _cancelBtn.Click += (_, _) =>
         {
+            // 取消绝对最高优先级（指挥官 11-02）：一次点击收一条——先撤配对等待（只撤 PC 等待，
+            // 基站侧 60s 配对窗照走，指令已发随他处理），再点才撤升级
+            if (_pairItem != null && _pairCts != null)
+            {
+                LogLine("已取消配对等待——基站侧配对窗（60s）照走，不影响其他操作");
+                _pairCts.Cancel();
+                return;
+            }
             LogLine("已请求取消（FSM 会优雅退出：发 DCMD=00 后收敛）…");
             _cts?.Cancel();
         };
@@ -234,7 +243,7 @@ internal sealed class MainForm : Form
                 return;
             if (_busy)
             {
-                LogLine("配对：当前有操作进行中（一次只配一台）——等它结束再点行内「配对」");
+                LogLine("配对：升级进行中——升级结束后再点行内「配对」");
                 return;
             }
             _ = PairRowAsync(hit.Item);
@@ -262,9 +271,13 @@ internal sealed class MainForm : Form
 
         FormClosing += (_, e) =>
         {
-            if (_busy && MessageBox.Show(this, "升级正在进行，确定退出？", "确认",
+            var pairing = _pairItem != null;
+            if ((_busy || pairing) && MessageBox.Show(this,
+                    _busy ? "升级正在进行，确定退出？" : "配对等待中，确定退出？（基站侧配对窗不受影响）", "确认",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No)
                 e.Cancel = true;
+            if (!e.Cancel)
+                _pairCts?.Cancel();   // 退出时撤配对等待，别让后台任务摸已关的窗
             FlushLog();
         };
 
@@ -301,6 +314,11 @@ internal sealed class MainForm : Form
 
     private async Task RefreshDevicesAsync()
     {
+        // 刷新会重建列表——进行中的配对等待先撤（基站侧配对窗照走；指挥官 11-02：取消绝对优先）
+        if (_pairItem != null && _pairCts != null)
+            LogLine("刷新设备：进行中的配对等待已取消（基站侧配对窗照走）");
+        _pairCts?.Cancel();
+
         SetBusy(true);
         _phaseLabel.Text = "扫描设备…";
         try
@@ -383,6 +401,11 @@ internal sealed class MainForm : Form
         {
             foreach (ListViewItem item in _list.Items)
             {
+                if (_pairItem != null && ReferenceEquals(item, _pairItem))
+                {
+                    Cell(item, "hash").Text = "跳过（配对中）";   // 该台通道被配对占用，不抢
+                    continue;
+                }
                 var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
                 Cell(item, "hash").Text = "读取中…";
                 try
@@ -453,48 +476,60 @@ internal sealed class MainForm : Form
     /// <summary>
     /// 手动逐台配对（0x52，指挥官 10-30 定版：行内按钮发起）：对指定行发指令 → 人工让键盘进配对
     /// （上电按住 K1 约 2 秒）→ 等结果帧（最长 60s，状态列秒表）→ 行状态显示绑定 MAC+名称。
-    /// 一次只配一台（SetBusy 全局串行，其余行按钮同时转禁用态）。
+    /// 一次只配一台；等待在后台进行、不锁界面（指挥官 11-02：指令已发基站就随他处理，升级等
+    /// 操作照常可用；「取消」随时撤 PC 等待，基站侧视窗不受影响）。独立引擎实例=通道只独占
+    /// 配对这台，不挡其他台的升级/读Hash。
     /// </summary>
     private async Task PairRowAsync(ListViewItem item)
     {
+        if (_pairItem != null)
+        {
+            LogLine("配对：一次只配一台——当前配对进行中，等它出结果或点「取消」再配下一台");
+            return;
+        }
         var dev = ((HidDeviceGroup)item.Tag).CommandChannel;
 
-        SetBusy(true);
         _pairItem = item;
+        _pairCts = new CancellationTokenSource();
         _pairWatch.Restart();
         _pairTimer!.Start();
-        _list.Invalidate();   // 该行按钮转「配对中…」
+        UpdateCancelBtn();
+        _list.Invalidate();   // 该行按钮转「配对中…」（其余行仍可用）
         Cell(item, "status").Text = "配对中…请让键盘进配对（上电按住 K1 约 2 秒）";
-        _phaseLabel.Text = $"配对中：位置 {dev.LocationToken}";
-        LogLine($"发 0x52 进配对 ← 位置 {dev.LocationToken}——请人工让目标键盘进配对（上电按住 K1 约 2 秒，LED 三色序列=配对视窗已开，60s）…");
+        LogLine($"发 0x52 进配对 ← 位置 {dev.LocationToken}——请人工让目标键盘进配对（上电按住 K1 约 2 秒，LED 三色序列=配对视窗已开，60s）。等待期间其他操作照常可用；「取消」只撤本机等待，基站侧视窗照走");
+        var engine = new OtaToolEngine(_ui);   // 独立实例：日志仍走同一 UI 通道，通道仅占配对这台
         try
         {
-            var (ok, mac, name, msg) = await _engine.PairEnterAsync(dev);
+            var (ok, mac, name, msg) = await engine.PairEnterAsync(dev, _pairCts.Token);
             if (ok)
             {
                 Cell(item, "status").Text = $"已绑定 MAC {mac}    名称 \"{name}\"";
                 LogLine($"配对成功（位置 {dev.LocationToken}）：MAC {mac}    名称 \"{name}\"");
-                _phaseLabel.Text = "配对成功";
             }
             else
             {
                 Cell(item, "status").Text = "配对失败";
                 LogLine($"{msg}（位置 {dev.LocationToken}）");   // FSM 消息已带"配对失败/超时"语义，勿再加前缀
-                _phaseLabel.Text = "配对失败（见日志）";
             }
+        }
+        catch (OperationCanceledException)
+        {
+            Cell(item, "status").Text = "配对已取消（基站侧视窗照走）";
+            LogLine($"配对等待已取消（位置 {dev.LocationToken}）——基站侧配对窗不受影响；若期间键盘进了配对，以基站实际结果为准");
         }
         catch (Exception ex)
         {
             Cell(item, "status").Text = "配对异常";
             LogLine($"配对异常（位置 {dev.LocationToken}）：{ex.Message}");
-            _phaseLabel.Text = "配对异常（见日志）";
         }
         finally
         {
             _pairTimer!.Stop();
             _pairWatch.Reset();
             _pairItem = null;
-            SetBusy(false);
+            _pairCts!.Dispose();
+            _pairCts = null;
+            UpdateCancelBtn();
         }
     }
 
@@ -564,6 +599,26 @@ internal sealed class MainForm : Form
         if (queue.Count == 0)
         {
             MessageBox.Show(this, "请先勾选要升级的设备（或点\"升级全部\"）。", "提示",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        // 配对后台化（指挥官 11-02）：升级可与配对并行，唯独正在配对的这一台通道被占——跳过不排
+        if (_pairItem is { } pairRow)
+        {
+            var pairLoc = ((HidDeviceGroup)pairRow.Tag).CommandChannel.LocationToken;
+            var pairBlocked = queue.Where(it =>
+                ((HidDeviceGroup)it.Tag).CommandChannel.LocationToken == pairLoc).ToList();
+            if (pairBlocked.Count > 0)
+            {
+                queue = queue.Except(pairBlocked).ToList();
+                LogLine($"{pairBlocked.Count} 台跳过升级：正在配对（{string.Join("、", pairBlocked.Select(it => it.SubItems["sn"].Text))}）——等配对出结果或点「取消」后再升它");
+            }
+        }
+
+        if (queue.Count == 0)
+        {
+            MessageBox.Show(this, "所选设备都在配对等待中——等配对出结果或点「取消」后再升级。", "提示",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -792,12 +847,15 @@ internal sealed class MainForm : Form
         _repairBtn.Enabled = !busy;
         _upgradeAllBtn.Enabled = !busy;
         _upgradeCheckedBtn.Enabled = !busy;
-        _cancelBtn.Enabled = busy;
         _concurrency.Enabled = !busy;
         _targetBs.Enabled = !busy;
         _targetPen.Enabled = !busy;
+        UpdateCancelBtn();
         _list.Invalidate();   // 行内「配对」按钮列随忙闲重画（可用/禁用态）
     }
+
+    /// <summary>「取消」绝对优先（指挥官 11-02）：升级中或配对等待中都必须可点。</summary>
+    private void UpdateCancelBtn() => _cancelBtn.Enabled = _busy || _pairItem != null;
 
     private void SetItemStatus(ListViewItem item, string text) => Cell(item, "status").Text = text;
 
