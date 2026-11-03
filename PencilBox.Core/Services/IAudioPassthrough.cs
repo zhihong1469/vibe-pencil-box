@@ -37,6 +37,9 @@ public interface IAudioPassthrough : IDisposable
     /// <summary>最近一次统计快照（停止后保留终值）</summary>
     AudioPassthroughStats GetStats();
 
+    /// <summary>软件增益（0~<see cref="PassthroughStartOptions.MaxVolume"/>，1=原样；&gt;1 由 SoftLimiter 防破音）；运行中即调即生效</summary>
+    void SetVolume(float volume);
+
     /// <summary>运行中切换回声消除（AEC）；未运行时仅记忆，Start 时生效</summary>
     void SetAecEnabled(bool enabled);
 

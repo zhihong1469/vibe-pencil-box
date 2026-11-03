@@ -527,6 +527,10 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         }
     }
 
+    /// <summary>软件增益运行中即调即生效（渲染拉取线程每次读 _volume；float 写原子，限制器兜破音）。</summary>
+    public void SetVolume(float volume)
+        => _volume = Math.Clamp(volume, 0f, PassthroughStartOptions.MaxVolume);
+
     public void SetAnsEnabled(bool enabled)
     {
         Interlocked.Exchange(ref _ansOn, enabled ? 1 : 0);

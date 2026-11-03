@@ -108,6 +108,24 @@ public partial class SoftReceiverViewModel : ObservableObject
         return _renderInfos.FirstOrDefault(d => d.FriendlyName == SelectedSpeakerOutput)?.DeviceId;
     }
 
+    // ---- 软件增益（11-03 指挥官需求：原始人声过轻，系统音量拉满仍听不清）----
+    /// <summary>增益滑条 0~100（对数刻度，同扩音页口径）：实际增益 = MaxVolume^(位置/100)；默认 50≈4.9x。</summary>
+    [ObservableProperty]
+    private double _gainSlider = 50f;
+
+    /// <summary>实际软件增益 1x~24x；&gt;1x 由 SoftLimiter 天花板防破音。</summary>
+    public double SoftwareGain => Math.Pow(PassthroughStartOptions.MaxVolume, GainSlider / 100.0);
+
+    public string GainText => $"{SoftwareGain:F1}x";
+
+    partial void OnGainSliderChanged(double value)
+    {
+        OnPropertyChanged(nameof(SoftwareGain));
+        OnPropertyChanged(nameof(GainText));
+        if (IsSpeakerOn)
+            _passthrough.SetVolume((float)SoftwareGain);   // 扩音运行中即调即生效
+    }
+
     // ---- 连接状态卡 ----
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
@@ -439,7 +457,7 @@ public partial class SoftReceiverViewModel : ObservableObject
                 ExternalSource = true,
                 RenderDeviceId = ResolveSpeakerRenderId(),   // 8i：输出可选，null=系统默认
                 RenderLatencyMs = 40,
-                Volume = 1.0f,
+                Volume = (float)SoftwareGain,   // 11-03：软件增益滑条（默认 50≈4.9x，运行中可即调）
                 EnableAec = true,
                 EnableAns = true,
                 EnableAfc = false,
@@ -449,7 +467,7 @@ public partial class SoftReceiverViewModel : ObservableObject
             SpeakerText = "开（外源泵 16k）";
             _speakerClock.Restart();
             EnsureStatsTimer();
-            Log("扩音泵出已开（16k 外源泵→处理链→扬声器）");
+            Log($"扩音泵出已开（16k 外源泵→处理链→扬声器，软件增益 {SoftwareGain:F1}x，滑条可即调）");
         }
         catch (Exception ex)
         {

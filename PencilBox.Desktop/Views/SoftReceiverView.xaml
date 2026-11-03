@@ -60,6 +60,13 @@
                         <ComboBox ItemsSource="{Binding SpeakerOutputOptions}" SelectedItem="{Binding SelectedSpeakerOutput}"
                                   Width="180" Margin="0,0,8,0" VerticalAlignment="Center"
                                   ToolTip="解码 PCM 输出到哪台播放设备：默认=系统默认扬声器；下拉=本机全部活动播放设备（8i 路由可选）"/>
+                        <!-- 11-03：软件增益滑条（对数刻度同扩音页），原始人声过轻时上调，运行中即调即生效 -->
+                        <TextBlock Text="增益：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
+                        <Slider Minimum="0" Maximum="100" Value="{Binding GainSlider}" MinWidth="120" Margin="0,0,6,0"
+                                VerticalAlignment="Center"
+                                ToolTip="软件增益（对数刻度 1x~24x，同扩音页）：原始人声过轻就上调；&gt;1x 由限制器防破音；扩音开着时拖动即调即生效"/>
+                        <TextBlock Text="{Binding GainText}" VerticalAlignment="Center" MinWidth="40" Margin="0,0,8,0"
+                                   Foreground="#0B5345" FontWeight="SemiBold"/>
                         <!-- 一键实时扩音（第一性需求：键盘麦人声→PC 扬声器）；链路=解码 PCM→引擎外源泵→扬声器 -->
                         <Button Content="{Binding SpeakerButtonText}" Command="{Binding ToggleSpeakerCommand}"
                                 Style="{StaticResource ActionButton}"
