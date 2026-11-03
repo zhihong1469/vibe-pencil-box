@@ -148,16 +148,32 @@ public sealed class SrxBridgePump : IDisposable
         public int Read(float[] buffer, int offset, int count) => _pump.ReadFromRing(buffer, offset, count);
     }
 
+    /// <summary>非阻塞收尾：快照置空（喂流照旧安全，WritePcm 只碰环），Stop/Dispose 踢后台——
+    /// WasapiOut 事件同步模式下 Stop 内部 Join 拉取线程，管道型虚拟设备无消费时事件不发，
+    /// 同步等待=调用线程永久卡死（11-03 扩音页死机同族实证）。</summary>
     public void Dispose()
     {
-        if (_player != null)
+        WasapiOut? player;
+        MMDevice? renderDevice;
+        lock (_lock)
         {
-            try { _player.Stop(); } catch { /* 收尾容错 */ }
-            _player.Dispose();
-            _player = null;
+            player = _player; _player = null;
+            renderDevice = _renderDevice; _renderDevice = null;
         }
-        _renderDevice?.Dispose();
-        _renderDevice = null;
+        if (player == null && renderDevice == null) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (player != null)
+                {
+                    try { player.Stop(); } catch { /* 收尾容错 */ }
+                    player.Dispose();
+                }
+                renderDevice?.Dispose();
+            }
+            catch { /* 后台收尾绝不抛 */ }
+        });
     }
 
     // ---- 虚拟声卡配对发现（纯名字算法，单测覆盖；MMDevice 枚举由调用方注入名字表） ----

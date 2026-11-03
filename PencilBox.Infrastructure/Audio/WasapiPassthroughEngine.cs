@@ -420,12 +420,20 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         ApplyFilterChain();
     }
 
-    private void DetachAndDispose(WasapiCapture capture)
+    /// <summary>
+    /// 启动失败候选的收尾（非阻塞）：事件先解挂，Stop/Dispose 踢后台。
+    /// NAudio StopRecording 内部 Join 采集线程；候选若已 StartRecording，其线程可能睡在
+    /// 设备事件 WaitOne(∞)（管道型虚拟设备无进料不发事件，11-03 真机死机实证）——同步收尾=UI 卡死。
+    /// </summary>
+    private void DetachAndDispose(WasapiCapture candidate)
     {
-        capture.DataAvailable -= OnCaptureDataAvailable;
-        capture.RecordingStopped -= OnCaptureStopped;
-        try { capture.StopRecording(); } catch { /* 尚未成功启动，忽略 */ }
-        capture.Dispose();
+        candidate.DataAvailable -= OnCaptureDataAvailable;
+        candidate.RecordingStopped -= OnCaptureStopped;
+        _ = Task.Run(() =>
+        {
+            try { candidate.StopRecording(); } catch { /* 尚未成功启动，忽略 */ }
+            try { candidate.Dispose(); } catch { /* 已停则忽略 */ }
+        });
     }
 
     public Task StopAsync(CancellationToken cancellationToken = default)
@@ -446,44 +454,66 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 停止收尾（非阻塞）：门内一次性快照全部句柄并同步复位字段（新 Start 立刻安全），
+    /// 阻塞段（Stop/Dispose 内部 Join 事件线程）整体踢后台。UI 线程零等待——
+    /// 管道型虚拟设备（CABLE Output）无进料不发事件，采集线程睡在 WaitOne(∞)，
+    /// 同步 Join=永久卡死（11-03 真机死机实证；与串口同步关句柄坑同族：阻塞收尾必须有后台闸门）。
+    /// </summary>
     private void CleanupStreams()
     {
         WasapiCapture? capture;
         WasapiOut? output;
+        WasapiOut? bridgeOut;
+        MMDevice? captureDevice;
+        MMDevice? renderDevice;
         lock (_gate)
         {
             capture = _capture; _capture = null;
             output = _output; _output = null;
+            bridgeOut = _bridgeOut; _bridgeOut = null;
+            _bridgeRing = null;
+            _bridgeName = string.Empty;
+            _source = null;
+            _ring = null;
+            _converter = null;
+            Volatile.Write(ref _chainReady, 0);
+            captureDevice = _captureDevice; _captureDevice = null;
+            renderDevice = _renderDevice; _renderDevice = null;
         }
 
-        if (capture != null)
-        {
-            capture.DataAvailable -= OnCaptureDataAvailable;
-            capture.RecordingStopped -= OnCaptureStopped;
-            try { capture.StopRecording(); } catch (Exception ex) { _logger.LogWarning(ex, "停止采集异常"); }
-        }
-        if (output != null)
-        {
-            try { output.Stop(); } catch (Exception ex) { _logger.LogWarning(ex, "停止渲染异常"); }
-        }
+        if (capture == null && output == null && bridgeOut == null) return;
 
-        capture?.Dispose();
-        output?.Dispose();
-        WasapiOut? bridgeOut;
-        lock (_gate) { bridgeOut = _bridgeOut; _bridgeOut = null; }
-        if (bridgeOut != null)
+        _ = Task.Run(() =>
         {
-            try { bridgeOut.Stop(); } catch (Exception ex) { _logger.LogWarning(ex, "停止桥接渲染异常"); }
-            bridgeOut.Dispose();
-        }
-        _bridgeRing = null;
-        _bridgeName = string.Empty;
-        _source = null;
-        _ring = null;
-        _converter = null;
-        Volatile.Write(ref _chainReady, 0);
-        _captureDevice?.Dispose(); _captureDevice = null;
-        _renderDevice?.Dispose(); _renderDevice = null;
+            try
+            {
+                if (capture != null)
+                {
+                    capture.DataAvailable -= OnCaptureDataAvailable;
+                    capture.RecordingStopped -= OnCaptureStopped;
+                    try { capture.StopRecording(); } catch (Exception ex) { _logger.LogWarning(ex, "停止采集异常"); }
+                }
+                if (output != null)
+                {
+                    try { output.Stop(); } catch (Exception ex) { _logger.LogWarning(ex, "停止渲染异常"); }
+                }
+                capture?.Dispose();
+                output?.Dispose();
+                if (bridgeOut != null)
+                {
+                    try { bridgeOut.Stop(); } catch (Exception ex) { _logger.LogWarning(ex, "停止桥接渲染异常"); }
+                    bridgeOut.Dispose();
+                }
+                captureDevice?.Dispose();
+                renderDevice?.Dispose();
+                _logger.LogInformation("扩音停止后台清理完成");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "扩音停止后台清理异常");
+            }
+        });
     }
 
     public void SetAecEnabled(bool enabled)
