@@ -17,6 +17,9 @@ Windows 上"一个音频设备"只能由**内核驱动**创造——应用层进
   兼容声明 48k/stereo 由后续迭代决定）。
 - **数据通道：IOCTL 环形缓冲**——PencilBox 用户态把 PCM 块 `DeviceIoControl` 写进驱动的内核环形缓冲，
   miniport 流从环里取数进 WaveRT 缓冲。接口契约=`driver/common.h`（两侧唯一对齐点）。
+- **多应用并发取流的定案**：Windows 音频引擎在**共享模式**下是驱动的唯一 capture 消费者，
+  各应用拿到的拷贝由引擎扇出——内核环保持 **SPSC 单写者（IOCTL）单读者（miniport）**即可，
+  **勿**为"多应用同时录"把环改成多读者（引擎层已解决）；独占模式抢流属例外，M2 后实测再议。
 
 ```
 PencilBox 软件接收器 → 解码 PCM → [用户态写入端 app/] --IOCTL--> [内核环形缓冲]
