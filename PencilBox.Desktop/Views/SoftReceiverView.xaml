@@ -52,25 +52,33 @@
                         <TextBlock Text="档位：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
                         <TextBlock Text="{Binding ModeText}" VerticalAlignment="Center"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
                         <TextBlock Text="扩音泵出：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
                         <TextBlock Text="{Binding SpeakerText}" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="#0B5345" FontWeight="SemiBold"/>
+                        <!-- 8i：解码 PCM 输出目标可选——不选=系统默认扬声器，选了=指定播放设备 -->
+                        <ComboBox ItemsSource="{Binding SpeakerOutputOptions}" SelectedItem="{Binding SelectedSpeakerOutput}"
+                                  Width="180" Margin="0,0,8,0" VerticalAlignment="Center"
+                                  ToolTip="解码 PCM 输出到哪台播放设备：默认=系统默认扬声器；下拉=本机全部活动播放设备（8i 路由可选）"/>
                         <!-- 一键实时扩音（第一性需求：键盘麦人声→PC 扬声器）；链路=解码 PCM→引擎外源泵→扬声器 -->
                         <Button Content="{Binding SpeakerButtonText}" Command="{Binding ToggleSpeakerCommand}"
                                 Style="{StaticResource ActionButton}"
                                 IsEnabled="{Binding CanToggleSpeaker}"
-                                ToolTip="键盘麦克风人声实时扩音到本机扬声器（解码 PCM→扩音引擎外源泵→扬声器）；CLI 等价=srx amp"/>
+                                ToolTip="键盘麦克风人声实时扩音（解码 PCM→扩音引擎外源泵→上方所选输出设备）；CLI 等价=srx amp"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
                         <TextBlock Text="虚拟麦克风：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
                         <TextBlock Text="{Binding BridgeDeviceText}" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="#0B5345" FontWeight="SemiBold"
                                    ToolTip="开桥后第三方软件选此采集端录音即 R1 人声"/>
+                        <!-- 8i：桥目标可选——不选=自动配对（非 UU 优先），选了=泵进指定播放设备 -->
+                        <ComboBox ItemsSource="{Binding BridgeTargetOptions}" SelectedItem="{Binding SelectedBridgeTarget}"
+                                  Width="170" Margin="0,0,8,0" VerticalAlignment="Center"
+                                  ToolTip="桥目标=解码 PCM 泵进的播放端：默认=自动配对（非 UU 优先）；手动选定后第三方软件从其同族采集端拿麦克风（8i 路由可选）"/>
                         <Button Content="{Binding BridgeText}" Command="{Binding ToggleBridgeCommand}"
                                 Style="{StaticResource ActionButton}"
                                 IsEnabled="{Binding CanToggleBridge}"
-                                ToolTip="开桥=解码 PCM 泵进虚拟声卡渲染端，第三方软件从同卡采集端当麦克风录音（R1PBleAudio 桥式形态）；需先装 VB-Cable；CLI 等价=srx bridge"/>
+                                ToolTip="开桥=解码 PCM 泵进上方所选桥目标播放端，第三方软件从其同卡采集端当麦克风录音；需先装 VB-Cable；CLI 等价=srx bridge"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock Text="录制 WAV：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>

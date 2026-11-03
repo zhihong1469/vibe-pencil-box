@@ -52,6 +52,60 @@ public partial class SoftReceiverViewModel : ObservableObject
         _penBinding = penBinding;
         _passthrough = passthrough;
         _ = LoadKnownPensAsync();   // 启动即载历史目录（仪表盘同款：BLE 扫描+串口 0x51 两源一份存储）
+        _ = RefreshAudioTargetsAsync();   // 启动刷新输出/桥目标候选（PCM 路由可选化 8i）
+    }
+
+    // ---- PCM 路由可选化（8i）：解码 PCM 去向=扬声器输出可选、桥目标可选，不写死 ----
+    private const string AutoSpeakerOutput = "（系统默认扬声器）";
+    private const string AutoBridgeTarget = "（自动配对）";
+    private List<AudioDeviceInfo> _renderInfos = [];
+    private List<string> _bridgeRenderNames = [];
+
+    /// <summary>扩音输出候选（Auto=系统默认引擎自选；其余=GetRenderDevicesAsync 实枚举）</summary>
+    public ObservableCollection<string> SpeakerOutputOptions { get; } = [AutoSpeakerOutput];
+    [ObservableProperty] private string _selectedSpeakerOutput = AutoSpeakerOutput;
+
+    /// <summary>桥目标候选（Auto=SelectPair 自动配对；其余=活动播放设备，开桥时找同族录音口）</summary>
+    public ObservableCollection<string> BridgeTargetOptions { get; } = [AutoBridgeTarget];
+    [ObservableProperty] private string _selectedBridgeTarget = AutoBridgeTarget;
+
+    /// <summary>刷新输出/桥目标下拉（启动+连接成功后调用；保住原选中）。</summary>
+    private async Task RefreshAudioTargetsAsync()
+    {
+        try
+        {
+            var infos = await _passthrough.GetRenderDevicesAsync();
+            _renderInfos = infos.ToList();
+            var keepS = SelectedSpeakerOutput;
+            SpeakerOutputOptions.Clear();
+            SpeakerOutputOptions.Add(AutoSpeakerOutput);
+            foreach (var n in _renderInfos.Select(d => d.FriendlyName))
+                SpeakerOutputOptions.Add(n);
+            SelectedSpeakerOutput = SpeakerOutputOptions.FirstOrDefault(o => o == keepS) ?? AutoSpeakerOutput;
+
+            using var enumerator = new MMDeviceEnumerator();
+            _bridgeRenderNames = enumerator
+                .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                .Select(d => d.FriendlyName).ToList();
+            var keepB = SelectedBridgeTarget;
+            BridgeTargetOptions.Clear();
+            BridgeTargetOptions.Add(AutoBridgeTarget);
+            foreach (var n in _bridgeRenderNames)
+                BridgeTargetOptions.Add(n);
+            SelectedBridgeTarget = BridgeTargetOptions.FirstOrDefault(o => o == keepB) ?? AutoBridgeTarget;
+        }
+        catch (Exception ex)
+        {
+            Log($"音频设备列表刷新失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>扩音输出 → 引擎 RenderDeviceId（Auto=null=系统默认）。</summary>
+    private string? ResolveSpeakerRenderId()
+    {
+        if (SelectedSpeakerOutput is null || SelectedSpeakerOutput == AutoSpeakerOutput)
+            return null;
+        return _renderInfos.FirstOrDefault(d => d.FriendlyName == SelectedSpeakerOutput)?.DeviceId;
     }
 
     // ---- 连接状态卡 ----
@@ -253,6 +307,7 @@ public partial class SoftReceiverViewModel : ObservableObject
             await session.ConnectAsync(mac);
             IsConnected = true;
             ConnectionText = $"已连接 {mac}（{label}）";
+            _ = RefreshAudioTargetsAsync();   // 连接后再刷一次输出/桥目标候选（8i：设备可能中途插拔）
             Log($"svr1 特征：DATA={(session.DataCharacteristicFound ? "✓" : "✗")} " +
                 $"CMD={(session.CmdCharacteristicFound ? "✓" : "✗")} " +
                 $"RSP={(session.RspCharacteristicFound ? "✓" : "✗")}");
@@ -382,6 +437,7 @@ public partial class SoftReceiverViewModel : ObservableObject
             _ = _passthrough.StartAsync(new PassthroughStartOptions
             {
                 ExternalSource = true,
+                RenderDeviceId = ResolveSpeakerRenderId(),   // 8i：输出可选，null=系统默认
                 RenderLatencyMs = 40,
                 Volume = 1.0f,
                 EnableAec = true,
@@ -536,28 +592,46 @@ public partial class SoftReceiverViewModel : ObservableObject
             Log("先连接键盘再开桥");
             return;
         }
-        using var enumerator = new MMDeviceEnumerator();
-        var renders = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active).ToList();
-        var captures = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active).ToList();
-        var (ri, ci) = SrxBridgePump.SelectPair(
-            renders.Select(d => d.FriendlyName).ToList(), captures.Select(d => d.FriendlyName).ToList());
-        if (ri < 0)
-        {
-            Log("未发现虚拟声卡配对端点（CABLE Input/Output 类）——安装 VB-Cable 后重试");
-            return;
-        }
         try
         {
+            using var enumerator = new MMDeviceEnumerator();
+            var renders = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active).ToList();
+            var captures = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active).ToList();
+            MMDevice renderDev;
+            MMDevice captureDev;
+            if (SelectedBridgeTarget is null || SelectedBridgeTarget == AutoBridgeTarget)
+            {
+                // 自动配对（SelectPair：非 UU 优先）
+                var (ri, ci) = SrxBridgePump.SelectPair(
+                    renders.Select(d => d.FriendlyName).ToList(), captures.Select(d => d.FriendlyName).ToList());
+                if (ri < 0)
+                {
+                    Log("未发现虚拟声卡配对端点（CABLE Input/Output 类）——装 VB-Cable 后重试，或在「虚拟麦克风」下拉手动选桥目标");
+                    return;
+                }
+                renderDev = renders[ri];
+                captureDev = captures[ci];
+            }
+            else
+            {
+                // 手动指定桥目标（8i）：按名字找活动播放设备，录音口=同族括注匹配
+                renderDev = renders.FirstOrDefault(d => d.FriendlyName == SelectedBridgeTarget)
+                    ?? throw new InvalidOperationException($"桥目标 [{SelectedBridgeTarget}] 不在当前活动播放设备列表");
+                captureDev = captures.FirstOrDefault(d =>
+                    SrxBridgePump.NameCandidatesMatch(renderDev.FriendlyName, d.FriendlyName))
+                    ?? throw new InvalidOperationException(
+                        $"桥目标 [{renderDev.FriendlyName}] 无同族录音端点——第三方软件拿不到对应麦克风");
+            }
             var pump = new SrxBridgePump();
-            pump.Start(renders[ri], 1.0f);
+            pump.Start(renderDev, 1.0f);
             _bridge = pump;
             IsBridgeOn = true;
             BridgeText = "开";
-            BridgeDeviceText = captures[ci].FriendlyName;
+            BridgeDeviceText = captureDev.FriendlyName;
             EnsureStatsTimer();
-            Log($"桥已开：解码 PCM → [{renders[ri].FriendlyName}]；第三方软件选麦克风「{captures[ci].FriendlyName}」即 R1 人声（增量≈15~50ms）");
-            if (SrxBridgePump.IsUuShellName(renders[ri].FriendlyName) ||
-                SrxBridgePump.IsUuShellName(captures[ci].FriendlyName))
+            Log($"桥已开：解码 PCM → [{renderDev.FriendlyName}]；第三方软件选麦克风「{captureDev.FriendlyName}」即 R1 人声（增量≈15~50ms）");
+            if (SrxBridgePump.IsUuShellName(renderDev.FriendlyName) ||
+                SrxBridgePump.IsUuShellName(captureDev.FriendlyName))
             {
                 Log("⚠ 桥目标=UU远程外壳（第三方软件装的虚拟声卡，依赖其客户端转发，非 PencilBox 设备）——" +
                     "正式对外请安装 VB-Cable，装完重开桥会自动改选 CABLE Input");
