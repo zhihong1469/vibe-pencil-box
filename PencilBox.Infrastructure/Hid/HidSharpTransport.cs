@@ -95,6 +95,9 @@ public class HidSharpTransport : IHidTransport
             }
 
             _stream = _device.Open();
+            // 空闲端点每 3s 甩一次 ReadTimeout 的坑：通知流就该无限阻塞等数据
+            // （断开/重连由 StopReading 拆流解阻塞，不依赖超时）
+            try { _stream.ReadTimeout = Timeout.Infinite; } catch { /* 个别流不支持则保默认 */ }
             _isConnected = true;
             CurrentDevice = MapToHidDeviceInfo(_device);
             IsNoReportIdDevice = CurrentDevice?.UsagePage == ProtocolConstants.UsagePageCustomHid;

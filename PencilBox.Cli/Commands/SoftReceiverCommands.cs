@@ -5,6 +5,7 @@
 // </copyright>
 using System.Diagnostics;
 using System.Globalization;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using PencilBox.Cli.Output;
 using PencilBox.Core.Ble;
@@ -36,6 +37,7 @@ public class SoftReceiverCommands
     private readonly IBleScanner _scanner;
     private readonly IAudioPassthrough _passthrough;
     private readonly IHidTransport _hidTransport;
+    private ExclusiveRenderEngine? _exclusiveRender;
 
     public SoftReceiverCommands(IBleCentral central, IBleScanner scanner, IAudioPassthrough passthrough,
         IHidTransport hidTransport)
@@ -427,7 +429,7 @@ public class SoftReceiverCommands
     public async Task<int> HidAsync(string? device, string? route, int listenSec,
         string? recordPath, bool keepRoute, int timeoutMs,
         bool speaker = false, float volume = 1.0f, int latencyMs = 40,
-        bool noAec = false, bool noAns = false)
+        bool noAec = false, bool noAns = false, bool exclusive = false)
     {
         // 1) 枚举 + 选台（只认 0xFF02 EP4 命令通道；device CLI 同款 ★ 识别）
         var devices = await _hidTransport.EnumerateDevicesAsync();
@@ -534,7 +536,11 @@ public class SoftReceiverCommands
                         if (gap > Interlocked.Read(ref arrMaxMs)) Interlocked.Exchange(ref arrMaxMs, gap);
                     }
                     arrLast = now;
-                    if (_passthrough.WriteExternalPcm(f.Pcm) == f.Pcm.Length)
+                    // 独占引擎 WritePcm 无拒绝语义（队列丢最旧）；共享泵按写入数判拒绝
+                    var written = _exclusiveRender != null
+                        ? f.Pcm.Length
+                        : _passthrough.WriteExternalPcm(f.Pcm);
+                    if (written == f.Pcm.Length)
                         fedFrames++;
                     else
                         rejectedFrames++;
@@ -543,20 +549,39 @@ public class SoftReceiverCommands
 
             if (speaker)
             {
-                await _passthrough.StartAsync(new PassthroughStartOptions
+                if (exclusive)
                 {
-                    ExternalSource = true,
-                    RenderLatencyMs = latencyMs,
-                    Volume = volume,
-                    EnableAec = !noAec,
-                    EnableAns = !noAns,
-                    EnableAfc = false,
-                    HpfHz = 80,
-                });
-                ConsoleFormatter.Info(
-                    $"[SRX-HID] 外源泵扩音已开：音量 {volume:F2}x，渲染缓冲 {latencyMs}ms，" +
-                    $"处理链 AEC={(noAec ? 0 : 1)} ANS={(noAns ? 0 : 1)}（解码 PCM→处理链→扬声器；" +
-                    "对 A/B：同场 route on/off 来回切，听感+Box 段估计延迟对比）");
+                    // 独占渲染（M3）：端点独占格式直出（吃满 Windows 音频引擎税）；
+                    // 无 AEC/ANS 处理链=纯渲染延迟 A/B 腿；失败自动回退共享并留台账
+                    _exclusiveRender = new ExclusiveRenderEngine();
+                    using (var enumerator = new MMDeviceEnumerator())
+                    {
+                        var render = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                        _exclusiveRender.Start(render, volume, Math.Min(latencyMs, 20));
+                    }
+                    var rep = _exclusiveRender.GetReport();
+                    ConsoleFormatter.Info(
+                        $"[SRX-HID] 独占渲染：[{rep.DeviceName}] {rep.FormatText}" +
+                        (rep.Exclusive ? "" : $"——回退原因：{rep.FallbackReason}（链路先通、引擎税后收）") +
+                        "；独占=独占端点，期间本机其他声音被顶掉；无 AEC/ANS（纯渲染 A/B 腿）");
+                }
+                else
+                {
+                    await _passthrough.StartAsync(new PassthroughStartOptions
+                    {
+                        ExternalSource = true,
+                        RenderLatencyMs = latencyMs,
+                        Volume = volume,
+                        EnableAec = !noAec,
+                        EnableAns = !noAns,
+                        EnableAfc = false,
+                        HpfHz = 80,
+                    });
+                    ConsoleFormatter.Info(
+                        $"[SRX-HID] 外源泵扩音已开：音量 {volume:F2}x，渲染缓冲 {latencyMs}ms，" +
+                        $"处理链 AEC={(noAec ? 0 : 1)} ANS={(noAns ? 0 : 1)}（解码 PCM→处理链→扬声器；" +
+                        "对 A/B：同场 route on/off 来回切，听感+Box 段估计延迟对比）");
+                }
             }
 
             using var cts = new CancellationTokenSource();
@@ -571,15 +596,27 @@ public class SoftReceiverCommands
                 ConsoleFormatter.Info($"[SRX-HID] WAV → {Path.GetFullPath(recordPath!)}");
             if (speaker)
             {
-                var stats = _passthrough.GetStats();
-                var avgGap = Interlocked.Read(ref arrCount) > 0
-                    ? Interlocked.Read(ref arrSumMs) / (double)Interlocked.Read(ref arrCount) : 0;
-                ConsoleFormatter.Info(
-                    $"[SRX-HID] 泵出：泵入 {fedFrames} 帧（{fedFrames * 7.5 / 1000:F1}s）拒绝 {rejectedFrames}；" +
-                    $"到达均隙 {avgGap:F1}ms / 最大隙 {Interlocked.Read(ref arrMaxMs)}ms（≫7.5=报告成批到达）");
-                ConsoleFormatter.Info(
-                    $"[SRX-HID] Box 段估计延迟 {stats.EstimatedLatencyMs:F0}ms（处理链+环深活值+渲染缓冲 {stats.RenderLatencyMs}ms）；" +
-                    "A/B 判据=与 UAC 路（免驱直通）同场听感+串口戳对账，净差=HID 直送收益");
+                if (_exclusiveRender != null)
+                {
+                    var rep = _exclusiveRender.GetReport();
+                    ConsoleFormatter.Info(
+                        $"[SRX-HID] 独占渲染收尾：[{rep.DeviceName}] {rep.FormatText}；欠载 {rep.Underruns}" +
+                        (rep.FallbackReason != null ? $"；回退原因：{rep.FallbackReason}" : ""));
+                    _exclusiveRender.Dispose();
+                    _exclusiveRender = null;
+                }
+                else
+                {
+                    var stats = _passthrough.GetStats();
+                    var avgGap = Interlocked.Read(ref arrCount) > 0
+                        ? Interlocked.Read(ref arrSumMs) / (double)Interlocked.Read(ref arrCount) : 0;
+                    ConsoleFormatter.Info(
+                        $"[SRX-HID] 泵出：泵入 {fedFrames} 帧（{fedFrames * 7.5 / 1000:F1}s）拒绝 {rejectedFrames}；" +
+                        $"到达均隙 {avgGap:F1}ms / 最大隙 {Interlocked.Read(ref arrMaxMs)}ms（≫7.5=报告成批到达）");
+                    ConsoleFormatter.Info(
+                        $"[SRX-HID] Box 段估计延迟 {stats.EstimatedLatencyMs:F0}ms（处理链+环深活值+渲染缓冲 {stats.RenderLatencyMs}ms）；" +
+                        "A/B 判据=与 UAC 路（免驱直通）同场听感+串口戳对账，净差=HID 直送收益");
+                }
             }
         }
         finally
@@ -593,7 +630,11 @@ public class SoftReceiverCommands
                     ConsoleFormatter.Warn("[SRX-HID] 切回 UAC 无应答——若基站仍直送，拔插恢复；OTA 会话启动会自动 route=0 兜底");
             }
             if (speaker)
+            {
+                _exclusiveRender?.Dispose();
+                _exclusiveRender = null;
                 await _passthrough.StopAsync();
+            }
             session.Dispose();
             await _hidTransport.DisconnectAsync();
             ConsoleFormatter.Info("[SRX-HID] " + session.Summary());
@@ -615,7 +656,9 @@ public class SoftReceiverCommands
                 try { await Task.Delay(2000, cts.Token); }
                 catch (OperationCanceledException) { break; }
                 var ch = session.ChannelStats;
-                var latencyNote = speaker ? $"；估计延迟 {_passthrough.GetStats().EstimatedLatencyMs:F0}ms" : "";
+                var latencyNote = _exclusiveRender != null
+                    ? $"；[{_exclusiveRender.FormatText}] 欠载 {_exclusiveRender.Underruns}"
+                    : speaker ? $"；估计延迟 {_passthrough.GetStats().EstimatedLatencyMs:F0}ms" : "";
                 ConsoleFormatter.Info(
                     $"[SRX-HID] {clock.Elapsed.TotalSeconds:F0}s 解码帧 {getFrameCount()}{latencyNote}；{ch}");
             }

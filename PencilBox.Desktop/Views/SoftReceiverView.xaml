@@ -67,11 +67,16 @@
                                 ToolTip="软件增益（对数刻度 1x~24x，同扩音页）：原始人声过轻就上调；&gt;1x 由限制器防破音；扩音开着时拖动即调即生效"/>
                         <TextBlock Text="{Binding GainText}" VerticalAlignment="Center" MinWidth="40" Margin="0,0,8,0"
                                    Foreground="#0B5345" FontWeight="SemiBold"/>
+                        <!-- 08 号 M3：独占渲染（WASAPI Exclusive 吃满引擎税；无 AEC/ANS=纯渲染 A/B 腿） -->
+                        <CheckBox Content="独占渲染" IsChecked="{Binding IsExclusiveRender, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanChangeExclusiveRender}"
+                                  VerticalAlignment="Center" Margin="0,0,8,0"
+                                  ToolTip="WASAPI 独占模式直出（协商 48k/2ch 优先，失败自动回退共享并显原因）：吃满 Windows 音频引擎税；无 AEC/ANS 处理链=纯渲染延迟 A/B 腿；独占期间本机其他声音被顶掉；扩音开着时不可改（先关再开）"/>
                         <!-- 一键实时扩音（第一性需求：键盘麦人声→PC 扬声器）；链路=解码 PCM→引擎外源泵→扬声器 -->
                         <Button Content="{Binding SpeakerButtonText}" Command="{Binding ToggleSpeakerCommand}"
                                 Style="{StaticResource ActionButton}"
                                 IsEnabled="{Binding CanToggleSpeaker}"
-                                ToolTip="键盘麦克风人声实时扩音（解码 PCM→扩音引擎外源泵→上方所选输出设备）；CLI 等价=srx amp"/>
+                                ToolTip="键盘麦克风人声实时扩音（解码 PCM→扩音引擎外源泵→上方所选输出设备；勾选独占渲染=Exclusive 直出）；CLI 等价=srx amp / srx hid --speaker"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
                         <TextBlock Text="虚拟麦克风：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
@@ -91,8 +96,8 @@
                         <TextBlock Text="录制 WAV：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
                         <Button Content="{Binding RecordText}" Command="{Binding ToggleRecordCommand}" Margin="0,0,0,0"
                                 Style="{StaticResource ActionButton}"
-                                IsEnabled="{Binding IsConnected}"
-                                ToolTip="解码 PCM 直落 WAV（16k/16bit/mono，exe 目录 srx_record\）；语音流须在流（K2/S1）"/>
+                                IsEnabled="{Binding CanRecord}"
+                                ToolTip="解码 PCM 直落 WAV（16k/16bit/mono，exe 目录 srx_record\）；BLE 直连与 EP4 直送两路通用；语音流须在流（K2/S1）"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock Text="软件键鼠：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>

@@ -128,7 +128,12 @@ public partial class SoftReceiverViewModel : ObservableObject
         OnPropertyChanged(nameof(SoftwareGain));
         OnPropertyChanged(nameof(GainText));
         if (IsSpeakerOn)
-            _passthrough.SetVolume((float)SoftwareGain);   // 扩音运行中即调即生效
+        {
+            if (_exclusiveEngine != null)
+                _exclusiveEngine.SetVolume((float)SoftwareGain);   // 独占引擎即调即生效
+            else
+                _passthrough.SetVolume((float)SoftwareGain);
+        }
     }
 
     // ---- 数据源（08 号方案：BLE 直连 | USB EP4 HID 直送；SelectedIndex 绑定避开枚举转换器坑） ----
@@ -182,6 +187,7 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]    // HID 连接态进泵出/桥可用域（M2：泵出腿）
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
+    [NotifyPropertyChangedFor(nameof(CanRecord))]
     [ObservableProperty] private bool _isHidConnected;
     [NotifyPropertyChangedFor(nameof(CanRouteHidOn))]
     [NotifyPropertyChangedFor(nameof(CanRouteHidOff))]
@@ -370,6 +376,10 @@ public partial class SoftReceiverViewModel : ObservableObject
         IsHidConnected = false;
         IsHidRouted = false;
         HidStatusText = "UAC（未切入）";
+        if (IsSpeakerOn)
+            ToggleSpeakerExecute();   // 与 BLE 断开同款清场：泵出/独占随断开自动关
+        if (IsRecording)
+            StopRecord();
         MaybeStopStatsTimer();
     }
 
@@ -387,7 +397,12 @@ public partial class SoftReceiverViewModel : ObservableObject
     {
         Interlocked.Increment(ref _hidFrameCount);
         if (IsSpeakerOn)
-            _ = _passthrough.WriteExternalPcm(frame.Pcm);
+        {
+            if (_exclusiveEngine != null)
+                _exclusiveEngine.WritePcm(frame.Pcm);
+            else
+                _ = _passthrough.WriteExternalPcm(frame.Pcm);
+        }
         _bridge?.WritePcm(frame.Pcm);
         lock (_recordLock)
         {
@@ -411,6 +426,7 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
+    [NotifyPropertyChangedFor(nameof(CanRecord))]
     [NotifyPropertyChangedFor(nameof(CanConnect))]
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _connectionText = "未连接";
@@ -435,8 +451,17 @@ public partial class SoftReceiverViewModel : ObservableObject
     [ObservableProperty] private string _statsText = "—";
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
     [NotifyPropertyChangedFor(nameof(SpeakerButtonText))]
+    [NotifyPropertyChangedFor(nameof(CanChangeExclusiveRender))]
     [ObservableProperty] private bool _isSpeakerOn;
     [ObservableProperty] private string _speakerText = "关";
+
+    // ---- 独占渲染（08 号 M3：WASAPI Exclusive 吃满引擎税；无 AEC/ANS=纯渲染 A/B 腿） ----
+    private ExclusiveRenderEngine? _exclusiveEngine;
+
+    /// <summary>独占渲染开关（只在扩音关着时可改——运行中改须先关再开，防半拆链状态）。</summary>
+    public bool CanChangeExclusiveRender => !IsSpeakerOn;
+
+    [ObservableProperty] private bool _isExclusiveRender;
 
     // ---- 虚拟麦克风桥（R1PBleAudio 桥式腿，复用 SrxBridgePump） ----
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
@@ -446,8 +471,12 @@ public partial class SoftReceiverViewModel : ObservableObject
     [ObservableProperty] private string _bridgeInfoText = "—";
 
     // ---- 收流录制 WAV（receive 腿） ----
+    [NotifyPropertyChangedFor(nameof(CanRecord))]
     [ObservableProperty] private bool _isRecording;
     [ObservableProperty] private string _recordText = "录制 WAV";
+
+    /// <summary>「录制 WAV」按钮可用 = BLE 连接或 EP4 直送连接（两路漏斗同款 _recordWriter）</summary>
+    public bool CanRecord => IsConnected || IsHidConnected;
 
     // ---- 软件键鼠（键盘腿=Keymap 表驱动注入；鼠标腿=空鼠槽直通；默认关） ----
     [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
@@ -716,7 +745,10 @@ public partial class SoftReceiverViewModel : ObservableObject
         if (IsSpeakerOn)
         {
             _speakerClock.Reset();
-            _ = _passthrough.StopAsync();
+            if (_exclusiveEngine != null)
+                StopExclusiveEngine();
+            else
+                _ = _passthrough.StopAsync();
             IsSpeakerOn = false;
             SpeakerText = "关";
             Log("扩音泵出已关");
@@ -725,6 +757,25 @@ public partial class SoftReceiverViewModel : ObservableObject
         }
         try
         {
+            if (IsExclusiveRender)
+            {
+                // 独占渲染（M3）：端点独占格式直出（默认渲染设备；无 AEC/ANS 处理链）
+                _exclusiveEngine = new ExclusiveRenderEngine();
+                using (var enumerator = new MMDeviceEnumerator())
+                {
+                    var render = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                    _exclusiveEngine.Start(render, (float)SoftwareGain, 20);
+                }
+                var rep = _exclusiveEngine.GetReport();
+                IsSpeakerOn = true;
+                SpeakerText = "开（独占）";
+                _speakerClock.Restart();
+                EnsureStatsTimer();
+                Log($"独占渲染已开：[{rep.DeviceName}] {rep.FormatText}" +
+                    (rep.Exclusive ? "" : $"——回退原因：{rep.FallbackReason}（链路先通、引擎税后收）") +
+                    $"；增益 {SoftwareGain:F1}x 滑条可即调；独占=独占端点，期间本机其他声音被顶掉；无 AEC/ANS");
+                return;
+            }
             _ = _passthrough.StartAsync(new PassthroughStartOptions
             {
                 ExternalSource = true,
@@ -745,6 +796,7 @@ public partial class SoftReceiverViewModel : ObservableObject
         catch (Exception ex)
         {
             Log($"扩音启动失败：{ex.Message}");
+            StopExclusiveEngine();
         }
     }
 
@@ -753,7 +805,18 @@ public partial class SoftReceiverViewModel : ObservableObject
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
-            if (IsHidSource && _hidSession != null)
+            var ex = _exclusiveEngine;
+            if (ex != null)
+            {
+                // 独占渲染心跳：格式+欠载（+HID 直送通道统计同行带出）
+                var line = $"独占渲染 {_speakerClock.Elapsed.TotalSeconds:F0}s：[{ex.DeviceName}] {ex.FormatText} 欠载 {ex.Underruns}" +
+                           (ex.FallbackReason != null ? $"（回退：{ex.FallbackReason}）" : "");
+                if (IsHidSource && _hidSession != null)
+                    StatsText = $"{line}；{_hidSession.Summary()}";
+                else
+                    StatsText = line;
+            }
+            else if (IsHidSource && _hidSession != null)
             {
                 // HID 直送心跳：解码帧计数 + 通道统计（音频/F5/缺口各路独立计数）
                 var frames = Interlocked.Read(ref _hidFrameCount);
@@ -782,6 +845,15 @@ public partial class SoftReceiverViewModel : ObservableObject
     {
         if (!IsSpeakerOn && _bridge == null && !(IsHidSource && IsHidConnected))
             _speakerStatsTimer?.Stop();
+    }
+
+    /// <summary>独占引擎健全清场（断开/异常路径用）：有就 Dispose 置空。</summary>
+    private void StopExclusiveEngine()
+    {
+        if (_exclusiveEngine == null)
+            return;
+        _exclusiveEngine.Dispose();
+        _exclusiveEngine = null;
     }
 
     // ---- 延迟实测（chirp 回环） ----
@@ -1059,7 +1131,12 @@ public partial class SoftReceiverViewModel : ObservableObject
     private void OnAudioFrameReady(object? sender, SoftReceiverAudioFrame frame)
     {
         if (IsSpeakerOn)
-            _ = _passthrough.WriteExternalPcm(frame.Pcm);
+        {
+            if (_exclusiveEngine != null)
+                _exclusiveEngine.WritePcm(frame.Pcm);
+            else
+                _ = _passthrough.WriteExternalPcm(frame.Pcm);
+        }
         _bridge?.WritePcm(frame.Pcm);
         lock (_recordLock)
         {
