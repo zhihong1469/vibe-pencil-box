@@ -384,7 +384,11 @@ public class Program
                 GetOptionInt(rest, "--listen", 10),
                 GetOption(rest, "--record"),
                 HasFlag(rest, "--keep-route"),
-                GetOptionInt(rest, "--timeout", 2000)),
+                GetOptionInt(rest, "--timeout", 2000),
+                HasFlag(rest, "--speaker"),
+                ParseVolume(GetOption(rest, "--volume")),
+                GetOptionInt(rest, "--latency", 40),
+                HasFlag(rest, "--no-aec"), HasFlag(rest, "--no-ans")),
 
             _ => UnknownCommand($"srx {action}")
         };
@@ -1023,6 +1027,7 @@ public class Program
                             [--device <名称/路径子串>]            无参=只列 EP4 台不动作
                             [--route on|off]                      切入 HID 直送 / 切回 UAC（缺省=不路由只听）
                             [--listen 10] [--record out.wav]      收流秒数（0=Ctrl+C）/ 解码 WAV 落盘
+                            [--speaker --volume 1.0 --latency 40] 外源泵扩音（A/B 主腿；--no-aec --no-ans 可关链）
                             [--timeout 2000] [--keep-route]       0x56 应答超时 / 收尾保持直送不切回
                             u16 帧计数缺口自动插 7.5ms 静音；E0 看门狗=基站环溢出自动回 UAC（告警显式出）
                     identify | pair read/write/enter/factory/clear | ota | raw | status

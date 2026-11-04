@@ -413,17 +413,21 @@ public class SoftReceiverCommands
     }
 
     /// <summary>
-    /// `srx hid`：基站 EP4 HID 直送 mSBC 通道（08 号方案 M1，实验号 0x56）。
+    /// `srx hid`：基站 EP4 HID 直送 mSBC 通道（08 号方案，实验号 0x56）。
     /// 免驱 UAC 路被砍的替代轨：mSBC 60B 帧经 custom HID 64B 定长直传 PC，本地解码
     /// （u16 帧计数缺口插静音），预期砍掉设备蓄水池+UAC 引擎税（−50~90ms，实测为准）。
     /// 无 --device：列出基站 EP4 通道（★）即退；给 --device <名称/路径子串> 后：
     /// 连接 → --route on 切入 HID 直送（E1 OK 应答即读线程消费活证明）→ 收流
     /// --listen 秒（0=Ctrl+C）→ 收尾自动切回 UAC（--keep-route 保持，仅排障用）。
     /// --record <路径> 同时落 16k/16bit/mono WAV（解码 PCM，含补的静音帧）。
+    /// --speaker 开外源泵扩音（--volume/--latency/--no-aec/--no-ans，与 srx amp 同链：
+    /// 解码 PCM → AEC/ANS → 环形 → 扬声器）——A/B 实测主腿。
     /// 注意：本固件须烧 test/hid 构建（DG_AUD_HID_ENABLE），否则 STATUS=0xFF 明示无能力。
     /// </summary>
     public async Task<int> HidAsync(string? device, string? route, int listenSec,
-        string? recordPath, bool keepRoute, int timeoutMs)
+        string? recordPath, bool keepRoute, int timeoutMs,
+        bool speaker = false, float volume = 1.0f, int latencyMs = 40,
+        bool noAec = false, bool noAns = false)
     {
         // 1) 枚举 + 选台（只认 0xFF02 EP4 命令通道；device CLI 同款 ★ 识别）
         var devices = await _hidTransport.EnumerateDevicesAsync();
@@ -505,37 +509,78 @@ public class SoftReceiverCommands
                 return 1;
             }
 
-            // 4) 收流统计（+ 可选 WAV 落盘；事件在 HID 读线程，写入加锁）
+            // 4) 统一消费漏斗：计数 + 录制（可选）+ 扩音泵（可选，与 srx amp 同一条外源链）
             var waveFormat = new WaveFormat(MsbcDecoder.SampleRate, 16, 1);
-            long frameCount = 0;
+            long frameCount = 0, fedFrames = 0, rejectedFrames = 0, arrLast = 0, arrSumMs = 0, arrCount = 0, arrMaxMs = 0;
+            using WaveFileWriter? writer = recordPath != null ? new WaveFileWriter(recordPath, waveFormat) : null;
+            var writeLock = new object();
+            var feedLock = new object();
+            session.AudioFrameReady += (_, f) =>
+            {
+                Interlocked.Increment(ref frameCount);
+                if (writer != null)
+                    lock (writeLock)
+                        writer.Write(f.Pcm, 0, f.Pcm.Length);
+                if (!speaker)
+                    return;
+                lock (feedLock)
+                {
+                    long now = Environment.TickCount64;
+                    if (arrLast != 0)
+                    {
+                        var gap = now - arrLast;
+                        arrSumMs += gap;
+                        arrCount++;
+                        if (gap > Interlocked.Read(ref arrMaxMs)) Interlocked.Exchange(ref arrMaxMs, gap);
+                    }
+                    arrLast = now;
+                    if (_passthrough.WriteExternalPcm(f.Pcm) == f.Pcm.Length)
+                        fedFrames++;
+                    else
+                        rejectedFrames++;
+                }
+            };
+
+            if (speaker)
+            {
+                await _passthrough.StartAsync(new PassthroughStartOptions
+                {
+                    ExternalSource = true,
+                    RenderLatencyMs = latencyMs,
+                    Volume = volume,
+                    EnableAec = !noAec,
+                    EnableAns = !noAns,
+                    EnableAfc = false,
+                    HpfHz = 80,
+                });
+                ConsoleFormatter.Info(
+                    $"[SRX-HID] 外源泵扩音已开：音量 {volume:F2}x，渲染缓冲 {latencyMs}ms，" +
+                    $"处理链 AEC={(noAec ? 0 : 1)} ANS={(noAns ? 0 : 1)}（解码 PCM→处理链→扬声器；" +
+                    "对 A/B：同场 route on/off 来回切，听感+Box 段估计延迟对比）");
+            }
+
             using var cts = new CancellationTokenSource();
             if (listenSec > 0)
                 cts.CancelAfter(TimeSpan.FromSeconds(listenSec));
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-            if (recordPath != null)
-            {
-                using (var writer = new WaveFileWriter(recordPath, waveFormat))
-                {
-                    var writeLock = new object();
-                    session.AudioFrameReady += (_, f) =>
-                    {
-                        Interlocked.Increment(ref frameCount);
-                        lock (writeLock)
-                            writer.Write(f.Pcm, 0, f.Pcm.Length);
-                    };
-                    await ListenAsync(session, () => Interlocked.Read(ref frameCount), cts, listenSec);
-                }
-            }
-            else
-            {
-                session.AudioFrameReady += (_, _) => Interlocked.Increment(ref frameCount);
-                await ListenAsync(session, () => Interlocked.Read(ref frameCount), cts, listenSec);
-            }
+            await ListenAsync(session, () => Interlocked.Read(ref frameCount), cts, listenSec, speaker);
 
             ConsoleFormatter.Success($"收流完成：解码帧 {Interlocked.Read(ref frameCount)}（{Interlocked.Read(ref frameCount) * 7.5 / 1000:F1}s 音频 @7.5ms/帧）");
-            if (recordPath != null)
-                ConsoleFormatter.Info($"[SRX-HID] WAV → {Path.GetFullPath(recordPath)}");
+            if (writer != null)
+                ConsoleFormatter.Info($"[SRX-HID] WAV → {Path.GetFullPath(recordPath!)}");
+            if (speaker)
+            {
+                var stats = _passthrough.GetStats();
+                var avgGap = Interlocked.Read(ref arrCount) > 0
+                    ? Interlocked.Read(ref arrSumMs) / (double)Interlocked.Read(ref arrCount) : 0;
+                ConsoleFormatter.Info(
+                    $"[SRX-HID] 泵出：泵入 {fedFrames} 帧（{fedFrames * 7.5 / 1000:F1}s）拒绝 {rejectedFrames}；" +
+                    $"到达均隙 {avgGap:F1}ms / 最大隙 {Interlocked.Read(ref arrMaxMs)}ms（≫7.5=报告成批到达）");
+                ConsoleFormatter.Info(
+                    $"[SRX-HID] Box 段估计延迟 {stats.EstimatedLatencyMs:F0}ms（处理链+环深活值+渲染缓冲 {stats.RenderLatencyMs}ms）；" +
+                    "A/B 判据=与 UAC 路（免驱直通）同场听感+串口戳对账，净差=HID 直送收益");
+            }
         }
         finally
         {
@@ -547,6 +592,8 @@ public class SoftReceiverCommands
                 else
                     ConsoleFormatter.Warn("[SRX-HID] 切回 UAC 无应答——若基站仍直送，拔插恢复；OTA 会话启动会自动 route=0 兜底");
             }
+            if (speaker)
+                await _passthrough.StopAsync();
             session.Dispose();
             await _hidTransport.DisconnectAsync();
             ConsoleFormatter.Info("[SRX-HID] " + session.Summary());
@@ -555,9 +602,9 @@ public class SoftReceiverCommands
         return 0;
     }
 
-    /// <summary>hid 收流主等待：心跳 2s 出实时计数（listenSec=0 走 Ctrl+C）。</summary>
-    private static async Task ListenAsync(SrxHidSession session, Func<long> getFrameCount,
-        CancellationTokenSource cts, int listenSec)
+    /// <summary>hid 收流主等待：心跳 2s 出实时计数（listenSec=0 走 Ctrl+C；speaker 时附 Box 段延迟）。</summary>
+    private async Task ListenAsync(SrxHidSession session, Func<long> getFrameCount,
+        CancellationTokenSource cts, int listenSec, bool speaker)
     {
         ConsoleFormatter.Info($"[SRX-HID] 收流中（{(listenSec > 0 ? $"{listenSec}s 后" : "Ctrl+C")}收尾）…");
         var clock = Stopwatch.StartNew();
@@ -568,8 +615,9 @@ public class SoftReceiverCommands
                 try { await Task.Delay(2000, cts.Token); }
                 catch (OperationCanceledException) { break; }
                 var ch = session.ChannelStats;
+                var latencyNote = speaker ? $"；估计延迟 {_passthrough.GetStats().EstimatedLatencyMs:F0}ms" : "";
                 ConsoleFormatter.Info(
-                    $"[SRX-HID] {clock.Elapsed.TotalSeconds:F0}s 解码帧 {getFrameCount()}；{ch}");
+                    $"[SRX-HID] {clock.Elapsed.TotalSeconds:F0}s 解码帧 {getFrameCount()}{latencyNote}；{ch}");
             }
         }
         catch (OperationCanceledException) { /* Ctrl+C 正常收尾 */ }

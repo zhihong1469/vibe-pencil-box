@@ -178,6 +178,10 @@ public partial class SoftReceiverViewModel : ObservableObject
     [ObservableProperty] private HidDeviceOption? _selectedHidDevice;
     [NotifyPropertyChangedFor(nameof(CanRefreshHidDevices))]
     [NotifyPropertyChangedFor(nameof(CanHidConnect))]
+    [NotifyPropertyChangedFor(nameof(CanHidDisconnect))]
+    [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]    // HID 连接态进泵出/桥可用域（M2：泵出腿）
+    [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
+    [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
     [ObservableProperty] private bool _isHidConnected;
     [NotifyPropertyChangedFor(nameof(CanRouteHidOn))]
     [NotifyPropertyChangedFor(nameof(CanRouteHidOff))]
@@ -185,6 +189,9 @@ public partial class SoftReceiverViewModel : ObservableObject
     [ObservableProperty] private string _hidStatusText = "UAC（未切入）";
     [NotifyPropertyChangedFor(nameof(CanRefreshHidDevices))]
     [NotifyPropertyChangedFor(nameof(CanHidConnect))]
+    [NotifyPropertyChangedFor(nameof(CanHidDisconnect))]
+    [NotifyPropertyChangedFor(nameof(CanRouteHidOn))]
+    [NotifyPropertyChangedFor(nameof(CanRouteHidOff))]
     [ObservableProperty] private bool _isHidBusy;
     private long _hidFrameCount;
 
@@ -375,10 +382,13 @@ public partial class SoftReceiverViewModel : ObservableObject
         });
     }
 
-    /// <summary>HID 解码帧统一消费（与 BLE 腿同漏斗）：录制照走 _recordLock；泵出/桥腿 M2 接。</summary>
+    /// <summary>HID 解码帧统一消费（与 BLE 腿同漏斗）：扩音泵/桥/录制并列，互不互斥。</summary>
     private void OnHidAudioFrame(object? sender, SrxHidAudioFrame frame)
     {
         Interlocked.Increment(ref _hidFrameCount);
+        if (IsSpeakerOn)
+            _ = _passthrough.WriteExternalPcm(frame.Pcm);
+        _bridge?.WritePcm(frame.Pcm);
         lock (_recordLock)
         {
             if (_recordWriter != null)
@@ -464,17 +474,17 @@ public partial class SoftReceiverViewModel : ObservableObject
     /// <summary>「开始延迟实测」可用 = 已连接且未在测未忙（按钮 IsEnabled 直绑，勿用转换器）</summary>
     public bool CanProbe => IsConnected && !IsProbing && !IsBusy;
 
-    /// <summary>「扩音泵出」按钮可用 = 已连接，或扩音正开着（允许随时关）；实测中锁死</summary>
-    public bool CanToggleSpeaker => (IsConnected || IsSpeakerOn) && !IsProbing;
+    /// <summary>「扩音泵出」按钮可用 = 已连接（BLE 或 EP4 直送），或扩音正开着（允许随时关）；实测中锁死</summary>
+    public bool CanToggleSpeaker => (IsConnected || IsHidConnected || IsSpeakerOn) && !IsProbing;
 
     /// <summary>扩音按钮文案随态翻转</summary>
     public string SpeakerButtonText => IsSpeakerOn ? "关扩音" : "开扩音";
 
-    /// <summary>「虚拟麦克风桥」按钮可用 = 已连接，或桥正开着（允许随时关）；实测中锁死</summary>
-    public bool CanToggleBridge => (IsConnected || IsBridgeOn) && !IsProbing && !IsBusy;
+    /// <summary>「虚拟麦克风桥」按钮可用 = 已连接（BLE 或 EP4 直送），或桥正开着（允许随时关）；实测中锁死</summary>
+    public bool CanToggleBridge => (IsConnected || IsHidConnected || IsBridgeOn) && !IsProbing && !IsBusy;
 
-    /// <summary>「软件键鼠」按钮可用 = 已连接，或正开着（允许随时关）；实测/忙时锁死</summary>
-    public bool CanToggleKeyActions => (IsConnected || IsKeyActionsOn) && !IsProbing && !IsBusy;
+    /// <summary>「软件键鼠」按钮可用 = BLE 源已连接（0x13 语义键/空鼠槽不经基站 EP4 转发，HID 路不可得），或正开着；实测/忙时锁死</summary>
+    public bool CanToggleKeyActions => !IsHidSource && (IsConnected || IsKeyActionsOn) && !IsProbing && !IsBusy;
 
     /// <summary>软件键鼠按钮文案随态翻转</summary>
     public string KeyActionsButtonText => IsKeyActionsOn ? "关软件键鼠" : "开软件键鼠";
@@ -693,9 +703,9 @@ public partial class SoftReceiverViewModel : ObservableObject
             ToggleSpeakerExecute();
             return;
         }
-        if (!IsConnected)
+        if (!IsConnected && !IsHidConnected)
         {
-            Log("先连接键盘再开扬声器");
+            Log("先连接键盘（或连接 EP4 直送）再开扬声器");
             return;
         }
         ToggleSpeakerExecute();
@@ -877,9 +887,9 @@ public partial class SoftReceiverViewModel : ObservableObject
             StopBridge("手动关桥");
             return;
         }
-        if (!IsConnected || Session == null)
+        if (!IsConnected && !IsHidConnected)
         {
-            Log("先连接键盘再开桥");
+            Log("先连接键盘（或连接 EP4 直送）再开桥");
             return;
         }
         try
@@ -966,6 +976,11 @@ public partial class SoftReceiverViewModel : ObservableObject
             IsKeyActionsOn = false;
             KeyActionsText = "关";
             Log("软件键鼠已关（键/空鼠不再注入，事件流继续显示）");
+            return;
+        }
+        if (IsHidSource)
+        {
+            Log("HID 直送路无键动作（0x13 语义键/空鼠槽走笔端 GATT，不经基站 EP4 转发）——软件键鼠仅 BLE 直连可用");
             return;
         }
         if (!IsConnected || Session == null)
