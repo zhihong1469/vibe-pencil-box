@@ -33,6 +33,11 @@ public sealed record SoftReceiverProbeReport(
 /// （ChirpScanAnalyzer）+ WAV 留档。
 /// 口径：绝对延迟含起点相位常量偏置（笔端自由跑钟无共享锚），同场内形状/PPM 有效、
 /// 跨场对账勿比绝对值；运行前提=语音流在流（K2/S1 物理触发）。
+/// ⚠ 匹配对象硬注（08 号回执 §3A）：收到并解码的信号 D(t)=decode(encode(房间里的 chirp))，
+/// 模板是发射原信号 T(t)——互相关峰位含 mSBC 编解码往返群延迟（8 子带滤波器组，
+/// ≈10ms 量级**常量**）。A/B 两腿（UAC/HID）同笔同编解码器 → 常量共模抵消，A/B 判据不受影响；
+/// 但任何"绝对延迟逐项扣减求纯设备延迟"的账本必须把这笔群延迟算进去，漏扣即错账
+/// （标定手段=port SBC 编码器离线预演 mSBC(T) 作第二模板，两峰位差=群延迟；仓内暂无编码器，列观察项）。
 /// 线程：AudioFrameReady 在 WinRT 线程池回调，采集内部锁保护；Start/Stop 由调用方串行驱动。
 /// </summary>
 public sealed class SoftReceiverProbe : IDisposable
