@@ -378,6 +378,14 @@ public class Program
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
                 GetOptionInt(rest, "--timeout", 10_000)),
 
+            "hid" => await cmd.HidAsync(
+                GetOption(rest, "--device"),
+                GetOption(rest, "--route"),
+                GetOptionInt(rest, "--listen", 10),
+                GetOption(rest, "--record"),
+                HasFlag(rest, "--keep-route"),
+                GetOptionInt(rest, "--timeout", 2000)),
+
             _ => UnknownCommand($"srx {action}")
         };
     }
@@ -1000,6 +1008,23 @@ public class Program
                                                                     （默认 800ms；0=按下立即回放；长按=等多久回放多慢）
                      selftest                                       回环自证：注入 F24→钩子捕获→回放 F7→事件断言
                                                                     （零设备零人工，CLI-first 验收路径）
+            srx      软件接收器（PC 直连键盘收语音；mSBC 解码→外源泵/桥/录制/延迟实测）
+                     scan [--duration 5]                          扫笔端广播（SunVote-R1*）
+                     connect --mac|--name                         建连 + svr1 特征核表
+                     receive --mac|--name [--out x.wav] [--sec 0] [--actions]
+                                                                  收流解码落 WAV（--actions 软件键鼠注入）
+                     amp --mac|--name [--volume 1.0] [--latency 40] [--actions]
+                                                                  外源泵扩音实时出声（AEC/ANS/带通同 audio passthrough）
+                     probe --mac|--name [--sec 12] [--out x.wav]  chirp 延迟实测（走表剖面+网格扫描+WAV 留档）
+                     bridge --mac|--name [--device 名片段] [--selftest]
+                                                                  虚拟麦克风桥（第三方软件从桥采集端收 R1 人声）
+                     batt --mac|--name                            0x41 电量查询（笔端未实现=在册预期）
+                     hid    基站 EP4 HID 直送 mSBC（08 号方案；须 test/hid 固件 DG_AUD_HID_ENABLE=1）
+                            [--device <名称/路径子串>]            无参=只列 EP4 台不动作
+                            [--route on|off]                      切入 HID 直送 / 切回 UAC（缺省=不路由只听）
+                            [--listen 10] [--record out.wav]      收流秒数（0=Ctrl+C）/ 解码 WAV 落盘
+                            [--timeout 2000] [--keep-route]       0x56 应答超时 / 收尾保持直送不切回
+                            u16 帧计数缺口自动插 7.5ms 静音；E0 看门狗=基站环溢出自动回 UAC（告警显式出）
                     identify | pair read/write/enter/factory/clear | ota | raw | status
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）
                     status [--monitor N]     0x53 状态快照（电量/设备状态，仅 USB 轨）+ 监听推送

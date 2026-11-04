@@ -111,8 +111,31 @@
             </StackPanel>
         </Border>
 
-        <!-- 连接控制（指挥官 11-02：MAC 手填改下拉选设备，扫描/连接分开；复用仪表盘已知笔端目录） -->
-        <Grid Grid.Row="1" Margin="0,0,0,8">
+        <!-- 连接控制（数据源行=08 号方案 M1：BLE 直连 | USB EP4 HID 直送；键盘行=指挥官 11-02：下拉选设备，扫描/连接分开） -->
+        <StackPanel Grid.Row="1" Margin="0,0,0,8">
+            <!-- 数据源：SelectedIndex 整数绑定（零转换器，GUI 坑册铁律） -->
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*" MinWidth="220"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="数据源：" VerticalAlignment="Center" Foreground="#555"/>
+                <ComboBox Grid.Column="1" ItemsSource="{Binding SourceOptions}"
+                          SelectedIndex="{Binding SelectedSourceIndex}"
+                          VerticalContentAlignment="Center"
+                          ToolTip="BLE 直连=键盘 GATT svr1 收流（现状流程）；USB EP4 HID 直送=基站 mSBC 60B 经 custom HID 64B 定长报告直达 PC（08 号方案，基站须烧 test/hid 固件 DG_AUD_HID_ENABLE=1；键动作/鼠标/电量不经基站转发，此路不可得）"/>
+            </Grid>
+            <!-- BLE 键盘行（HID 源时整行收起；DataTrigger 直接绑 bool，不涉转换器） -->
+            <Grid Margin="0,0,0,8">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsHidSource}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*" MinWidth="220"/>
@@ -178,7 +201,69 @@
             <Button Grid.Column="4" Content="断开" Command="{Binding DisconnectCommand}"
                     Style="{StaticResource ActionButton}"
                     IsEnabled="{Binding IsConnected}"/>
-        </Grid>
+            </Grid>
+
+            <!-- HID 腿：EP4 选择 + 0x56 路由（BLE 源时整块收起） -->
+            <StackPanel>
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsHidSource}" Value="True">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*" MinWidth="220"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="EP4：" VerticalAlignment="Center" Foreground="#555"/>
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding HidDevices}"
+                              SelectedItem="{Binding SelectedHidDevice}"
+                              VerticalContentAlignment="Center" Margin="0,0,8,0"
+                              ToolTip="基站 EP4 命令通道（UsagePage 0xFF02 无 RID；与仪表盘/device 命令同款枚举识别，只列 ★ 台）">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Display}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Grid.Column="2" Content="刷新" Command="{Binding RefreshHidDevicesCommand}" Margin="0,0,8,0"
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding CanRefreshHidDevices}"
+                            ToolTip="枚举基站 EP4 命令通道（0xFF02 无 RID 承载）"/>
+                    <Button Grid.Column="3" Content="连接" Command="{Binding HidConnectCommand}" Margin="0,0,8,0"
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding CanHidConnect}"
+                            ToolTip="打开选中 EP4 通道（读线程专用 Highest 优先级常驻——内核 HID ring 浅，丢报告第一责任）"/>
+                    <Button Grid.Column="4" Content="断开" Command="{Binding HidDisconnectCommand}"
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding CanHidDisconnect}"
+                            ToolTip="断开前路由着的先切回 UAC（保免驱常态）；OTA 会话启动也会自动 route=0 兜底"/>
+                </Grid>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="路由：" VerticalAlignment="Center" Foreground="#555"/>
+                    <Button Grid.Column="1" Content="切入 HID" Command="{Binding RouteHidOnCommand}" Margin="0,0,8,0"
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding CanRouteHidOn}"
+                            ToolTip="0x56 route=1：OK 应答经 ReadFile 到达=读线程在消费的活证明（08 号时序门）；之后 mSBC 音频报告开始到达"/>
+                    <Button Grid.Column="2" Content="切回 UAC" Command="{Binding RouteHidOffCommand}" Margin="0,0,8,0"
+                            Style="{StaticResource ActionButton}" IsEnabled="{Binding CanRouteHidOff}"
+                            ToolTip="0x56 route=0：恢复免驱 UAC 常态；E0 看门狗=基站环溢出自动回 UAC（状态列会显示）"/>
+                    <TextBlock Grid.Column="3" Text="状态：" VerticalAlignment="Center" Foreground="#555" Margin="8,0,4,0"/>
+                    <TextBlock Grid.Column="4" Text="{Binding HidStatusText}" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                </Grid>
+            </StackPanel>
+        </StackPanel>
 
         <!-- 延迟实测（chirp 回环；复用 SoftReceiverProbe，CLI srx probe 同一份逻辑） -->
         <GroupBox Grid.Row="2" Header="延迟实测（chirp 回环：扬声器播训练列 → 笔端麦拾取 → BLE 回传）" Padding="8" Margin="0,0,0,8">

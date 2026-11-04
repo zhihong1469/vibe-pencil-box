@@ -20,7 +20,8 @@ public class HidSharpTransport : IHidTransport
     private HidDevice? _device;
     private HidStream? _stream;
     private CancellationTokenSource? _readCts;
-    private Task? _readTask;
+    private Thread? _readThread;
+    private volatile bool _closing;
     private bool _isConnected;
     private bool _readErrorReported;
 
@@ -313,45 +314,68 @@ public class HidSharpTransport : IHidTransport
     private void StartReading()
     {
         _readCts = new CancellationTokenSource();
-        _readTask = Task.Run(() => ReadLoop(_readCts.Token));
-        _logger.LogDebug("HID read loop started");
+        _closing = false;
+        // 专用线程而非线程池（08 号 M1 加固）：内核 HID ring 浅，读线程被拖=驱动层丢报告（第一责任）；
+        // 同步 Read 让 Highest 优先级贯穿全程——async ReadAsync 的续延会掉回线程池，优先级只在首段有效
+        _readThread = new Thread(() => ReadLoop(_readCts.Token))
+        {
+            IsBackground = true,
+            Name = "PencilBox.HidRead",
+            Priority = ThreadPriority.Highest,
+        };
+        _readThread.Start();
+        _logger.LogDebug("HID read loop started（专用线程 Priority=Highest）");
     }
 
     private void StopReading()
     {
         _readCts?.Cancel();
 
+        // 同步 Read 不观察取消令牌：置关闭标志 + 拆流解除阻塞（挂起 Read 抛出即退出），再限时等线程收尾
+        _closing = true;
         try
         {
-            _readTask?.Wait(TimeSpan.FromSeconds(2));
+            _stream?.Dispose();
         }
-        catch (AggregateException)
+        catch (Exception ex)
         {
-            // ignore
+            _logger.LogWarning(ex, "Error disposing HID stream during stop");
+        }
+        _stream = null;
+
+        try
+        {
+            _readThread?.Join(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // 线程收尾异常不外抛
         }
 
         _readCts?.Dispose();
         _readCts = null;
-        _readTask = null;
+        _readThread = null;
         _logger.LogDebug("HID read loop stopped");
     }
 
-    private async Task ReadLoop(CancellationToken cancellationToken)
+    private void ReadLoop(CancellationToken cancellationToken)
     {
-        if (_stream == null || _device == null)
+        var stream = _stream;
+        var device = _device;
+        if (stream == null || device == null)
             return;
 
-        int reportLength = _device.MaxInputReportLength;
+        int reportLength = device.MaxInputReportLength;
         if (reportLength <= 0)
             reportLength = 64;
 
         var buffer = new byte[reportLength];
 
-        while (!cancellationToken.IsCancellationRequested && _isConnected)
+        while (!cancellationToken.IsCancellationRequested && !_closing && _isConnected)
         {
             try
             {
-                int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                int bytesRead = stream.Read(buffer, 0, buffer.Length);
 
                 if (bytesRead > 0)
                 {
@@ -382,13 +406,12 @@ public class HidSharpTransport : IHidTransport
                     ReportReceived?.Invoke(this, new HidReportReceivedEventArgs(reportId, data));
                 }
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
             catch (Exception ex)
             {
-                // 设备忙（如 BLE 扫描）或拔出时的读失败属瞬态，按"每次错误突发只提示一次"降噪
+                if (_closing || cancellationToken.IsCancellationRequested)
+                    break;
+
+                // 设备忙（如 BLE 扫描）/拔出/拆流时的读失败属瞬态，按"每次错误突发只提示一次"降噪
                 if (!_readErrorReported)
                 {
                     _readErrorReported = true;
@@ -399,7 +422,7 @@ public class HidSharpTransport : IHidTransport
                     _logger.LogDebug(ex, "Error reading HID report");
                 }
 
-                await Task.Delay(10, cancellationToken);
+                Thread.Sleep(10);
             }
         }
     }

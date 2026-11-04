@@ -20,6 +20,7 @@ using PencilBox.Core.Protocol.Company;
 using PencilBox.Core.Services;
 using PencilBox.Desktop.Helpers;
 using PencilBox.Infrastructure.Audio;
+using PencilBox.Infrastructure.Hid;
 using PencilBox.Infrastructure.Platform;
 
 namespace PencilBox.Desktop.ViewModels;
@@ -38,19 +39,23 @@ public partial class SoftReceiverViewModel : ObservableObject
     private readonly IBleCentral _central;
     private readonly IPenBindingService _penBinding;
     private readonly IAudioPassthrough _passthrough;
+    private readonly IHidTransport _hidTransport;
 
     private SoftReceiverSession? _session;
+    private SrxHidSession? _hidSession;
     private readonly Stopwatch _speakerClock = new();
     private DispatcherTimer? _speakerStatsTimer;
     private SrxKeyActionExecutor? _keyActions;
     /// <summary>最近一次 S1 档位（0xFF=尚未见过；开软件键鼠时预置基线防假切换）</summary>
     private byte _lastSwitchMode = 0xFF;
 
-    public SoftReceiverViewModel(IBleCentral central, IPenBindingService penBinding, IAudioPassthrough passthrough)
+    public SoftReceiverViewModel(IBleCentral central, IPenBindingService penBinding, IAudioPassthrough passthrough,
+        IHidTransport hidTransport)
     {
         _central = central;
         _penBinding = penBinding;
         _passthrough = passthrough;
+        _hidTransport = hidTransport;
         _ = LoadKnownPensAsync();   // 启动即载历史目录（仪表盘同款：BLE 扫描+串口 0x51 两源一份存储）
         _ = RefreshAudioTargetsAsync();   // 启动刷新输出/桥目标候选（PCM 路由可选化 8i）
     }
@@ -126,6 +131,264 @@ public partial class SoftReceiverViewModel : ObservableObject
             _passthrough.SetVolume((float)SoftwareGain);   // 扩音运行中即调即生效
     }
 
+    // ---- 数据源（08 号方案：BLE 直连 | USB EP4 HID 直送；SelectedIndex 绑定避开枚举转换器坑） ----
+    /// <summary>0=BLE 直连（默认，现状流程）；1=USB EP4 HID 直送（基站 mSBC 64B 定长报告直达 PC）。</summary>
+    public string[] SourceOptions { get; } = ["BLE 直连", "USB EP4 HID 直送"];
+
+    [NotifyPropertyChangedFor(nameof(IsHidSource))]
+    [NotifyPropertyChangedFor(nameof(CanScan))]     // 换源门控三处 Can* 同步刷新（坑册：多标志门控必反查）
+    [NotifyPropertyChangedFor(nameof(CanConnect))]
+    [ObservableProperty] private int _selectedSourceIndex;
+
+    /// <summary>当前是否处于 EP4 HID 直送数据源（决定键盘选择区让位/键鼠电量面板置灰）</summary>
+    public bool IsHidSource => SelectedSourceIndex == 1;
+
+    partial void OnSelectedSourceIndexChanged(int value)
+    {
+        // 互斥守卫：任一腿在连接时禁止换源（先断再切，防双会话抢事件）
+        if (value == 1 && (IsConnected || Session != null))
+        {
+            Log("先断开 BLE 连接再切 USB EP4 数据源");
+            SelectedSourceIndex = 0;
+            return;
+        }
+        if (value == 0 && IsHidConnected)
+        {
+            Log("先断开 EP4 HID 连接再切 BLE 数据源");
+            SelectedSourceIndex = 1;
+            return;
+        }
+        if (value == 1)
+        {
+            Log("数据源 → USB EP4 HID 直送（基站须烧 test/hid 固件；键动作/鼠标/电量此路不经基站转发，面板置灰）");
+            _ = RefreshHidDevicesAsync();
+        }
+        else
+        {
+            Log("数据源 → BLE 直连");
+        }
+    }
+
+    // ---- USB EP4 HID 直送（基站侧 mSBC 直传，08 号方案 M1） ----
+    /// <summary>EP4 下拉选项（枚举过滤 IsCommandChannel；显示=名称+路径尾巴，防多台混选）。</summary>
+    public sealed record HidDeviceOption(HidDeviceInfo Device, string Display);
+
+    public ObservableCollection<HidDeviceOption> HidDevices { get; } = [];
+    [NotifyPropertyChangedFor(nameof(CanHidConnect))]   // 选中台变化→连接按钮亮灭（坑册 10-19 读Hash永灰同族：门控漏挂）
+    [ObservableProperty] private HidDeviceOption? _selectedHidDevice;
+    [NotifyPropertyChangedFor(nameof(CanRefreshHidDevices))]
+    [NotifyPropertyChangedFor(nameof(CanHidConnect))]
+    [ObservableProperty] private bool _isHidConnected;
+    [NotifyPropertyChangedFor(nameof(CanRouteHidOn))]
+    [NotifyPropertyChangedFor(nameof(CanRouteHidOff))]
+    [ObservableProperty] private bool _isHidRouted;
+    [ObservableProperty] private string _hidStatusText = "UAC（未切入）";
+    [NotifyPropertyChangedFor(nameof(CanRefreshHidDevices))]
+    [NotifyPropertyChangedFor(nameof(CanHidConnect))]
+    [ObservableProperty] private bool _isHidBusy;
+    private long _hidFrameCount;
+
+    public bool CanRefreshHidDevices => IsHidSource && !IsHidBusy;
+    public bool CanHidConnect => IsHidSource && !IsHidBusy && !IsHidConnected && SelectedHidDevice != null;
+    public bool CanHidDisconnect => IsHidSource && !IsHidBusy && IsHidConnected;
+    public bool CanRouteHidOn => IsHidConnected && !IsHidRouted && !IsHidBusy;
+    public bool CanRouteHidOff => IsHidConnected && IsHidRouted && !IsHidBusy;
+
+    [RelayCommand]
+    private async Task RefreshHidDevicesAsync()
+    {
+        if (!CanRefreshHidDevices) return;
+        IsHidBusy = true;
+        try
+        {
+            var devices = await _hidTransport.EnumerateDevicesAsync();
+            var ep4s = devices.Where(d => d.IsCommandChannel).ToList();
+            var keep = SelectedHidDevice?.Device.DevicePath;
+            HidDevices.Clear();
+            foreach (var d in ep4s)
+            {
+                var tail = d.DevicePath.Replace("\\??\\", "");
+                var hash = tail.IndexOf('#');
+                var pathTail = hash >= 0 ? tail[(hash + 1)..] : tail;
+                var end = pathTail.IndexOf("#{");
+                HidDevices.Add(new HidDeviceOption(d, $"{d.ProductName}  {(end >= 0 ? pathTail[..end] : pathTail)}"));
+            }
+            SelectedHidDevice = HidDevices.FirstOrDefault(h =>
+                string.Equals(h.Device.DevicePath, keep, StringComparison.OrdinalIgnoreCase))
+                ?? HidDevices.FirstOrDefault();
+            Log(HidDevices.Count > 0
+                ? $"EP4 枚举：基站命令通道 {HidDevices.Count} 台（0xFF02 无 RID）"
+                : "EP4 枚举：未发现基站命令通道（基站未插/驱动未拉起？仪表盘 device 列表看全表）");
+        }
+        catch (Exception ex)
+        {
+            Log($"EP4 枚举失败：{ex.Message}");
+        }
+        finally
+        {
+            IsHidBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task HidConnectAsync()
+    {
+        if (!CanHidConnect || SelectedHidDevice == null) return;
+        var opt = SelectedHidDevice;
+        IsHidBusy = true;
+        try
+        {
+            if (!await _hidTransport.ConnectAsync(opt.Device.DevicePath))
+            {
+                Log($"EP4 连接失败：{opt.Device.ProductName}");
+                return;
+            }
+            if (!_hidTransport.IsNoReportIdDevice)
+            {
+                Log("EP4 连接的不是 0xFF02 无 RID 承载（识别异常），已断开");
+                await _hidTransport.DisconnectAsync();
+                return;
+            }
+            _hidSession = new SrxHidSession(_hidTransport, msg => Log(msg));
+            _hidSession.AudioFrameReady += OnHidAudioFrame;
+            _hidSession.WatchdogFallback += OnHidWatchdog;
+            _hidFrameCount = 0;
+            IsHidConnected = true;
+            IsHidRouted = false;
+            HidStatusText = "UAC（未切入）";
+            EnsureStatsTimer();
+            Log($"EP4 已连接：{opt.Device.ProductName}（读线程 Highest 常驻；「切入 HID」后音频报告开始到达）");
+        }
+        catch (Exception ex)
+        {
+            Log($"EP4 连接异常：{ex.Message}");
+            await CleanupHidAsync();
+        }
+        finally
+        {
+            IsHidBusy = false;
+        }
+    }
+
+    /// <summary>切入 HID 直送（0x56 route=1）：OK 应答经 ReadFile 到达=读线程消费活证明（时序门自然满足）。</summary>
+    [RelayCommand]
+    private async Task RouteHidOnAsync()
+    {
+        if (!CanRouteHidOn || _hidSession == null) return;
+        IsHidBusy = true;
+        try
+        {
+            var ok = await _hidSession.RouteToHidAsync();
+            IsHidRouted = ok && _hidSession.IsRoutedHid;
+            HidStatusText = IsHidRouted ? "HID 直送中" : "UAC（切入失败）";
+            Log(IsHidRouted
+                ? "已切入 HID 直送（mSBC 60B 经 EP4 64B 定长报告直达，u16 帧计数缺口自动补静音）"
+                : "切入失败（见事件流应答原因）——UAC 路不受影响");
+        }
+        catch (Exception ex)
+        {
+            Log($"切入异常：{ex.Message}");
+        }
+        finally
+        {
+            IsHidBusy = false;
+        }
+    }
+
+    /// <summary>切回 UAC 默认路（0x56 route=0）；幂等安全。</summary>
+    [RelayCommand]
+    private async Task RouteHidOffAsync()
+    {
+        if (!CanRouteHidOff || _hidSession == null) return;
+        IsHidBusy = true;
+        try
+        {
+            var ok = await _hidSession.RouteToUacAsync();
+            IsHidRouted = ok && _hidSession.IsRoutedHid;
+            HidStatusText = "UAC（已切回）";
+            Log(ok ? "已切回 UAC 默认路（免驱常态恢复）" : "切回无应答/拒绝——基站可能已自行回退或仍直送（拔插恢复）");
+        }
+        catch (Exception ex)
+        {
+            Log($"切回异常：{ex.Message}");
+        }
+        finally
+        {
+            IsHidBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task HidDisconnectAsync()
+    {
+        if (!CanHidDisconnect) return;
+        IsHidBusy = true;
+        try
+        {
+            await CleanupHidAsync();
+            Log("EP4 已断开");
+        }
+        finally
+        {
+            IsHidBusy = false;
+        }
+    }
+
+    /// <summary>HID 腿清场：路由着的先尽力切回 UAC（保免驱常态），再拆会话+断传输（传输层为共享单例，勿 Dispose）。</summary>
+    private async Task CleanupHidAsync()
+    {
+        var session = _hidSession;
+        _hidSession = null;
+        if (session != null)
+        {
+            if (session.IsRoutedHid)
+            {
+                try
+                {
+                    if (await session.RouteToUacAsync())
+                        Log("已切回 UAC 默认路");
+                    else
+                        Log("⚠ 切回 UAC 无应答——基站若仍直送，拔插恢复；OTA 会话启动会自动 route=0 兜底");
+                }
+                catch (Exception ex)
+                {
+                    Log($"切回 UAC 异常：{ex.Message}");
+                }
+            }
+            session.AudioFrameReady -= OnHidAudioFrame;
+            session.WatchdogFallback -= OnHidWatchdog;
+            session.Dispose();
+        }
+        try { await _hidTransport.DisconnectAsync(); } catch { /* 已断开容错 */ }
+        IsHidConnected = false;
+        IsHidRouted = false;
+        HidStatusText = "UAC（未切入）";
+        MaybeStopStatsTimer();
+    }
+
+    private void OnHidWatchdog(object? sender, EventArgs e)
+    {
+        MainThreadHelper.EnsureOnMainThread(() =>
+        {
+            IsHidRouted = false;
+            HidStatusText = "看门狗回退→UAC";
+        });
+    }
+
+    /// <summary>HID 解码帧统一消费（与 BLE 腿同漏斗）：录制照走 _recordLock；泵出/桥腿 M2 接。</summary>
+    private void OnHidAudioFrame(object? sender, SrxHidAudioFrame frame)
+    {
+        Interlocked.Increment(ref _hidFrameCount);
+        lock (_recordLock)
+        {
+            if (_recordWriter != null)
+            {
+                _recordWriter.Write(frame.Pcm);
+                _recordFrames++;
+            }
+        }
+    }
+
     // ---- 连接状态卡 ----
     [NotifyPropertyChangedFor(nameof(CanProbe))]
     [NotifyPropertyChangedFor(nameof(CanToggleSpeaker))]
@@ -150,11 +413,11 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanScan))]
     [ObservableProperty] private bool _isScanningDevices;
 
-    /// <summary>「扫描」可用 = 不忙且没在扫（已连接也允许扫，顺带刷新在场/RSSI）</summary>
-    public bool CanScan => !IsBusy && !IsScanningDevices;
+    /// <summary>「扫描」可用 = BLE 源、不忙且没在扫（已连接也允许扫，顺带刷新在场/RSSI）</summary>
+    public bool CanScan => !IsHidSource && !IsBusy && !IsScanningDevices;
 
-    /// <summary>「连接」可用 = 未连接、不忙、且下拉已选笔端</summary>
-    public bool CanConnect => !IsConnected && !IsBusy && SelectedPen != null;
+    /// <summary>「连接」可用 = BLE 源、未连接、不忙、且下拉已选笔端</summary>
+    public bool CanConnect => !IsHidSource && !IsConnected && !IsBusy && SelectedPen != null;
     [ObservableProperty] private string _batteryText = "—";
     [ObservableProperty] private string _chargeText = "—";
     [ObservableProperty] private string _devStateText = "—";
@@ -480,9 +743,18 @@ public partial class SoftReceiverViewModel : ObservableObject
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
-            var s = _passthrough.GetStats();
-            StatsText = $"泵出运行 {_speakerClock.Elapsed.TotalSeconds:F0}s：" +
-                        $"环深 {s.RingDepthMs:F0}ms / 估计延迟 {s.EstimatedLatencyMs:F0}ms / 欠载 {s.UnderrunEvents}";
+            if (IsHidSource && _hidSession != null)
+            {
+                // HID 直送心跳：解码帧计数 + 通道统计（音频/F5/缺口各路独立计数）
+                var frames = Interlocked.Read(ref _hidFrameCount);
+                StatsText = $"HID 直送：解码帧 {frames}（{frames * 7.5 / 1000.0:F1}s @7.5ms/帧）；{_hidSession.Summary()}";
+            }
+            else
+            {
+                var s = _passthrough.GetStats();
+                StatsText = $"泵出运行 {_speakerClock.Elapsed.TotalSeconds:F0}s：" +
+                            $"环深 {s.RingDepthMs:F0}ms / 估计延迟 {s.EstimatedLatencyMs:F0}ms / 欠载 {s.UnderrunEvents}";
+            }
             var b = _bridge;
             BridgeInfoText = b == null ? "—" :
                 $"环深 {b.RingDepthMs:F0}ms / 泵入 {b.PumpedSamples / 16000.0:F1}s / 欠载块 {b.UnderrunBlocks}";
@@ -498,7 +770,7 @@ public partial class SoftReceiverViewModel : ObservableObject
 
     private void MaybeStopStatsTimer()
     {
-        if (!IsSpeakerOn && _bridge == null)
+        if (!IsSpeakerOn && _bridge == null && !(IsHidSource && IsHidConnected))
             _speakerStatsTimer?.Stop();
     }
 
@@ -724,11 +996,13 @@ public partial class SoftReceiverViewModel : ObservableObject
             StopRecord();
             return;
         }
-        if (!IsConnected || Session == null)
+        if (!IsConnected && !IsHidConnected)
         {
-            Log("先连接键盘再录制");
+            Log("先连接键盘（或连接 EP4 直送）再录制");
             return;
         }
+        if (IsConnected && Session == null)
+            return;
         var dir = Path.Combine(AppContext.BaseDirectory, "srx_record");
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, $"srx_record_{DateTime.Now:yyyyMMdd_HHmmss}.wav");

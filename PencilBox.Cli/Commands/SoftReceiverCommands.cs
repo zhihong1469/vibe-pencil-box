@@ -15,6 +15,7 @@ using PencilBox.Core.Models;
 using PencilBox.Core.Protocol;
 using PencilBox.Core.Services;
 using PencilBox.Infrastructure.Audio;
+using PencilBox.Infrastructure.Hid;
 using PencilBox.Infrastructure.Platform;
 
 namespace PencilBox.Cli.Commands;
@@ -22,7 +23,8 @@ namespace PencilBox.Cli.Commands;
 /// <summary>
 /// 软件接收器命令面（形态③：PC 直连键盘收语音，绕过硬件基站）。
 /// `srx scan` 找广播中的笔端 → `srx connect` 建连+svr1 核表 → `srx receive` 收流解码落 WAV
-/// → `srx amp` 解码 PCM 泵进扩音引擎实时出声 → `srx batt` 查电量验下行/应答链。
+/// → `srx amp` 解码 PCM 泵进扩音引擎实时出声 → `srx batt` 查电量验下行/应答链
+/// → `srx hid` 基站 EP4 HID 直送 mSBC（08 号方案，绕 UAC 引擎）。
 /// 会话编排/解析/解码在 Core（<see cref="SoftReceiverSession"/>），
 /// 本类只做目标解析、WAV 落盘、扩音泵接驳与文案。
 /// 背景：链路上"基站蓄水池+USB"段的延迟冗余可由直连绕过（净收益以 chirp A/B 实测为准）；
@@ -33,12 +35,15 @@ public class SoftReceiverCommands
     private readonly IBleCentral _central;
     private readonly IBleScanner _scanner;
     private readonly IAudioPassthrough _passthrough;
+    private readonly IHidTransport _hidTransport;
 
-    public SoftReceiverCommands(IBleCentral central, IBleScanner scanner, IAudioPassthrough passthrough)
+    public SoftReceiverCommands(IBleCentral central, IBleScanner scanner, IAudioPassthrough passthrough,
+        IHidTransport hidTransport)
     {
         _central = central;
         _scanner = scanner;
         _passthrough = passthrough;
+        _hidTransport = hidTransport;
     }
 
     /// <summary>`srx scan`：扫描广播中的 SunVote 笔端（软件接收器候选目标）。</summary>
@@ -405,6 +410,179 @@ public class SoftReceiverCommands
         ConsoleFormatter.Info($"[SRX-PROBE] 解码流 WAV → {report.WavPath}（{report.TotalPcmBytes / 32000.0:F1}s @16k mono；" +
                               "发射时刻自 playT0 起第 k·750ms——离线可做绝对锚 v2 标定）");
         return report.Scan.DetectedCount > 0 ? 0 : 3;
+    }
+
+    /// <summary>
+    /// `srx hid`：基站 EP4 HID 直送 mSBC 通道（08 号方案 M1，实验号 0x56）。
+    /// 免驱 UAC 路被砍的替代轨：mSBC 60B 帧经 custom HID 64B 定长直传 PC，本地解码
+    /// （u16 帧计数缺口插静音），预期砍掉设备蓄水池+UAC 引擎税（−50~90ms，实测为准）。
+    /// 无 --device：列出基站 EP4 通道（★）即退；给 --device <名称/路径子串> 后：
+    /// 连接 → --route on 切入 HID 直送（E1 OK 应答即读线程消费活证明）→ 收流
+    /// --listen 秒（0=Ctrl+C）→ 收尾自动切回 UAC（--keep-route 保持，仅排障用）。
+    /// --record <路径> 同时落 16k/16bit/mono WAV（解码 PCM，含补的静音帧）。
+    /// 注意：本固件须烧 test/hid 构建（DG_AUD_HID_ENABLE），否则 STATUS=0xFF 明示无能力。
+    /// </summary>
+    public async Task<int> HidAsync(string? device, string? route, int listenSec,
+        string? recordPath, bool keepRoute, int timeoutMs)
+    {
+        // 1) 枚举 + 选台（只认 0xFF02 EP4 命令通道；device CLI 同款 ★ 识别）
+        var devices = await _hidTransport.EnumerateDevicesAsync();
+        var ep4s = devices.Where(d => d.IsCommandChannel).ToList();
+        ConsoleFormatter.Info($"[SRX-HID] HID 设备 {devices.Count} 台，其中基站 EP4 命令通道（0xFF02 无 RID）{ep4s.Count} 台：");
+        foreach (var d in ep4s)
+            ConsoleFormatter.Info($"  ★ {d.ProductName}  {TailPath(d.DevicePath)}");
+        if (ep4s.Count == 0)
+        {
+            ConsoleFormatter.Warn("未发现基站 EP4 通道（基站未插/驱动未拉起？device scan 看全表）");
+            return 1;
+        }
+
+        HidDeviceInfo? target;
+        if (string.IsNullOrWhiteSpace(device))
+        {
+            ConsoleFormatter.Info("提示：--device <名称/路径子串> 选台切入（无参只列台不动作）");
+            return 0;
+        }
+        var hits = ep4s.Where(d =>
+            d.ProductName.Contains(device, StringComparison.OrdinalIgnoreCase) ||
+            d.DevicePath.Contains(device, StringComparison.OrdinalIgnoreCase) ||
+            d.DevicePath.Contains(device.Replace("#", "\\"), StringComparison.OrdinalIgnoreCase)).ToList();
+        if (hits.Count == 0)
+        {
+            ConsoleFormatter.Error($"\"{device}\" 无匹配 EP4 通道（按名称或路径子串匹配）");
+            return 1;
+        }
+        if (hits.Count > 1)
+        {
+            ConsoleFormatter.Error($"\"{device}\" 命中 {hits.Count} 台，禁止静默取第一台：\n  " +
+                string.Join("\n  ", hits.Select(d => d.ProductName + "  " + TailPath(d.DevicePath))));
+            return 1;
+        }
+        target = hits[0];
+
+        // 2) 连接 + 会话
+        if (!await _hidTransport.ConnectAsync(target.DevicePath))
+        {
+            ConsoleFormatter.Error($"连接 EP4 失败：{target.ProductName}");
+            return 1;
+        }
+        if (!_hidTransport.IsNoReportIdDevice)
+        {
+            ConsoleFormatter.Error("连接的不是 0xFF02 无 RID 承载（识别异常），退出");
+            await _hidTransport.DisconnectAsync();
+            return 1;
+        }
+        ConsoleFormatter.Success($"已连接 EP4：{target.ProductName}（{TailPath(target.DevicePath)}）");
+
+        var session = new SrxHidSession(_hidTransport, msg => ConsoleFormatter.Info(msg));
+        var routeIssued = false;
+        try
+        {
+            session.WatchdogFallback += (_, _) =>
+                ConsoleFormatter.Warn("[SRX-HID] 已回 UAC：后续音频报告将停止（重连后重试 route on）");
+
+            // 3) 路由（on=切入 HID / off=切回 UAC / 缺省=不路由只听）
+            if (route == "on")
+            {
+                if (!await session.RouteToHidAsync(timeoutMs))
+                {
+                    ConsoleFormatter.Error("切入 HID 直送失败（见上行应答原因）——UAC 路不受影响");
+                    return 1;
+                }
+                routeIssued = true;
+            }
+            else if (route == "off")
+            {
+                if (!await session.RouteToUacAsync(timeoutMs))
+                {
+                    ConsoleFormatter.Error("切回 UAC 失败（无应答/拒绝）——基站可能仍在 HID 路或已自行回退");
+                    return 1;
+                }
+            }
+            else if (route != null)
+            {
+                ConsoleFormatter.Error($"--route 只认 on|off，收到 \"{route}\"");
+                return 1;
+            }
+
+            // 4) 收流统计（+ 可选 WAV 落盘；事件在 HID 读线程，写入加锁）
+            var waveFormat = new WaveFormat(MsbcDecoder.SampleRate, 16, 1);
+            long frameCount = 0;
+            using var cts = new CancellationTokenSource();
+            if (listenSec > 0)
+                cts.CancelAfter(TimeSpan.FromSeconds(listenSec));
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+            if (recordPath != null)
+            {
+                using (var writer = new WaveFileWriter(recordPath, waveFormat))
+                {
+                    var writeLock = new object();
+                    session.AudioFrameReady += (_, f) =>
+                    {
+                        Interlocked.Increment(ref frameCount);
+                        lock (writeLock)
+                            writer.Write(f.Pcm, 0, f.Pcm.Length);
+                    };
+                    await ListenAsync(session, () => Interlocked.Read(ref frameCount), cts, listenSec);
+                }
+            }
+            else
+            {
+                session.AudioFrameReady += (_, _) => Interlocked.Increment(ref frameCount);
+                await ListenAsync(session, () => Interlocked.Read(ref frameCount), cts, listenSec);
+            }
+
+            ConsoleFormatter.Success($"收流完成：解码帧 {Interlocked.Read(ref frameCount)}（{Interlocked.Read(ref frameCount) * 7.5 / 1000:F1}s 音频 @7.5ms/帧）");
+            if (recordPath != null)
+                ConsoleFormatter.Info($"[SRX-HID] WAV → {Path.GetFullPath(recordPath)}");
+        }
+        finally
+        {
+            // 5) 收尾：除非 --keep-route，切回 UAC 默认路（OTA/免驱常态不受影响）
+            if (routeIssued && !keepRoute)
+            {
+                if (await session.RouteToUacAsync(timeoutMs))
+                    ConsoleFormatter.Info("[SRX-HID] 已切回 UAC 默认路");
+                else
+                    ConsoleFormatter.Warn("[SRX-HID] 切回 UAC 无应答——若基站仍直送，拔插恢复；OTA 会话启动会自动 route=0 兜底");
+            }
+            session.Dispose();
+            await _hidTransport.DisconnectAsync();
+            ConsoleFormatter.Info("[SRX-HID] " + session.Summary());
+            ConsoleFormatter.Info("已断开 EP4");
+        }
+        return 0;
+    }
+
+    /// <summary>hid 收流主等待：心跳 2s 出实时计数（listenSec=0 走 Ctrl+C）。</summary>
+    private static async Task ListenAsync(SrxHidSession session, Func<long> getFrameCount,
+        CancellationTokenSource cts, int listenSec)
+    {
+        ConsoleFormatter.Info($"[SRX-HID] 收流中（{(listenSec > 0 ? $"{listenSec}s 后" : "Ctrl+C")}收尾）…");
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try { await Task.Delay(2000, cts.Token); }
+                catch (OperationCanceledException) { break; }
+                var ch = session.ChannelStats;
+                ConsoleFormatter.Info(
+                    $"[SRX-HID] {clock.Elapsed.TotalSeconds:F0}s 解码帧 {getFrameCount()}；{ch}");
+            }
+        }
+        catch (OperationCanceledException) { /* Ctrl+C 正常收尾 */ }
+    }
+
+    /// <summary>设备路径尾巴（\??\USB#VID_2F70&PID_EA11#...#{guid} → 中段可读部分）。</summary>
+    private static string TailPath(string devicePath)
+    {
+        var s = devicePath.Replace("\\??\\", "");
+        var hash = s.IndexOf('#');
+        var tail = hash >= 0 ? s[(hash + 1)..] : s;
+        var end = tail.IndexOf("#{");
+        return end >= 0 ? tail[..end] : tail;
     }
 
     /// <summary>`srx batt`：查电量（0x41 下行 + RSP 应答，验软件接收器形态的命令/应答链）。</summary>
