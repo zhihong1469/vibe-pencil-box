@@ -17,7 +17,7 @@ using PencilBox.Core.Services;
 namespace PencilBox.Infrastructure.Audio;
 
 /// <summary>
-/// WASAPI 扩音直通引擎：采集（事件驱动共享模式）→ 零前视格式转换 → 环形缓冲（丢最旧）
+/// WASAPI 扩音直通引擎：采集（事件驱动；一键独占=ExclusiveCapturePump 优先，失败自动回退共享级联）→ 零前视格式转换 → 环形缓冲（丢最旧）
 /// → 渲染拉取（事件驱动，欠载补静音）。与录音路径（NAudioAudioCapture）完全独立。
 /// 附加延迟 ≈ 采集引擎周期(~10ms) + 环形深度(RingDepthMs，活量) + 渲染缓冲(RenderLatencyMs)。
 /// </summary>
@@ -28,6 +28,9 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
     private readonly object _gate = new();
 
     private WasapiCapture? _capture;
+    private ExclusiveCapturePump? _exclusivePump;   // 一键独占采集（2026-11-05）：成位时替代 _capture
+    private bool _captureExclusive;                 // 本次会话实际是否独占
+    private string _captureModeNote = string.Empty; // 模式说明/回退原因（对账统计 CaptureModeNote）
     private WasapiOut? _output;
     private MMDevice? _captureDevice;
     private MMDevice? _renderDevice;
@@ -240,11 +243,15 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             _logger.LogInformation("桥接副汇已启动: {Device}, 缓冲 {Ms}ms", _bridgeName, bridgeLatency);
         }
 
-        // 3. 采集：级联尝试（请求格式 → 采集端混音格式 × 事件同步 → 睡眠同步）。
+        // 3. 采集：一键独占优先（2026-11-05），失败自动回退共享级联——独占不可用是常态回退不是错误
+        //（独占=独占端点，与同端点任何流互斥；UAC 麦原生 16k 时独占可绕开混音器吃掉一段引擎税）。
+        // 3b. 共享级联尝试（请求格式 → 采集端混音格式 × 事件同步 → 睡眠同步）。
         // 实机坑：USB Audio 1.0 + 事件同步 + 非混音格式 → AudioClient.Initialize 阻塞 ~30s 后
         // E_UNEXPECTED(0x8000FFFF)；一旦出现该码，跳过剩余事件同步尝试，直落睡眠同步。
         // 外源模式整段跳过：采集格式固定 16k/16bit/1ch（mSBC 解码定参，泵入方保证）。
         WaveFormat inFormat;
+        _captureExclusive = false;
+        _captureModeNote = string.Empty;
         if (options.ExternalSource)
         {
             inFormat = new WaveFormat(16000, 16, 1);
@@ -259,8 +266,16 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             captureMix = captureClient.MixFormat;
         }
 
-        WasapiCapture? capture = null;
         inFormat = requested;
+
+        // 3a. 一键独占（2026-11-05）：协商+起泵；任何失败只记因不抛——回退下方共享级联。
+        // 独占=独占端点：与同端点任何流互斥（含本引擎自己的另一条流），被占是常态回退不是错误。
+        if (options.ExclusiveCapture)
+            TryStartExclusiveCapture(_captureDevice!, requested);
+
+        if (!_captureExclusive)
+        {
+        WasapiCapture? capture = null;
         var sawCatastrophic = false;
         Exception? lastError = null;
 
@@ -302,9 +317,10 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
 
         if (capture == null)
             throw new NotSupportedException(
-                $"采集流打开失败（已尝试 请求格式/混音格式 × 事件/睡眠同步）: {_captureName}", lastError);
+                $"采集流打开失败（已尝试 独占 + 请求格式/混音格式 × 事件/睡眠同步）: {_captureName}", lastError);
 
         _capture = capture;
+        }
         }
 
         _inFormat = inFormat;
@@ -421,6 +437,59 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
     }
 
     /// <summary>
+    /// 一键独占尝试（2026-11-05）：候选协商（请求格式优先+t7 回退表去重）→ 起独占泵。
+    /// 任何失败只记 <c>_captureModeNote</c> 不抛——调用方按 <c>_captureExclusive</c> 决定是否走共享级联。
+    /// 探测/初始化被占（0x8889000A）=常态回退；协商成功但 Initialize 被拒=设备态竞态，同样回退。
+    /// </summary>
+    private void TryStartExclusiveCapture(MMDevice device, WaveFormat requested)
+    {
+        var busy = false;
+        var chosen = ExclusiveCapturePump.SelectFormat(requested, ExclusiveCaptureEngine.CandidateFormats, f =>
+        {
+            try
+            {
+                using var probe = device.AudioClient;
+                return probe.IsFormatSupported(AudioClientShareMode.Exclusive, f);
+            }
+            catch (COMException cex)
+            {
+                if (cex.HResult == ExclusiveCapturePump.AudclntEDeviceInUse)
+                    busy = true;
+                return false;   // 探测口失败：该格式视为不可用；被占归因走下面统一口径
+            }
+        }, out var reason);
+        if (busy)
+            reason = "端点被占用（独占与同端点任何流互斥）——先停掉其他用麦的进程/流";
+        if (chosen == null)
+        {
+            _captureModeNote = $"共享（独占回退：{reason}）";
+            _logger.LogWarning("独占采集不可用：{Reason}，回退共享级联", reason);
+            return;
+        }
+
+        var pump = new ExclusiveCapturePump();
+        pump.DataAvailable += OnCaptureDataAvailable;
+        pump.RecordingStopped += OnCaptureStopped;
+        try
+        {
+            pump.Start(device, chosen);
+            _exclusivePump = pump;
+            _captureExclusive = true;
+            _captureModeNote = "独占";
+            _inFormat = chosen;
+            _logger.LogInformation("独占采集成位: {Format}（绕开混音器，采集周期 ~10ms）", chosen);
+        }
+        catch (Exception ex)
+        {
+            pump.DataAvailable -= OnCaptureDataAvailable;
+            pump.RecordingStopped -= OnCaptureStopped;
+            pump.Dispose();
+            _captureModeNote = $"共享（独占回退：{ExclusiveCapturePump.DescribeExclusiveFailure(ex)}）";
+            _logger.LogWarning(ex, "独占采集初始化失败（协商已成、启动被拒），回退共享级联");
+        }
+    }
+
+    /// <summary>
     /// 启动失败候选的收尾（非阻塞）：事件先解挂，Stop/Dispose 踢后台。
     /// NAudio StopRecording 内部 Join 采集线程；候选若已 StartRecording，其线程可能睡在
     /// 设备事件 WaitOne(∞)（管道型虚拟设备无进料不发事件，11-03 真机死机实证）——同步收尾=UI 卡死。
@@ -463,6 +532,7 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
     private void CleanupStreams()
     {
         WasapiCapture? capture;
+        ExclusiveCapturePump? pump;
         WasapiOut? output;
         WasapiOut? bridgeOut;
         MMDevice? captureDevice;
@@ -470,6 +540,7 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
         lock (_gate)
         {
             capture = _capture; _capture = null;
+            pump = _exclusivePump; _exclusivePump = null;
             output = _output; _output = null;
             bridgeOut = _bridgeOut; _bridgeOut = null;
             _bridgeRing = null;
@@ -482,12 +553,19 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             renderDevice = _renderDevice; _renderDevice = null;
         }
 
-        if (capture == null && output == null && bridgeOut == null) return;
+        if (capture == null && pump == null && output == null && bridgeOut == null) return;
 
         _ = Task.Run(() =>
         {
             try
             {
+                if (pump != null)
+                {
+                    pump.DataAvailable -= OnCaptureDataAvailable;
+                    pump.RecordingStopped -= OnCaptureStopped;
+                    try { pump.Stop(); } catch (Exception ex) { _logger.LogWarning(ex, "停止独占采集异常"); }
+                    pump.Dispose();
+                }
                 if (capture != null)
                 {
                     capture.DataAvailable -= OnCaptureDataAvailable;
@@ -884,7 +962,9 @@ public sealed class WasapiPassthroughEngine : IAudioPassthrough
             NotchConfig = _notchHzState.Length == 0 ? string.Empty
                 : $"{string.Join(",", _notchHzState)}Hz Q{_notchQState}",
             EstimatedLatencyMs = EstimateBoxLatencyMs(),
-            AecGateBypassMs = Interlocked.Read(ref _gateBypassFrames) * 10
+            AecGateBypassMs = Interlocked.Read(ref _gateBypassFrames) * 10,
+            CaptureExclusive = _captureExclusive,
+            CaptureModeNote = _captureModeNote
         };
     }
 

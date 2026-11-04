@@ -520,7 +520,7 @@ public class AudioCommands
         int rate, int latencyMs, float volume, int duration, bool aec = true, bool ans = true, bool afc = false,
         int aecSuppress = 0, int ansSuppress = 0, bool aecGate = false, string? recordOut = null,
         int hpfHz = 80, int lpfHz = 0, string? bridgeDevice = null, int bridgeLatencyMs = 150, bool recordBridge = false,
-        string? notch = null, int notchQ = 25)
+        string? notch = null, int notchQ = 25, bool exclusive = false)
     {
         var captureDevices = await _passthrough.GetCaptureDevicesAsync();
         var renderDevices = await _passthrough.GetRenderDevicesAsync();
@@ -552,6 +552,7 @@ public class AudioCommands
                               (aecSuppress > 0 ? $"（手动 {aecSuppress}dB）" : "") +
                               (ansSuppress > 0 ? $"（手动 {ansSuppress}dB）" : "") +
                               (aecGate ? "；AEC条件触发开（参考静音旁路）" : "") +
+                              (exclusive ? "；采集=独占请求（不可用自动回退共享并记因）" : "") +
                               (bridge != null ? $"；桥接副汇 → [{bridge.FriendlyName}]（供其他软件当已降噪麦克风）" : "") +
                               $"；实时统计每 500ms 刷新，Ctrl+C 停止。");
         if (duration > 0)
@@ -590,7 +591,8 @@ public class AudioCommands
                 NotchCentersHz = notchHz,
                 NotchQ = notchQ,
                 BridgeDeviceId = bridge?.DeviceId,
-                BridgeLatencyMs = bridgeLatencyMs
+                BridgeLatencyMs = bridgeLatencyMs,
+                ExclusiveCapture = exclusive
             });
 
             try
@@ -632,7 +634,7 @@ public class AudioCommands
             LimiterGain = stats.LimiterGain < 0.995f ? $"{stats.LimiterGain:F2}（已触顶，加音量不再变大）" : "1.00（未触发）",
             EstimatedLatency = $"{stats.EstimatedLatencyMs:F0}ms（Box 段；设备端剩余预算 = 总目标 − 此值）",
             Dsp = $"AEC偏移 {stats.AecOffsetMs:F1}ms / 单帧最大耗时 {stats.DspMaxMs:F2}ms / 超帧 {stats.DspOverruns}",
-            Capture = $"{stats.CaptureDevice} ({stats.CaptureFormat})",
+            Capture = $"{stats.CaptureDevice} ({stats.CaptureFormat}{(stats.CaptureModeNote.Length > 0 ? $"，{stats.CaptureModeNote}" : "")})",
             Render = $"{stats.RenderDevice} ({stats.RenderFormat})",
             Bridge = stats.BridgeDevice.Length == 0 ? "关" : $"{stats.BridgeDevice}（丢弃 {stats.BridgeDroppedBytes}B）",
             Notch = stats.NotchConfig.Length == 0 ? "关" : stats.NotchConfig,

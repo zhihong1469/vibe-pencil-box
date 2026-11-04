@@ -194,6 +194,14 @@ public partial class PassthroughPageViewModel : ObservableObject
         if (IsRunning) _passthrough.SetAecGateEnabled(value);
     }
 
+    /// <summary>独占采集（一键，2026-11-05）：绕开系统混音器直取麦克风，采集段延迟更低。启动时生效。
+    /// 真机语义：独占会接管端点（同端点其他在跑的录音流被顶掉）；设备不支持/被占用时自动回退共享并记因（统计行可见）。</summary>
+    [ObservableProperty]
+    private bool _isExclusiveCapture;
+
+    /// <summary>独占采集开关可用性：扩音运行/启动中不可改（随 options 在启动时生效）。</summary>
+    public bool CanToggleExclusiveCapture => !IsRunning;
+
     [ObservableProperty]
     private int _renderLatencyMs = 40;
 
@@ -260,6 +268,7 @@ public partial class PassthroughPageViewModel : ObservableObject
                 SampleRate = 16000,
                 Channels = 1,
                 RenderLatencyMs = RenderLatencyMs,
+                ExclusiveCapture = IsExclusiveCapture,
                 Volume = (float)Math.Clamp(Volume, 0.0, PassthroughStartOptions.MaxVolume),
                 EnableAec = AecEnabled,
                 EnableAns = AnsEnabled,
@@ -377,6 +386,7 @@ public partial class PassthroughPageViewModel : ObservableObject
             State = state;
             OnPropertyChanged(nameof(IsIdleOrStopped));
             OnPropertyChanged(nameof(IsRunning));
+            OnPropertyChanged(nameof(CanToggleExclusiveCapture));
             if (state == AudioPassthroughState.Stopped)
             {
                 CurrentLevel = 0;
@@ -394,9 +404,10 @@ public partial class PassthroughPageViewModel : ObservableObject
             var gate = s.AecGateBypassMs > 0 ? $" | 门控旁路 {s.AecGateBypassMs:F0}ms" : "";
             var bridge = s.BridgeDevice.Length == 0 ? "" : $" | 桥接 {s.BridgeDevice}（丢弃 {s.BridgeDroppedBytes}B）";
             var notch = s.NotchConfig.Length == 0 ? "" : $" | 定点 {s.NotchConfig}";
+            var capMode = s.CaptureModeNote.Length == 0 ? "" : $" | 采集{s.CaptureModeNote}";
             StatsSummary = $"时长 {s.ElapsedSeconds,6:F1}s | 环形均值 {s.RingDepthAvgMs,6:F1}ms / 峰值 {s.RingDepthMaxMs,6:F1}ms | " +
                            $"欠载 {s.UnderrunEvents} | 丢弃 {s.DroppedBytes}B | {s.CaptureFormat} → {s.RenderFormat} | 缓冲 {s.RenderLatencyMs}ms | " +
-                           $"AEC偏移 {s.AecOffsetMs:F1}ms / DSP最大 {s.DspMaxMs:F2}ms{lim}{gate}{bridge}{notch} | Box段延迟 ~{s.EstimatedLatencyMs:F0}ms";
+                           $"AEC偏移 {s.AecOffsetMs:F1}ms / DSP最大 {s.DspMaxMs:F2}ms{lim}{gate}{bridge}{notch}{capMode} | Box段延迟 ~{s.EstimatedLatencyMs:F0}ms";
         });
     }
 }

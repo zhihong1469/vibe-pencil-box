@@ -131,8 +131,12 @@ public static class ExclusiveCaptureEngine
         }
     }
 
-    /// <summary>独占+事件初始化：periodicity 必须等于 bufferDuration；0x88890019=非对齐，按 10ms 基准对齐重试</summary>
-    private static void InitializeExclusive(AudioClient client, WaveFormat format)
+    /// <summary>
+    /// 独占+事件初始化（2026-11-05 起 public：<see cref="ExclusiveCapturePump"/> 流式泵复用同一配方）：
+    /// periodicity 必须等于 bufferDuration；0x88890019=非对齐，按 10ms 基准对齐重试。
+    /// 设备被占/格式被拒抛 COMException，由调用方归因。
+    /// </summary>
+    public static void InitializeExclusive(AudioClient client, WaveFormat format)
     {
         const int audclntEBufferSizeNotAligned = unchecked((int)0x88890019);
         foreach (var period in new[] { Period10Ms, Period20Ms })

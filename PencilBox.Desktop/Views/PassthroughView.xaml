@@ -64,6 +64,9 @@
                             VerticalAlignment="Center"
                             ToolTip="扬声器播放端缓冲（ms）：引擎附加延迟的主要来源。越小延迟越低，但欠载（卡顿）越敏感；建议 15~40ms。"/>
                     <TextBlock Text="{Binding RenderLatencyMs, StringFormat={}{0}ms}" Width="52" VerticalAlignment="Center"/>
+                    <CheckBox Content="独占采集" IsChecked="{Binding IsExclusiveCapture, Mode=TwoWay}"
+                              IsEnabled="{Binding CanToggleExclusiveCapture}" VerticalAlignment="Center" Margin="16,0,0,0"
+                              ToolTip="绕开系统混音器直取麦克风，采集段延迟更低。注意：独占会接管端点——同端点其他在跑的录音流会被顶掉；设备不支持或被占用时自动回退共享，原因见统计行。扩音运行中不可改，下次开启生效。"/>
                 </StackPanel>
             </Grid>
         </GroupBox>

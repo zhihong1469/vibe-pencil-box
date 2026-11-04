@@ -102,6 +102,13 @@ public sealed class PassthroughStartOptions
     /// 泵入方须保证 16kHz/16bit/单声道（mSBC 解码定参）；处理链与渲染侧与采集模式完全共用。
     /// </summary>
     public bool ExternalSource { get; set; }
+
+    /// <summary>
+    /// 独占采集请求（一键独占，2026-11-05）：绕开 Windows 混音器直取设备原生格式，
+    /// 采集段延迟更低。独占=独占端点（与同端点任何流互斥）；协商失败/端点被占时
+    /// <b>自动回退共享</b>并记录原因（<see cref="AudioPassthroughStats.CaptureModeNote"/>），绝不因独占失败拒启。
+    /// </summary>
+    public bool ExclusiveCapture { get; set; }
 }
 
 /// <summary>
@@ -192,4 +199,13 @@ public sealed class AudioPassthroughStats
 
     /// <summary>AEC 条件触发累计旁路时长（ms；0 = 门控未启用或参考从未静音满保持窗）</summary>
     public long AecGateBypassMs { get; set; }
+
+    /// <summary>本次会话采集是否实际走独占模式（请求了独占但回退共享时为 false）</summary>
+    public bool CaptureExclusive { get; set; }
+
+    /// <summary>
+    /// 采集模式说明（一键独占的对账字段）："独占" / "共享" /
+    /// "共享（独占回退：&lt;原因&gt;）"；空=外源泵（无本地采集）。
+    /// </summary>
+    public string CaptureModeNote { get; set; } = string.Empty;
 }
