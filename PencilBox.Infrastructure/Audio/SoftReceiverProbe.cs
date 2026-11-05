@@ -81,12 +81,38 @@ public sealed class SoftReceiverProbe : IDisposable
 
     /// <summary>
     /// 开播 chirp 训练列并挂帧采集（16k mono → 端点混音格式重采样/声道转换）。
+    /// <paramref name="renderSelector"/>=chirp 发射扬声器（2026-11-05 指挥官：默认扬声器用户不可见
+    /// ——耳机口/VB-Cable 常抢默认导致"实测没声音"）；null/空=系统默认，否则按设备 ID 或友好名
+    /// **唯一子串**命中（多命中/无命中抛错列候选，不静默取第一台）。
     /// 抛出异常（默认渲染设备缺失/WasapiOut 初始化失败等）时未开播未挂钩，可安全丢弃。
     /// </summary>
-    public void Start(float volume)
+    public void Start(float volume, string? renderSelector = null)
     {
         using (var enumerator = new MMDeviceEnumerator())
-            _renderDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        {
+            if (string.IsNullOrWhiteSpace(renderSelector))
+            {
+                _renderDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            }
+            else
+            {
+                var hits = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                    .Where(d => d.ID.Contains(renderSelector, StringComparison.OrdinalIgnoreCase) ||
+                                d.FriendlyName.Contains(renderSelector, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (hits.Count == 0)
+                {
+                    var names = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                        .Select(d => d.FriendlyName);
+                    throw new InvalidOperationException(
+                        $"无匹配的发射扬声器 \"{renderSelector}\"（活动播放设备：{string.Join("；", names)}）");
+                }
+                if (hits.Count > 1)
+                    throw new InvalidOperationException(
+                        $"发射扬声器 \"{renderSelector}\" 命中 {hits.Count} 台，禁止静默取第一台：{string.Join("；", hits.Select(d => d.FriendlyName))}");
+                _renderDevice = hits[0];
+            }
+        }
         RenderDeviceName = _renderDevice.FriendlyName;
         var chirpSource = new ChirpTrainSource();
         var mixFormat = _renderDevice.AudioClient.MixFormat;

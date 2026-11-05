@@ -367,7 +367,8 @@ public class Program
             "probe" => await cmd.ProbeAsync(
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
                 GetOptionInt(rest, "--sec", 12), GetOption(rest, "--out"),
-                ParseVolume(GetOption(rest, "--volume"))),
+                ParseVolume(GetOption(rest, "--volume")),
+                GetOption(rest, "--spk")),               // chirp 发射扬声器（ID/名称子串；缺省=系统默认）
 
             "bridge" => await cmd.BridgeAsync(
                 GetOption(rest, "--mac"), GetOption(rest, "--name"),
@@ -390,7 +391,8 @@ public class Program
                 GetOptionInt(rest, "--latency", 40),
                 HasFlag(rest, "--no-aec"), HasFlag(rest, "--no-ans"),
                 HasFlag(rest, "--exclusive"),
-                GetOptionInt(rest, "--probe", 0)),       // 延迟实测 HID 腿（须配 --route on）
+                GetOptionInt(rest, "--probe", 0),        // 延迟实测 HID 腿（须配 --route on）
+                GetOption(rest, "--spk")),               // chirp 发射扬声器（ID/名称子串；缺省=系统默认）
 
             _ => UnknownCommand($"srx {action}")
         };
@@ -1024,7 +1026,9 @@ public class Program
                                                                   收流解码落 WAV（--actions 软件键鼠注入）
                      amp --mac|--name [--volume 1.0] [--latency 40] [--actions]
                                                                   外源泵扩音实时出声（AEC/ANS/带通同 audio passthrough）
-                     probe --mac|--name [--sec 12] [--out x.wav]  chirp 延迟实测（走表剖面+网格扫描+WAV 留档）
+                     probe --mac|--name [--sec 12] [--out x.wav] [--spk <子串>]
+                                                                  chirp 延迟实测（走表剖面+网格扫描+WAV 留档；--spk 选发射扬声器，
+                                                                  缺省=系统默认——听不到测试音先换这里）
                      bridge --mac|--name [--device 名片段] [--selftest]
                                                                   虚拟麦克风桥（第三方软件从桥采集端收 R1 人声）
                      batt --mac|--name                            0x41 电量查询（笔端未实现=在册预期）
@@ -1038,6 +1042,8 @@ public class Program
                             [--timeout 2000] [--keep-route]       0x56 应答超时 / 收尾保持直送不切回
                             [--probe 30]                          延迟实测 HID 腿（须配 --route on；与 --speaker/--record 互斥）：
                                                                   chirp 开播→EP4 回传收流→走表+chirp 报告（srx probe 同格式，轨标签 [HID]）
+                            [--spk <名称/ID子串>]                 chirp 发射扬声器（probe 两腿通用；缺省=系统默认——
+                                                                  听不到测试音先换这里，耳机口/VB-Cable 常抢默认）
                             u16 帧计数缺口自动插 7.5ms 静音；E0 看门狗=基站环溢出自动回 UAC（告警显式出）
                     identify | pair read/write/enter/factory/clear | ota | raw | status
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）

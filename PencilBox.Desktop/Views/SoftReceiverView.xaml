@@ -59,7 +59,7 @@
                         <!-- 8i：解码 PCM 输出目标可选——不选=系统默认扬声器，选了=指定播放设备 -->
                         <ComboBox ItemsSource="{Binding SpeakerOutputOptions}" SelectedItem="{Binding SelectedSpeakerOutput}"
                                   Width="180" Margin="0,0,8,0" VerticalAlignment="Center"
-                                  ToolTip="解码 PCM 输出到哪台播放设备：默认=系统默认扬声器；下拉=本机全部活动播放设备（8i 路由可选）"/>
+                                  ToolTip="解码 PCM 输出到哪台播放设备：默认=系统默认扬声器；下拉=本机全部活动播放设备。延迟实测的 chirp 也从此处发射——听不到测试音先换这里（8i 路由可选）"/>
                         <!-- 11-03：软件增益滑条（对数刻度同扩音页），原始人声过轻时上调，运行中即调即生效 -->
                         <TextBlock Text="增益：" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#555"/>
                         <Slider Minimum="0" Maximum="100" Value="{Binding GainSlider}" MinWidth="120" Margin="0,0,6,0"
@@ -285,7 +285,7 @@
                     <TextBlock Text="{Binding ProbeHint}" VerticalAlignment="Center" FontSize="11"
                                Foreground="#E67E22" Margin="0,0,8,0" TextWrapping="Wrap"/>
                 </WrapPanel>
-                <TextBlock Text="口径：绝对延迟含起点常量偏置（笔端自由跑钟无共享锚），同场形状/PPM 有效、跨场勿比绝对值。"
+                <TextBlock Text="chirp 发射扬声器=状态卡「扬声器输出」下拉（默认=系统默认扬声器，听不到测试音先换它）；口径：绝对延迟含起点常量偏置（笔端自由跑钟无共享锚），同场形状/PPM 有效、跨场勿比绝对值。"
                            FontSize="11" Foreground="#7F8C8D" Margin="0,6,0,0" TextWrapping="Wrap"/>
                 <!-- 结果多行：只读 TextBox 带 wrap+纵向滚，防长 WAV 路径把行高顶爆 -->
                 <TextBox Text="{Binding ProbeResultText, Mode=OneWay}" IsReadOnly="True"

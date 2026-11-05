@@ -335,7 +335,7 @@ public class SoftReceiverCommands
     /// 绝对全链锚 = v2 议题（需真实语音流+人工标定或固件回执时间戳）。
     /// 运行前提：语音流必须在流（K2/S1 物理触发）。
     /// </summary>
-    public async Task<int> ProbeAsync(string? mac, string? name, int sec, string? outPath, float volume)
+    public async Task<int> ProbeAsync(string? mac, string? name, int sec, string? outPath, float volume, string? spk = null)
     {
         var macDisplay = await ResolveTargetAsync(mac, name);
         if (macDisplay == null)
@@ -357,8 +357,8 @@ public class SoftReceiverCommands
         {
             await session.ConnectAsync(macDisplay);
 
-            // 发射半边：默认渲染设备播 chirp 训练列（16k mono → 端点混音格式）
-            probe.Start(volume);
+            // 发射半边：渲染设备播 chirp 训练列（16k mono → 端点混音格式；--spk 选台，缺省=系统默认）
+            probe.Start(volume, spk);
             ConsoleFormatter.Info(
                 $"[SRX-PROBE] chirp 训练列已开播 → [{probe.RenderDeviceName}]（750ms 周期；音量 {volume:F2}x 系统音量另计）；" +
                 $"收流 {sec}s（语音流须在流：K2/S1 物理触发）…");
@@ -439,7 +439,7 @@ public class SoftReceiverCommands
         string? recordPath, bool keepRoute, int timeoutMs,
         bool speaker = false, float volume = 1.0f, int latencyMs = 40,
         bool noAec = false, bool noAns = false, bool exclusive = false,
-        int probeSec = 0)
+        int probeSec = 0, string? spk = null)
     {
         // 1) 枚举 + 选台（只认 0xFF02 EP4 命令通道；device CLI 同款 ★ 识别）
         var devices = await _hidTransport.EnumerateDevicesAsync();
@@ -548,7 +548,16 @@ public class SoftReceiverCommands
                 SoftReceiverProbeReport? report = null;
                 try
                 {
-                    probe.Start(volume);
+                    try
+                    {
+                        probe.Start(volume, spk);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        // --spk 选台失败（无匹配/多命中）：候选列表已随消息给出，早退不白测
+                        ConsoleFormatter.Error($"[SRX-PROBE][HID] {ex.Message}");
+                        return 1;
+                    }
                     ConsoleFormatter.Info(
                         $"[SRX-PROBE][HID] chirp 训练列已开播 → [{probe.RenderDeviceName}]（750ms 周期；音量 {volume:F2}x）；" +
                         $"收流 {probeSec}s（语音流须在流：K2/S1 物理触发）…");

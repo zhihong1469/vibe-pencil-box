@@ -105,7 +105,8 @@ public partial class SoftReceiverViewModel : ObservableObject
         }
     }
 
-    /// <summary>扩音输出 → 引擎 RenderDeviceId（Auto=null=系统默认）。</summary>
+    /// <summary>扩音输出 → 引擎 RenderDeviceId（Auto=null=系统默认）；**延迟实测 chirp 发射端同用此选择**
+    /// （2026-11-05 指挥官：默认扬声器不可见致"实测没声音"，两功能同打一台外放=语义统一）。</summary>
     private string? ResolveSpeakerRenderId()
     {
         if (SelectedSpeakerOutput is null || SelectedSpeakerOutput == AutoSpeakerOutput)
@@ -916,7 +917,7 @@ public partial class SoftReceiverViewModel : ObservableObject
                 StopBridge("延迟实测前自动关");
                 Log("[延迟实测] 自动关虚拟麦克风桥（chirp 勿外泄给第三方）");
             }
-            probe.Start(1.0f);
+            probe.Start(1.0f, ResolveSpeakerRenderId());
             Log($"[延迟实测] chirp 已开播 → [{probe.RenderDeviceName}]，收流 {sec}s" +
                 $"（{(hidLeg ? "HID 直送腿" : "BLE 腿")}；语音流须在流：K2/S1 物理触发）…");
             ProbeResultText = $"实测中…（{sec}s，{(hidLeg ? "HID 直送腿" : "BLE 腿")}；期间按 K2 语音键或拨 S1 扩音档让语音流在流）";
