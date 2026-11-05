@@ -151,19 +151,43 @@ public partial class SoftReceiverViewModel : ObservableObject
     /// <summary>当前是否处于 EP4 HID 直送数据源（决定键盘选择区让位/键鼠电量面板置灰）</summary>
     public bool IsHidSource => SelectedSourceIndex == 1;
 
+    /// <summary>换源自动切换编排中（断腿→拨回目标源期间吞掉中间抖动）。</summary>
+    private bool _sourceSwitching;
+
     partial void OnSelectedSourceIndexChanged(int value)
     {
-        // 互斥守卫：任一腿在连接时禁止换源（先断再切，防双会话抢事件）
+        // 互斥守卫升级（2026-11-05 指挥官：连接成功后切不回去不方便）——
+        // 有腿在连=**自动断开完成切换**（原设计只弹提示回拨=用户必须手动先断再切）；
+        // 实测/连接操作中换源仍拒绝（断会话毁实测/竞态）。双会话抢事件的防护不断：腿断干净才切。
+        if (_sourceSwitching)
+            return;   // 自动切换编排中，忽略中间抖动
+        var busy = IsProbing || IsBusy || IsHidBusy;
         if (value == 1 && (IsConnected || Session != null))
         {
-            Log("先断开 BLE 连接再切 USB EP4 数据源");
+            if (busy)
+            {
+                Log("实测/连接操作进行中，等它结束再换数据源");
+                SelectedSourceIndex = 0;
+                return;
+            }
+            Log("BLE 腿在连：自动断开后切到 USB EP4…");
+            _sourceSwitching = true;
             SelectedSourceIndex = 0;
+            _ = SwitchSourceAfterDisconnectAsync(target: 1, hidLeg: false);
             return;
         }
         if (value == 0 && IsHidConnected)
         {
-            Log("先断开 EP4 HID 连接再切 BLE 数据源");
+            if (busy)
+            {
+                Log("实测/连接操作进行中，等它结束再换数据源");
+                SelectedSourceIndex = 1;
+                return;
+            }
+            Log("EP4 腿在连：自动断开后切到 BLE…");
+            _sourceSwitching = true;
             SelectedSourceIndex = 1;
+            _ = SwitchSourceAfterDisconnectAsync(target: 0, hidLeg: true);
             return;
         }
         if (value == 1)
@@ -175,6 +199,26 @@ public partial class SoftReceiverViewModel : ObservableObject
         {
             Log("数据源 → BLE 直连");
         }
+    }
+
+    /// <summary>换源自动断开：断腿（清场含 route off/泵出/桥/录制）完成后把下拉拨到目标源——
+    /// 再触发的 OnSelectedSourceIndexChanged 里腿已断，自然走正常切换分支。断失败则提示手动处理。</summary>
+    private async Task SwitchSourceAfterDisconnectAsync(int target, bool hidLeg)
+    {
+        try
+        {
+            if (hidLeg) await HidDisconnectAsync();
+            else await DisconnectAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"自动断开失败：{ex.Message}——请手动断开后再换数据源");
+        }
+        MainThreadHelper.EnsureOnMainThread(() =>
+        {
+            SelectedSourceIndex = target;   // 与当前值相同则不触发变更，仅清编排旗标
+            _sourceSwitching = false;
+        });
     }
 
     // ---- USB EP4 HID 直送（基站侧 mSBC 直传，08 号方案 M1） ----
