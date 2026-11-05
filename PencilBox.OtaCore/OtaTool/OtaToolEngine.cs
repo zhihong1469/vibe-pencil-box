@@ -108,6 +108,9 @@ public sealed class OtaToolEngine
     /// <summary>复位重枚举等待上限（实测可慢达 ~2 分钟，超 02 号 §6 的 1 分钟口径）。</summary>
     public const int RecheckTimeoutMs = 120_000;
 
+    /// <summary>裁剪版工具版本（GUI 标题与右上角 + CLI 横幅/--version；2026-11-05 指挥官立项，从 0.1.0 起）。</summary>
+    public const string ToolVersion = "0.1.0";
+
     /// <summary>对拍宽限：5×10s。3×5s 在"旧实例存活 30s+"形态下不够（2026-10-21 双台实测第③形态）。</summary>
     private const int ProbeIntervalMs = 1_000;
     private const int ProbeHeartbeatEvery = 10;   // 静默等待期心跳节拍（10-21 目验：长期无输出像卡死）
@@ -421,33 +424,37 @@ public sealed class OtaToolEngine
 
         // OTA 会话（与主线 CLI 同一 FSM：R1/R2/终态窗/终态丢失判定零漂移）
         Phase("传输固件");
-        var fsm = new CompanyOtaFsm(_codec, _channel!, _clock, _config);
-        var lastMilestone = -1;
-        fsm.Progress += (_, p) =>
+        async Task<OtaResult> RunSessionAsync()
         {
-            var percent = p.DevicePercent >= 0 ? p.DevicePercent : p.Percent;
-            _progress?.Report(new OtaToolUpdate.Percent(percent, p.BlocksDone, p.TotalBlocks));
-            // 进度里程碑进日志（2026-11-02 指挥官：基站升级 ~86s 日志区零输出像卡死；行状态格
-            // 有跳动但日志才是现场主要观测面）：25/50/75 各报一次，100 由终态行收口不重复
-            var milestone = percent / 25;
-            if (milestone > lastMilestone && milestone is >= 1 and <= 3)
+            var fsm = new CompanyOtaFsm(_codec, _channel!, _clock, _config);
+            var lastMilestone = -1;
+            fsm.Progress += (_, p) =>
             {
-                lastMilestone = milestone;
-                Say("info", $"SN={Show(sn)} 传输 {percent}%（{p.BlocksDone}/{p.TotalBlocks} 块）");
-            }
-        };
-        fsm.Warning += (_, w) =>
-        {
-            // 重查/重发（R1/R2）为自动恢复路径 → WARN 不误报失败
-            Say("warn", $"SN={Show(sn)} {w}");
-        };
+                var percent = p.DevicePercent >= 0 ? p.DevicePercent : p.Percent;
+                _progress?.Report(new OtaToolUpdate.Percent(percent, p.BlocksDone, p.TotalBlocks));
+                // 进度里程碑进日志（2026-11-02 指挥官：基站升级 ~86s 日志区零输出像卡死；行状态格
+                // 有跳动但日志才是现场主要观测面）：25/50/75 各报一次，100 由终态行收口不重复
+                var milestone = percent / 25;
+                if (milestone > lastMilestone && milestone is >= 1 and <= 3)
+                {
+                    lastMilestone = milestone;
+                    Say("info", $"SN={Show(sn)} 传输 {percent}%（{p.BlocksDone}/{p.TotalBlocks} 块）");
+                }
+            };
+            fsm.Warning += (_, w) =>
+            {
+                // 重查/重发（R1/R2）为自动恢复路径 → WARN 不误报失败
+                Say("warn", $"SN={Show(sn)} {w}");
+            };
+            return await fsm.RunAsync(firmware.Image, downtype, hver,
+                firmware.SverMajor, firmware.SverMinor, firmware.SverPatch,
+                abortAfterBlock, chunkGapMs, cancellationToken);
+        }
 
         OtaResult result;
         try
         {
-            result = await fsm.RunAsync(firmware.Image, downtype, hver,
-                firmware.SverMajor, firmware.SverMinor, firmware.SverPatch,
-                abortAfterBlock, chunkGapMs, cancellationToken);
+            result = await RunSessionAsync();
         }
         catch (OperationCanceledException)
         {
@@ -460,7 +467,48 @@ public sealed class OtaToolEngine
             return Make(OtaDeviceOutcome.Fail, beforeText, $"升级异常：{ex.Message}");
         }
 
-        Say("info", $"SN={Show(sn)} FSM 终态：{result.Outcome}（{result.Message}）");
+        // 非满块失败自动重试 1 次（2026-11-05 并发真机定因：1.0.3 固件收块确认本底不稳——
+        // 单台重查 7~22 次/204 块概率波动，并发放大后同块 3 连查 → 固件 DCMD=03 主动放弃；
+        // 指挥官现场 14:12 轮失败、14:15 手动重跑成功=重开会话有效实证）。
+        // 边界：满块失败不重试（10-22 裁决：满块走复核不重传）；取消/验证性中断不重试。
+        if (result.ShouldAutoRetrySession && abortAfterBlock < 0 && !cancellationToken.IsCancellationRequested)
+        {
+            Say("warn", $"SN={Show(sn)} 设备中途放弃会话（{result.BlocksDone}/{result.TotalBlocks} 块，{result.Message}）" +
+                        "→ 自动重试 1 次（重开升级会话；未满块重传安全）");
+            CloseChannel();
+            await SleepAsync(1500, cancellationToken);   // 给设备退出旧会话的时间
+            var reopened = false;
+            for (var attempt = 1; attempt <= 3 && !reopened; attempt++)
+            {
+                if (attempt > 1)
+                    await SleepAsync(500, cancellationToken);
+                reopened = await OpenChannelAsync(device);
+            }
+            if (!reopened)
+                return Make(OtaDeviceOutcome.Fail, beforeText,
+                    "设备放弃会话后自动重试时连不回——拔下重插该台后单独重刷");
+            try
+            {
+                result = await RunSessionAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                CloseChannel();
+                return Make(OtaDeviceOutcome.Abort, beforeText, "用户取消");
+            }
+            catch (Exception ex)
+            {
+                CloseChannel();
+                return Make(OtaDeviceOutcome.Fail, beforeText, $"重试升级异常：{ex.Message}");
+            }
+            Say("info", $"SN={Show(sn)} 重试会话终态：{result.Outcome}（{result.Message}）");
+            if (result.ShouldAutoRetrySession)
+                result = result with { Message = $"自动重试后仍失败：{result.Message}" };
+        }
+        else
+        {
+            Say("info", $"SN={Show(sn)} FSM 终态：{result.Outcome}（{result.Message}）");
+        }
 
         // 验证性中断（--abort-after-block）：设备留旧固件，不进入等回读流程
         if (abortAfterBlock >= 0)

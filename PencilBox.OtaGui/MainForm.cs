@@ -52,7 +52,7 @@ internal sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "多支同升 · USB 升级小工具（PencilBox 裁剪版）";
+        Text = $"多支同升 · USB 升级小工具（PencilBox 裁剪版）v{OtaToolEngine.ToolVersion}";
         Font = new System.Drawing.Font("Microsoft YaHei UI", 9f);
         StartPosition = FormStartPosition.CenterScreen;
         // 最小宽=全列和不裁切（sn200+loc200+ch70+ver100+hash300+status280+pair150≈1300+滚动条余量）
@@ -73,7 +73,7 @@ internal sealed class MainForm : Form
         });
         _fwBox = new TextBox
         {
-            Width = 560,
+            Width = 500,
             // 可编辑：支持直接粘贴固件路径（TextChanged 即装载校验），不必点浏览
         };
         _fwBox.TextChanged += (_, _) => LoadFirmware(_fwBox.Text);
@@ -182,6 +182,19 @@ internal sealed class MainForm : Form
 
         top.Controls.Add(actionRow);
         top.Controls.Add(fwRow);
+
+        // 版本号右上角（2026-11-05 指挥官立项：软件要版本号，从 0.1.0 起）——标题同带版本。
+        // 右锚定随窗宽跟随，落在固件行右侧空白区；fwBox 已 560→500 给 MinSize 1330 留出不重叠余量
+        var verLabel = new Label
+        {
+            Text = $"v{OtaToolEngine.ToolVersion}",
+            AutoSize = true,
+            ForeColor = System.Drawing.Color.DimGray,
+        };
+        top.Controls.Add(verLabel);
+        verLabel.Location = new System.Drawing.Point(
+            top.ClientSize.Width - verLabel.PreferredWidth - 12, 12);
+        verLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
         // ---- 进度条 + 阶段标签 ----
         _phaseLabel = new Label
@@ -917,7 +930,7 @@ internal sealed class MainForm : Form
     private void BeginLog()
     {
         _logLines.Clear();
-        LogLine($"PencilBox 裁剪版升级小工具（GUI）  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        LogLine($"PencilBox 裁剪版升级小工具（GUI）v{OtaToolEngine.ToolVersion}  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         LogLine($"机器：{Environment.MachineName}");
     }
 

@@ -53,6 +53,7 @@ internal static class Program
         {
             return action switch
             {
+                "--version" or "version" or "-v" => VersionLine(),
                 "scan" or "list" => ScanAsync(rest.Contains("--raw")).GetAwaiter().GetResult(),
                 "identify" or "id" => IdentifyAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
                 "hash" => HashAsync(GetOption(rest, "--serial"), rest.Contains("--pen")).GetAwaiter().GetResult(),
@@ -491,7 +492,7 @@ internal static class Program
     private static void BeginLog(OtaFirmwarePackage fw, List<HidDeviceInfo> queue, int parallel, OtaUpgradeTarget target)
     {
         _logLines = new List<string>();
-        Log($"PencilBox 裁剪版升级小工具（CLI）  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        Log($"PencilBox 裁剪版升级小工具（CLI）v{OtaToolEngine.ToolVersion}  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         Log($"机器：{Environment.MachineName}    固件包：{fw.FileName}    目标版本：{fw.SverText}    升级对象：{OtaUpgradeTargetText.For(target)}    并发：{parallel}");
         Log($"队列 {queue.Count} 台：{string.Join("、", queue.Select(d => Show(d.SerialNumber) + "/位置" + d.LocationToken))}");
     }
@@ -557,10 +558,16 @@ internal static class Program
         return null;
     }
 
+    private static int VersionLine()
+    {
+        Out.Ok($"ota-tool v{OtaToolEngine.ToolVersion}");
+        return 0;
+    }
+
     private static int Usage()
     {
-        Console.WriteLine("""
-            PencilBox 裁剪版升级小工具（基站 USB 直升 + 键盘经基站无线中转，多支同插按设备分组）
+        Console.WriteLine($"""
+            PencilBox 裁剪版升级小工具 v{OtaToolEngine.ToolVersion}（基站 USB 直升 + 键盘经基站无线中转，多支同插按设备分组）
 
             升级对象由 `--target` 显式选择（指挥官定版：不靠包名推断）：
               bs（缺省）=基站 USB 直升；pen=键盘，走同一 USB 通道经基站 BLE 无线中转（键盘须已与对应基站配对）。

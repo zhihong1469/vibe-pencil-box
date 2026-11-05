@@ -104,6 +104,14 @@ public sealed record OtaResult(
         IsTerminalSuccess
         || Outcome == OtaOutcome.Unconfirmed
         || (Outcome == OtaOutcome.Failed && TotalBlocks > 0 && BlocksDone >= TotalBlocks);
+
+    /// <summary>
+    /// 未满块失败 = 设备中途放弃会话（2026-11-05 并发真机：1.0.3 固件块级 3 连查 DCMD=03 主动放弃，
+    /// 单台本底重查 7~22 次/204 块、并发放大后撞阈值）——数据未传完、设备未激活新固件，重开一次
+    /// 会话安全；满块失败走 <see cref="ShouldRecheckAfterSession"/> 复核（10-22 裁决：满块不自动重传）。
+    /// </summary>
+    public bool ShouldAutoRetrySession =>
+        Outcome == OtaOutcome.Failed && TotalBlocks > 0 && BlocksDone < TotalBlocks;
 }
 
 public enum OtaOutcome
