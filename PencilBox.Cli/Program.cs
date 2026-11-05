@@ -389,7 +389,8 @@ public class Program
                 ParseVolume(GetOption(rest, "--volume")),
                 GetOptionInt(rest, "--latency", 40),
                 HasFlag(rest, "--no-aec"), HasFlag(rest, "--no-ans"),
-                HasFlag(rest, "--exclusive")),
+                HasFlag(rest, "--exclusive"),
+                GetOptionInt(rest, "--probe", 0)),       // 延迟实测 HID 腿（须配 --route on）
 
             _ => UnknownCommand($"srx {action}")
         };
@@ -1035,6 +1036,8 @@ public class Program
                             [--exclusive]                         WASAPI 独占渲染（48k/2ch 协商→失败回退共享；
                                                                   期间顶掉本机其他声音；无处理链=纯渲染 A/B 腿）
                             [--timeout 2000] [--keep-route]       0x56 应答超时 / 收尾保持直送不切回
+                            [--probe 30]                          延迟实测 HID 腿（须配 --route on；与 --speaker/--record 互斥）：
+                                                                  chirp 开播→EP4 回传收流→走表+chirp 报告（srx probe 同格式，轨标签 [HID]）
                             u16 帧计数缺口自动插 7.5ms 静音；E0 看门狗=基站环溢出自动回 UAC（告警显式出）
                     identify | pair read/write/enter/factory/clear | ota | raw | status
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）

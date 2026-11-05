@@ -143,6 +143,8 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsHidSource))]
     [NotifyPropertyChangedFor(nameof(CanScan))]     // 换源门控三处 Can* 同步刷新（坑册：多标志门控必反查）
     [NotifyPropertyChangedFor(nameof(CanConnect))]
+    [NotifyPropertyChangedFor(nameof(CanProbe))]    // 延迟实测双腿（2026-11-05）：换源即换可用域
+    [NotifyPropertyChangedFor(nameof(ProbeHint))]
     [ObservableProperty] private int _selectedSourceIndex;
 
     /// <summary>当前是否处于 EP4 HID 直送数据源（决定键盘选择区让位/键鼠电量面板置灰）</summary>
@@ -188,9 +190,13 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanToggleBridge))]
     [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
     [NotifyPropertyChangedFor(nameof(CanRecord))]
+    [NotifyPropertyChangedFor(nameof(CanProbe))]    // 延迟实测 HID 腿（2026-11-05）：连接态进可用域
+    [NotifyPropertyChangedFor(nameof(ProbeHint))]
     [ObservableProperty] private bool _isHidConnected;
     [NotifyPropertyChangedFor(nameof(CanRouteHidOn))]
     [NotifyPropertyChangedFor(nameof(CanRouteHidOff))]
+    [NotifyPropertyChangedFor(nameof(CanProbe))]    // 路由未切入时 EP4 通道无音频帧，实测腿必须门死
+    [NotifyPropertyChangedFor(nameof(ProbeHint))]
     [ObservableProperty] private bool _isHidRouted;
     [ObservableProperty] private string _hidStatusText = "UAC（未切入）";
     [NotifyPropertyChangedFor(nameof(CanRefreshHidDevices))]
@@ -501,14 +507,21 @@ public partial class SoftReceiverViewModel : ObservableObject
     private long _recordFrames;
     private Stopwatch? _recordSw;
 
-    /// <summary>「开始延迟实测」可用 = 已连接且未在测未忙（按钮 IsEnabled 直绑，勿用转换器）</summary>
-    public bool CanProbe => IsConnected && !IsProbing && !IsBusy;
+    /// <summary>HID 直送腿实测可用 = EP4 已连且路由已切入——路由不在 HID 时音频走 UAC，
+    /// EP4 通道收不到任何帧，门死（2026-11-05 双腿化）。</summary>
+    public bool CanProbeHid => IsHidConnected && IsHidRouted;
 
-    /// <summary>实测按钮旁常显提示：未连接时说明为什么灰（chirp 回传走 BLE 语音流，HID 源替代不了）——
+    /// <summary>「开始延迟实测」可用 = 任一腿就绪（BLE 已连 / EP4 已连+已路由）且未在测未忙
+    /// （按钮 IsEnabled 直绑，勿用转换器）</summary>
+    public bool CanProbe => (IsConnected || CanProbeHid) && !IsProbing && !IsBusy;
+
+    /// <summary>实测按钮旁常显提示：腿未就绪时说明为什么灰——
     /// tooltip 在禁用态不弹出（WPF 禁用控件不参与命中测试），灰了必须让用户当场看见原因。</summary>
-    public string ProbeHint => IsConnected
+    public string ProbeHint => IsConnected || CanProbeHid
         ? ""
-        : "灰置原因：未连接笔端（延迟实测的 chirp 回传走 BLE 语音流，需「扫描 → 选笔端 → 连接」；EP4/HID 源替代不了）";
+        : IsHidSource
+            ? "灰置原因：EP4 未连接或未切入 HID 直送（先「连接 EP4」再「切入 HID 直送」，chirp 回传须走 EP4 通道）"
+            : "灰置原因：未连接笔端（BLE 腿需「扫描 → 选笔端 → 连接」）";
 
     /// <summary>「扩音泵出」按钮可用 = 已连接（BLE 或 EP4 直送），或扩音正开着（允许随时关）；实测中锁死</summary>
     public bool CanToggleSpeaker => (IsConnected || IsHidConnected || IsSpeakerOn) && !IsProbing;
@@ -866,14 +879,14 @@ public partial class SoftReceiverViewModel : ObservableObject
     // ---- 延迟实测（chirp 回环） ----
 
     /// <summary>
-    /// 延迟实测：扬声器播 chirp 训练列 → 笔端麦拾取 → BLE 回传 → 走表剖面 + chirp 扫描 + WAV 留档。
-    /// 复用 <see cref="SoftReceiverProbe"/>（CLI srx probe 同一份逻辑，防双拷漂移）；
-    /// 开测自动关扩音（防 chirp 混叠/啸叫）；语音流须在流（K2/S1 物理触发）。
+    /// 延迟实测：扬声器播 chirp 训练列 → 笔端麦拾取 → 回传（BLE 会话或 EP4 HID 直送，按当前数据源）
+    /// → 走表剖面 + chirp 扫描 + WAV 留档。复用 <see cref="SoftReceiverProbe"/>（CLI 同一份逻辑，
+    /// 防双拷漂移）；开测自动关扩音（防 chirp 混叠/啸叫）；语音流须在流（K2/S1 物理触发）。
     /// </summary>
     [RelayCommand]
     private async Task ProbeAsync()
     {
-        if (!CanProbe || Session == null)
+        if (!CanProbe)
             return;
         if (!int.TryParse(ProbeSecondsInput, out var sec))
         {
@@ -881,9 +894,14 @@ public partial class SoftReceiverViewModel : ObservableObject
             return;
         }
         sec = Math.Clamp(sec, 10, 300);
+        var hidLeg = IsHidSource;
+        if (hidLeg && _hidSession == null)
+            return;
+        if (!hidLeg && Session == null)
+            return;
 
         IsProbing = true;
-        var probe = new SoftReceiverProbe(Session);
+        var probe = hidLeg ? new SoftReceiverProbe(_hidSession!) : new SoftReceiverProbe(Session!);
         var myCts = new CancellationTokenSource();
         _probeCts = myCts;
         try
@@ -899,8 +917,9 @@ public partial class SoftReceiverViewModel : ObservableObject
                 Log("[延迟实测] 自动关虚拟麦克风桥（chirp 勿外泄给第三方）");
             }
             probe.Start(1.0f);
-            Log($"[延迟实测] chirp 已开播 → [{probe.RenderDeviceName}]，收流 {sec}s（语音流须在流：K2/S1 物理触发）…");
-            ProbeResultText = $"实测中…（{sec}s，期间按 K2 语音键或拨 S1 扩音档让语音流在流）";
+            Log($"[延迟实测] chirp 已开播 → [{probe.RenderDeviceName}]，收流 {sec}s" +
+                $"（{(hidLeg ? "HID 直送腿" : "BLE 腿")}；语音流须在流：K2/S1 物理触发）…");
+            ProbeResultText = $"实测中…（{sec}s，{(hidLeg ? "HID 直送腿" : "BLE 腿")}；期间按 K2 语音键或拨 S1 扩音档让语音流在流）";
             await Task.Delay(TimeSpan.FromSeconds(sec), myCts.Token);
         }
         catch (OperationCanceledException)
@@ -929,9 +948,9 @@ public partial class SoftReceiverViewModel : ObservableObject
             if (report != null)
                 ShowProbeReport(report);
             else
-                ProbeResultText = IsConnected
+                ProbeResultText = (hidLeg ? CanProbeHid : IsConnected)
                     ? "（未测出：解码音频帧不足——语音流未在流，K2/S1 物理触发后再试）"
-                    : "（未测：已断开中止）";
+                    : "（未测：已断开/未就绪中止）";
         }
     }
 

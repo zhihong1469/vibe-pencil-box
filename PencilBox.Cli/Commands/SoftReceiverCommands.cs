@@ -399,19 +399,25 @@ public class SoftReceiverCommands
             return 2;
         }
 
+        PrintProbeReport(report, "BLE");
+        return report.Scan.DetectedCount > 0 ? 0 : 3;
+    }
+
+    /// <summary>probe 报告统一打印（BLE/HID 两腿同格式；Desktop VM 另有平齐文案防跨程序集耦合）。</summary>
+    private static void PrintProbeReport(SoftReceiverProbeReport report, string leg)
+    {
         ConsoleFormatter.Info(
-            $"[SRX-PROBE] 走表剖面：步长 {report.Pacing.FittedStepMs:F3}ms（PPM {report.Pacing.Ppm:F0}）" +
+            $"[SRX-PROBE][{leg}] 走表剖面：步长 {report.Pacing.FittedStepMs:F3}ms（PPM {report.Pacing.Ppm:F0}）" +
             $"偏差 p50 {report.Pacing.P50DevMs:F1}ms / p95 {report.Pacing.P95DevMs:F1}ms / max {report.Pacing.MaxDevMs:F1}ms" +
-            $"（{report.Pacing.Frames} 帧；BLE+Windows 传输/缓冲活剖面，max=最深积压水位）");
+            $"（{report.Pacing.Frames} 帧；腿+Windows 传输/缓冲活剖面，max=最深积压水位）");
         ConsoleFormatter.Info(
-            $"[SRX-PROBE] chirp 检出 {report.Scan.DetectedCount}/{report.Scan.ExpectedCount}（缺失 {report.Scan.MissingSlots.Count} 槽）" +
+            $"[SRX-PROBE][{leg}] chirp 检出 {report.Scan.DetectedCount}/{report.Scan.ExpectedCount}（缺失 {report.Scan.MissingSlots.Count} 槽）" +
             $"PPM {report.Scan.Ppm:F0}（形状口径；绝对延迟含起点相位常量偏置——笔端自由跑钟无共享锚，跨场勿比绝对值）");
         foreach (var hit in report.Scan.Hits.Take(5))
             ConsoleFormatter.Info($"  槽 {hit.Slot}: 峰位 {hit.PeakPos} 质量 {hit.Quality:F2}");
 
-        ConsoleFormatter.Info($"[SRX-PROBE] 解码流 WAV → {report.WavPath}（{report.TotalPcmBytes / 32000.0:F1}s @16k mono；" +
+        ConsoleFormatter.Info($"[SRX-PROBE][{leg}] 解码流 WAV → {report.WavPath}（{report.TotalPcmBytes / 32000.0:F1}s @16k mono；" +
                               "发射时刻自 playT0 起第 k·750ms——离线可做绝对锚 v2 标定）");
-        return report.Scan.DetectedCount > 0 ? 0 : 3;
     }
 
     /// <summary>
@@ -424,12 +430,16 @@ public class SoftReceiverCommands
     /// --record <路径> 同时落 16k/16bit/mono WAV（解码 PCM，含补的静音帧）。
     /// --speaker 开外源泵扩音（--volume/--latency/--no-aec/--no-ans，与 srx amp 同链：
     /// 解码 PCM → AEC/ANS → 环形 → 扬声器）——A/B 实测主腿。
+    /// --probe <秒> 延迟实测 HID 腿（2026-11-05 双腿化）：必须配 --route on（否则音频走 UAC、
+    /// EP4 无帧）；chirp 开播 + 挂解码帧采集（SoftReceiverProbe HID 构造），收秒后出
+    /// 走表+chirp 扫描报告（与 srx probe 同格式，轨标签 [HID]）；与 --speaker/--record 互斥。
     /// 注意：本固件须烧 test/hid 构建（DG_AUD_HID_ENABLE），否则 STATUS=0xFF 明示无能力。
     /// </summary>
     public async Task<int> HidAsync(string? device, string? route, int listenSec,
         string? recordPath, bool keepRoute, int timeoutMs,
         bool speaker = false, float volume = 1.0f, int latencyMs = 40,
-        bool noAec = false, bool noAns = false, bool exclusive = false)
+        bool noAec = false, bool noAns = false, bool exclusive = false,
+        int probeSec = 0)
     {
         // 1) 枚举 + 选台（只认 0xFF02 EP4 命令通道；device CLI 同款 ★ 识别）
         var devices = await _hidTransport.EnumerateDevicesAsync();
@@ -482,6 +492,23 @@ public class SoftReceiverCommands
 
         var session = new SrxHidSession(_hidTransport, msg => ConsoleFormatter.Info(msg));
         var routeIssued = false;
+
+        // --probe 前置校验（连接后早退，免白连一趟）
+        if (probeSec > 0)
+        {
+            if (route != "on")
+            {
+                ConsoleFormatter.Error("--probe 必须配 --route on：路由不在 HID 时音频走 UAC，EP4 通道无帧可测");
+                await _hidTransport.DisconnectAsync();
+                return 1;
+            }
+            if (speaker || recordPath != null)
+            {
+                ConsoleFormatter.Error("--probe 与 --speaker/--record 互斥（chirp 实测期间扩音须关/录制由 probe 自带 WAV 留档）");
+                await _hidTransport.DisconnectAsync();
+                return 1;
+            }
+        }
         try
         {
             session.WatchdogFallback += (_, _) =>
@@ -509,6 +536,40 @@ public class SoftReceiverCommands
             {
                 ConsoleFormatter.Error($"--route 只认 on|off，收到 \"{route}\"");
                 return 1;
+            }
+
+            // 3.5) --probe 延迟实测腿（与常规收流互斥；完成后走外层 finally 切回 UAC+断开）
+            if (probeSec > 0)
+            {
+                var probe = new SoftReceiverProbe(session);
+                using var pcts = new CancellationTokenSource();
+                pcts.CancelAfter(TimeSpan.FromSeconds(probeSec));
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; pcts.Cancel(); };
+                SoftReceiverProbeReport? report = null;
+                try
+                {
+                    probe.Start(volume);
+                    ConsoleFormatter.Info(
+                        $"[SRX-PROBE][HID] chirp 训练列已开播 → [{probe.RenderDeviceName}]（750ms 周期；音量 {volume:F2}x）；" +
+                        $"收流 {probeSec}s（语音流须在流：K2/S1 物理触发）…");
+                    await Task.Delay(TimeSpan.FromSeconds(probeSec), pcts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    ConsoleFormatter.Warn("[SRX-PROBE][HID] 已提前中止");
+                }
+                finally
+                {
+                    try { report = probe.StopAndAnalyze($"srx_probe_hid_{DateTime.Now:yyyyMMdd_HHmmss}.wav"); }
+                    catch (Exception ex) { ConsoleFormatter.Error($"[SRX-PROBE][HID] 收尾异常：{ex.Message}"); }
+                }
+                if (report == null)
+                {
+                    ConsoleFormatter.Warn("[SRX-PROBE][HID] 解码音频帧不足：语音流未在流（K2/S1 物理触发）——HID 腿同样需要真实上行才能测");
+                    return 2;
+                }
+                PrintProbeReport(report, "HID");
+                return report.Scan.DetectedCount > 0 ? 0 : 3;
             }
 
             // 4) 统一消费漏斗：计数 + 录制（可选）+ 扩音泵（可选，与 srx amp 同一条外源链）

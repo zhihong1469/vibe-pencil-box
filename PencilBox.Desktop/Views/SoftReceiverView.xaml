@@ -271,7 +271,7 @@
         </StackPanel>
 
         <!-- 延迟实测（chirp 回环；复用 SoftReceiverProbe，CLI srx probe 同一份逻辑） -->
-        <GroupBox Grid.Row="2" Header="延迟实测（chirp 回环：扬声器播训练列 → 笔端麦拾取 → BLE 回传）" Padding="8" Margin="0,0,0,8">
+        <GroupBox Grid.Row="2" Header="延迟实测（chirp 回环：扬声器播训练列 → 笔端麦拾取 → 回传；BLE 会话或 EP4 直送按数据源）" Padding="8" Margin="0,0,0,8">
             <StackPanel>
                 <WrapPanel>
                     <TextBlock Text="时长(秒)：" VerticalAlignment="Center" Foreground="#555"/>
@@ -281,7 +281,7 @@
                     <Button Content="开始延迟实测" Command="{Binding ProbeCommand}" Margin="0,0,8,0"
                             Style="{StaticResource ActionButton}"
                             IsEnabled="{Binding CanProbe}"
-                            ToolTip="需先 BLE 连接笔端（扫描→选笔端→连接）；期间按 K2 语音键或拨 S1 扩音档让语音流在流"/>
+                            ToolTip="按当前数据源走对应腿：BLE 源=已连笔端会话；EP4 源=已连且已切入 HID 直送。期间按 K2 语音键或拨 S1 扩音档让语音流在流"/>
                     <TextBlock Text="{Binding ProbeHint}" VerticalAlignment="Center" FontSize="11"
                                Foreground="#E67E22" Margin="0,0,8,0" TextWrapping="Wrap"/>
                 </WrapPanel>
