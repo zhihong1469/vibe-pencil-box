@@ -281,7 +281,9 @@
                     <Button Content="开始延迟实测" Command="{Binding ProbeCommand}" Margin="0,0,8,0"
                             Style="{StaticResource ActionButton}"
                             IsEnabled="{Binding CanProbe}"
-                            ToolTip="需先连接；期间按 K2 语音键或拨 S1 扩音档让语音流在流"/>
+                            ToolTip="需先 BLE 连接笔端（扫描→选笔端→连接）；期间按 K2 语音键或拨 S1 扩音档让语音流在流"/>
+                    <TextBlock Text="{Binding ProbeHint}" VerticalAlignment="Center" FontSize="11"
+                               Foreground="#E67E22" Margin="0,0,8,0" TextWrapping="Wrap"/>
                 </WrapPanel>
                 <TextBlock Text="口径：绝对延迟含起点常量偏置（笔端自由跑钟无共享锚），同场形状/PPM 有效、跨场勿比绝对值。"
                            FontSize="11" Foreground="#7F8C8D" Margin="0,6,0,0" TextWrapping="Wrap"/>

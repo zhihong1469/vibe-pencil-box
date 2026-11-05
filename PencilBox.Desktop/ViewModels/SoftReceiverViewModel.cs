@@ -428,6 +428,7 @@ public partial class SoftReceiverViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanToggleKeyActions))]
     [NotifyPropertyChangedFor(nameof(CanRecord))]
     [NotifyPropertyChangedFor(nameof(CanConnect))]
+    [NotifyPropertyChangedFor(nameof(ProbeHint))]
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private string _connectionText = "未连接";
 
@@ -502,6 +503,12 @@ public partial class SoftReceiverViewModel : ObservableObject
 
     /// <summary>「开始延迟实测」可用 = 已连接且未在测未忙（按钮 IsEnabled 直绑，勿用转换器）</summary>
     public bool CanProbe => IsConnected && !IsProbing && !IsBusy;
+
+    /// <summary>实测按钮旁常显提示：未连接时说明为什么灰（chirp 回传走 BLE 语音流，HID 源替代不了）——
+    /// tooltip 在禁用态不弹出（WPF 禁用控件不参与命中测试），灰了必须让用户当场看见原因。</summary>
+    public string ProbeHint => IsConnected
+        ? ""
+        : "灰置原因：未连接笔端（延迟实测的 chirp 回传走 BLE 语音流，需「扫描 → 选笔端 → 连接」；EP4/HID 源替代不了）";
 
     /// <summary>「扩音泵出」按钮可用 = 已连接（BLE 或 EP4 直送），或扩音正开着（允许随时关）；实测中锁死</summary>
     public bool CanToggleSpeaker => (IsConnected || IsHidConnected || IsSpeakerOn) && !IsProbing;
