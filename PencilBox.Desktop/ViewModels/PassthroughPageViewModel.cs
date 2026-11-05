@@ -355,6 +355,7 @@ public partial class PassthroughPageViewModel : ObservableObject
                 SelectedCaptureDevice.DeviceId, SelectedRenderDevice?.DeviceId,
                 pulses, ProbeIntervalMs, ProbePulseMs,
                 amplitude: 0.8f, renderLatencyMs: RenderLatencyMs,
+                exclusiveCapture: IsExclusiveCapture,
                 progress: m => MainThreadHelper.EnsureOnMainThread(() => StatusMessage = $"测延迟：{m}"), ct: ct);
             var stats = LatencyProbeEngine.Analyze(result, pulses, ProbeIntervalMs, ProbePulseMs);
             if (stats.Located == 0)
@@ -365,7 +366,8 @@ public partial class PassthroughPageViewModel : ObservableObject
             {
                 ProbeResult = $"闭环延迟 p50 {stats.P50:F1}ms | p95 {stats.P95:F1}ms | 抖动 {stats.Jitter:F1}ms | " +
                               $"测量时长 {stats.CapturedSeconds:F1}s" +
-                              $"（{stats.Located}/{stats.Expected} 脉冲；数值为物理闭环原值不扣减，测试缓冲影响很小——脉冲包小且断续，渲染缓冲设置只影响扩音）";
+                              $"（{stats.Located}/{stats.Expected} 脉冲；数值为物理闭环原值不扣减，测试缓冲影响很小——脉冲包小且断续，渲染缓冲设置只影响扩音）" +
+                              $"｜采集 {stats.CaptureDesc}";
                 StatusMessage = $"逐脉冲: {string.Join(", ", stats.PerPulseMs.Select(d => d.ToString("F1")))}";
             }
         }

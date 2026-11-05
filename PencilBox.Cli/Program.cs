@@ -506,7 +506,8 @@ public class Program
                 float.TryParse(GetOption(args, "--amplitude"), out var amp) ? Math.Clamp(amp, 0.05f, 1f) : 0.8f,
                 GetOptionInt(args, "--render-latency-ms", 40),   // 仅定测试缓冲大小，不参与数值
                 GetOption(args, "--save-capture"),
-                GetOption(args, "--report-out")),
+                GetOption(args, "--report-out"),
+                HasFlag(args, "--exclusive")),             // 独占采集（贴近独占扩音的真实采集路径；不可用回退共享并记因）
 
             // WAV 包络分析（离线；批次 1 验收②④）
             "envelope" or "env" => await cmd.EnvelopeAsync(
@@ -956,7 +957,7 @@ public class Program
                                [--duration 0(=Ctrl+C 停)]
                      probe   延迟探测：播扫频脉冲串→采集同录→互相关闭环延迟（自校准：--in/--out 同本机）
                                [--pulses 20] [--interval 500] [--pulse-ms 15] [--render-latency-ms 40 仅定测试缓冲大小，不参与扣减]
-                               [--save-capture out.wav] [--report-out report.json]  数值=物理闭环原值（不扣减）
+                               [--save-capture out.wav] [--report-out report.json] [--exclusive 独占采集，不可用回退共享并记因]  数值=物理闭环原值（不扣减）
                      envelope  WAV 包络分析：整体电平/逐块信封/首声时刻/尾音（--file x.wav [--csv]）
                      chirpscan 2b chirp 扫描（t7 场 2）：录音×120 点模板互相关→逐窗滞留
                                --file rec.wav（须 16k/mono/s16 UAC 原始）[--idx a,b,c 串口行列表]
@@ -1039,7 +1040,7 @@ public class Program
                     pair clear --port COMx   0x51/03 清绑定（仅串口轨，笔端删 bond 进配对视窗）
                     status [--monitor N]     0x53 状态快照（电量/设备状态，仅 USB 轨）+ 监听推送
                     pencmd   统一TX 信封 0x54（无 --port = BLE 中转经基站；--port = 串口直连）：
-                             set-k2 <1|2> | query-k2 | send --hex
+                             set-k2 <1|2> | query-k2 | set-motor <0|1> | query-motor | send --hex
                     param    0x61 内部调参（issues-pencil/01/02/03，仅串口轨 --port COMx 笔端直连）【可关：feature off airmouse】：
                              list | get --id N | set --id N --value F     [--raw 显 VALUE4 hex]
                                                                           （11 参=01 卷 §5+§5.1；0x09/0x0A 只读、0x0B 写1=固化/写2=清除）
@@ -1099,6 +1100,8 @@ public class Program
             pencilbox company pencmd set-k2 1                       (BLE 中转：USB 信封 → 基站 → 当前笔，0x21 方式1)
             pencilbox company pencmd query-k2                       (BLE 中转查询 0x42；笔未连接回 STATUS=02)
             pencilbox company pencmd --port COM20 set-k2 1          (串口直连形态，笔端本地终结)
+            pencilbox company pencmd set-motor 0                    (关马达振动反馈 0x22：全触点静音+立即停，NVDS 掉电保持)
+            pencilbox company pencmd query-motor                    (查询马达开关 0x43 → 0=关/1=开，出厂默认开)
             pencilbox ble scan --duration 5
             pencilbox ble recommend --duration 5
             pencilbox ble connect --mac C6:56:00:3A:4A:F1 --hold 5

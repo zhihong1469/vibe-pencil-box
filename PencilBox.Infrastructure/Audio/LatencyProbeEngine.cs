@@ -23,7 +23,8 @@ public sealed record LatencyProbeResult(
     long CaptureQpc,
     short[] CapturedMono,
     int[] PulsePositionsRender,
-    double RenderLatencyMs);
+    double RenderLatencyMs,
+    string CaptureModeNote = "");
 
 /// <summary>脉冲互相关的统计结论（CLI 与 Desktop 共用同一口径）。
 /// 数值 = 物理闭环原值，不做任何扣减；测试缓冲/端点固有延迟的影响天然很小（脉冲包小且断续，
@@ -61,11 +62,14 @@ public sealed class LatencyProbeEngine(ILogger logger)
     /// <param name="amplitude">脉冲幅度 0~1</param>
     /// <param name="renderLatencyMs">WasapiOut 渲染缓冲（也作为播出的固定偏移参考值返回）</param>
     /// <param name="captureRate">采集请求采样率（16k 与 UAC 流同格式；不支持时自动回退设备混音格式）</param>
+    /// <param name="exclusiveCapture">一键独占采集（2026-11-05）：不可用自动回退共享并记因（进 <see cref="LatencyProbeResult.CaptureModeNote"/>→CaptureDesc）；
+    /// 独占候选表只取 16bit 单声道（分析器按 16bit mono 解包，双声道交错会毁互相关）</param>
     /// <param name="progress">进度回调（可空）</param>
     public async Task<LatencyProbeResult> RunAsync(
         string? captureSelector, string? renderSelector,
         int pulses = 20, int intervalMs = 500, int pulseMs = 15,
         float amplitude = 0.8f, int renderLatencyMs = 40, int captureRate = 16000,
+        bool exclusiveCapture = false,
         Action<string>? progress = null, CancellationToken ct = default)
     {
         if (pulses < 1) throw new ArgumentOutOfRangeException(nameof(pulses));
@@ -98,6 +102,8 @@ public sealed class LatencyProbeEngine(ILogger logger)
         long captureQpc = 0;
         var captureDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         WasapiCapture? capture = null;
+        ExclusiveCapturePump? pump = null;
+        var exclusiveNote = string.Empty;
         WaveFormat inFormat = requested;
 
         void OnData(object? s, WaveInEventArgs e)
@@ -133,13 +139,60 @@ public sealed class LatencyProbeEngine(ILogger logger)
             }
         }
 
+        // 一键独占：t7 配方复用（ExclusiveCapturePump），失败回退共享级联并记因——与扩音引擎同口径
+        ExclusiveCapturePump? TryStartExclusivePump()
+        {
+            var busy = false;
+            // 分析器假设 16bit 单声道（CapturedMono 直接 BlockCopy 解包）——独占候选只留 mono
+            var monoCandidates = ExclusiveCaptureEngine.CandidateFormats
+                .Where(f => f.BitsPerSample == 16 && f.Channels == 1).ToArray();
+            var chosen = ExclusiveCapturePump.SelectFormat(requested, monoCandidates, f =>
+            {
+                try { using var probeClient = captureDevice.AudioClient; return probeClient.IsFormatSupported(AudioClientShareMode.Exclusive, f); }
+                catch (COMException cex) { if (cex.HResult == ExclusiveCapturePump.AudclntEDeviceInUse) busy = true; return false; }
+            }, out var reason);
+            if (chosen == null)
+            {
+                exclusiveNote = busy ? "端点被占用（独占与同端点任何流互斥）" : reason;
+                return null;
+            }
+            var p = new ExclusiveCapturePump();
+            p.DataAvailable += OnData;
+            p.RecordingStopped += OnStopped;
+            try
+            {
+                p.Start(captureDevice, chosen);
+                return p;
+            }
+            catch (Exception ex)
+            {
+                p.DataAvailable -= OnData;
+                p.RecordingStopped -= OnStopped;
+                p.Dispose();
+                exclusiveNote = ExclusiveCapturePump.DescribeExclusiveFailure(ex);
+                return null;
+            }
+        }
+
         Say(progress, $"启动采集 [{captureDevice.FriendlyName}]…");
-        capture = TryStart(requested, true) ?? TryStart(captureMix, true)
-                  ?? TryStart(requested, false) ?? TryStart(captureMix, false)
-                  ?? throw new InvalidOperationException("采集端点所有格式组合均启动失败");
-        inFormat = capture.WaveFormat;
-        if (inFormat.BitsPerSample != 16 || inFormat.Channels != 1)
-            throw new NotSupportedException($"探测要求 16bit 单声道采集，实得 {inFormat}（回退格式含转换，暂不支持）");
+        if (exclusiveCapture)
+            pump = TryStartExclusivePump();
+        if (pump != null)
+        {
+            inFormat = pump.Format;                         // 独占候选已限 16bit 单声道，分析器假设保持成立
+            Say(progress, $"采集=独占 {inFormat.SampleRate}Hz/16bit/1ch");
+        }
+        else
+        {
+            if (exclusiveCapture)
+                Say(progress, $"独占采集不可用（{exclusiveNote}），回退共享");
+            capture = TryStart(requested, true) ?? TryStart(captureMix, true)
+                      ?? TryStart(requested, false) ?? TryStart(captureMix, false)
+                      ?? throw new InvalidOperationException("采集端点所有格式组合均启动失败");
+            inFormat = capture.WaveFormat;
+            if (inFormat.BitsPerSample != 16 || inFormat.Channels != 1)
+                throw new NotSupportedException($"探测要求 16bit 单声道采集，实得 {inFormat}（回退格式含转换，暂不支持）");
+        }
 
         WasapiOut? output = null;
         try
@@ -157,7 +210,8 @@ public sealed class LatencyProbeEngine(ILogger logger)
 
             Say(progress, "停止…");
             output.Stop();
-            capture.StopRecording();
+            if (pump != null) pump.Stop();
+            else capture.StopRecording();
             await captureDone.Task.WaitAsync(TimeSpan.FromSeconds(3), ct);
             if (Volatile.Read(ref captureQpc) == 0)
                 throw new InvalidOperationException("采集流未收到任何数据（端点选错或被占用/拦截）");
@@ -177,7 +231,8 @@ public sealed class LatencyProbeEngine(ILogger logger)
                 Volatile.Read(ref captureQpc),
                 mono,
                 positions,
-                Math.Clamp(renderLatencyMs, 10, 200));
+                Math.Clamp(renderLatencyMs, 10, 200),
+                pump != null ? "独占" : exclusiveCapture ? $"共享（独占回退：{exclusiveNote}）" : "");
         }
         finally
         {
@@ -186,6 +241,12 @@ public sealed class LatencyProbeEngine(ILogger logger)
                 capture.DataAvailable -= OnData;
                 capture.RecordingStopped -= OnStopped;
                 capture.Dispose();
+            }
+            if (pump != null)
+            {
+                pump.DataAvailable -= OnData;
+                pump.RecordingStopped -= OnStopped;
+                pump.Dispose();
             }
             output?.Dispose();
         }
@@ -219,9 +280,11 @@ public sealed class LatencyProbeEngine(ILogger logger)
         }
 
         var capturedSeconds = result.CapturedMono.Length / (double)result.CaptureRate;
+        var captureDesc = $"{result.CaptureDevice} @ {result.CaptureRate}Hz" +
+                          (result.CaptureModeNote.Length == 0 ? "" : $"，{result.CaptureModeNote}");
         if (delays.Count == 0)
             return new LatencyProbeStats(expectedPulses, 0, [], 0, 0, 0, 0, capturedSeconds,
-                $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
+                captureDesc,
                 $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms");
 
         var sorted = delays.Order().ToArray();
@@ -229,7 +292,7 @@ public sealed class LatencyProbeEngine(ILogger logger)
         return new LatencyProbeStats(
             expectedPulses, delays.Count, delays,
             P(0.5), P(0.95), sorted[0], sorted[^1], capturedSeconds,
-            $"{result.CaptureDevice} @ {result.CaptureRate}Hz",
+            captureDesc,
             $"{result.RenderDevice} @ {result.RenderRate}Hz/{result.RenderChannels}ch，测试缓冲 {result.RenderLatencyMs}ms");
     }
 

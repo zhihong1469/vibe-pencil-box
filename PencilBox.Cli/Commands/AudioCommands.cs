@@ -140,10 +140,10 @@ public class AudioCommands
     /// </summary>
     public async Task<int> LatencyProbeAsync(string? inSelector, string? outSelector,
         int pulses, int intervalMs, int pulseMs, float amplitude,
-        int renderLatencyMs, string? saveCapture, string? reportOut)
+        int renderLatencyMs, string? saveCapture, string? reportOut, bool exclusive = false)
     {
         var result = await _probe.RunAsync(inSelector, outSelector, pulses, intervalMs, pulseMs,
-            amplitude, renderLatencyMs, progress: m => ConsoleFormatter.Info(m));
+            amplitude, renderLatencyMs, exclusiveCapture: exclusive, progress: m => ConsoleFormatter.Info(m));
 
         if (saveCapture is { Length: > 0 })
         {
