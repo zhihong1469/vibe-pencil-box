@@ -489,7 +489,7 @@ public class CompanyCommands
     /// 08 号 issue）。双形态：**无 `--port` = BLE 中转**（USB 信封 → 基站转发 → 当前连接笔端；
     /// 基站 R1 回执口径：单帧单事务、等笔端 RSP ≤1s、不缓存不重试，笔未连接回 `STATUS=02`）；
     /// **`--port` = 串口直连**（笔端本地终结）。两种形态 PC 视角字节流一致（补充 02 §4.1 无车头收口）。
-    /// 动作：`set-k2 &lt;1|2&gt;` / `query-k2` / `send --hex`。
+    /// 动作：`set-k2 &lt;1|2&gt;` / `query-k2` / `set-motor &lt;0|1&gt;` / `query-motor` / `send --hex`。
     /// </summary>
     public async Task<int> PenCmdAsync(string? port, string action, string? modeArg, string? hexPayload)
     {
@@ -513,6 +513,21 @@ public class CompanyCommands
                 describe = "0x42 QUERY_VOICE_KEY_MODE";
                 break;
 
+            case "set-motor":
+                if (!byte.TryParse(modeArg, out var men) || men > 1)
+                {
+                    ConsoleFormatter.Error($"马达开关取值须为 0|1（0=关/1=开），实得 \"{modeArg}\"");
+                    return 1;
+                }
+                payload = VpTxCommand.BuildSetMotorEnable(men);
+                describe = $"0x22 SET_MOTOR_ENABLE → 马达振动反馈{(men == 1 ? "开" : "关")}";
+                break;
+
+            case "query-motor":
+                payload = VpTxCommand.BuildQueryMotorEnable();
+                describe = "0x43 QUERY_MOTOR_ENABLE";
+                break;
+
             case "send":
                 if (string.IsNullOrWhiteSpace(hexPayload))
                 {
@@ -532,7 +547,7 @@ public class CompanyCommands
                 break;
 
             default:
-                ConsoleFormatter.Error($"未知 pencmd 动作：{action}（可用：set-k2 <1|2> | query-k2 | send --hex）");
+                ConsoleFormatter.Error($"未知 pencmd 动作：{action}（可用：set-k2 <1|2> | query-k2 | set-motor <0|1> | query-motor | send --hex）");
                 return 1;
         }
 
@@ -580,6 +595,10 @@ public class CompanyCommands
             "set-k2" => $"K2 启动方式已设为 方式{modeArg}",
             "query-k2" => result.Payload.Length >= 1
                 ? $"K2 启动方式 = 方式{result.Payload[0]}"
+                : "查询成功（RSP 无数据字段）",
+            "set-motor" => $"马达振动反馈已{(modeArg == "1" ? "开启" : "关闭")}（NVDS 掉电保持）",
+            "query-motor" => result.Payload.Length >= 1
+                ? $"马达振动反馈 = {(result.Payload[0] == 1 ? "开" : result.Payload[0] == 0 ? "关" : $"未知值 0x{result.Payload[0]:X2}（NVDS 篡改回落默认开属笔端行为，此处原样露出）")}"
                 : "查询成功（RSP 无数据字段）",
             _ => $"成功（RSP data={Convert.ToHexString(result.Payload)}）"
         });

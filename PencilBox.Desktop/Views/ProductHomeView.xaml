@@ -281,6 +281,33 @@
                     </StackPanel>
                 </GroupBox>
 
+                <!-- 马达振动反馈（0x54 信封 0x22/0x43，issues-pencil/05：全触点门控+NVDS 掉电保持；
+                     连接后自动 QUERY 初始化态——0x22 无事件上行，QUERY 是唯一状态源） -->
+                <GroupBox Header="马达振动反馈（0x54 · BLE 透传）" Padding="12" MinWidth="250" Margin="8,0,0,0" HorizontalAlignment="Left">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="路径：USB 信封 → 基站 → 当前连接笔端；关=按键/配对/切档全触点静音+立即停"
+                                   FontSize="10" Foreground="#7F8C8D" HorizontalAlignment="Center"
+                                   TextWrapping="Wrap" TextAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
+                            <ComboBox Width="90" VerticalAlignment="Center"
+                                      SelectedIndex="{Binding MotorSwitchIndex}"
+                                      ToolTip="0x22 SET_MOTOR_ENABLE：开/关（语义归统一TX 规范 §7；出厂默认=开）">
+                                <ComboBoxItem Content="开"/>
+                                <ComboBoxItem Content="关"/>
+                            </ComboBox>
+                            <Button Content="查询" Command="{Binding QueryMotorCommand}" Margin="8,0,0,0"
+                                    Style="{StaticResource ActionButton}" IsEnabled="{Binding CanUseMotor}"
+                                    ToolTip="0x43 QUERY_MOTOR_ENABLE：读笔端当前开关态（连接后自动查一次）"/>
+                            <Button Content="写入" Command="{Binding ApplyMotorCommand}" Margin="8,0,0,0"
+                                    Style="{StaticResource ActionButton}" IsEnabled="{Binding CanUseMotor}"
+                                    ToolTip="0x22 下发所选开关态（NVDS 掉电保持）；关=全触点立即静音；OTA 升级会话中自动排队让路（C5）"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding MotorResultText}" FontSize="11" Foreground="#2C3E50"
+                                   HorizontalAlignment="Center" Margin="0,8,0,0" TextWrapping="Wrap"
+                                   TextAlignment="Center" MaxWidth="230"/>
+                    </StackPanel>
+                </GroupBox>
+
                 <!-- Dongle 配对状态（EP4 A1 GET_STATE）——**接收器侧**；笔端本体解绑在「串口直达笔端」行。
                      按钮（A1 手动刷新 / A3 清除目标）已于 2026-09-23 裁决摘除：设备侧 4A4C 已退役，对现行固件恒超时；
                      4A4C 遗留联调走 CLI device ep4 的 send（A1/A3），见 10 号 §4.2 -->

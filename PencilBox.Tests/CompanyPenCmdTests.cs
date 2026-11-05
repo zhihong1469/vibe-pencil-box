@@ -239,4 +239,71 @@ public class CompanyPenCmdTests
         Assert.Equal(new byte[] { 0x42 }, VpTxCommand.BuildQueryVoiceKeyMode());
         Assert.Equal(new byte[] { 0x21, 0x02 }, VpTxCommand.BuildSetVoiceKeyMode(0x02));
     }
+
+    // ================= 马达开关 0x22/0x43（issues-pencil/05；帧字节权威=0x5x 总表立项草稿）=================
+
+    [Fact]
+    public void Motor_Payloads_AreGolden()
+    {
+        Assert.Equal(new byte[] { 0x22, 0x01 }, VpTxCommand.BuildSetMotorEnable(0x01));
+        Assert.Equal(new byte[] { 0x22, 0x00 }, VpTxCommand.BuildSetMotorEnable(0x00));
+        Assert.Equal(new byte[] { 0x43 }, VpTxCommand.BuildQueryMotorEnable());
+    }
+
+    [Fact]
+    public void EncodePenCmd_Motor_AreGoldenVectors()
+    {
+        var codec = new CompanyCodec();
+
+        // SET 开：61 01 54 22 01（LEN=5）——总表 §4 帧字节逐字节
+        var setOn = codec.EncodePenCmd(VpTxCommand.BuildSetMotorEnable(0x01));
+        Assert.Equal("F5AAAA056101542201", Hex(setOn));
+
+        // SET 关：61 01 54 22 00
+        Assert.Equal("F5AAAA056101542200",
+            Hex(codec.EncodePenCmd(VpTxCommand.BuildSetMotorEnable(0x00))));
+
+        // QUERY：61 01 54 43（LEN=4）
+        Assert.Equal("F5AAAA0461015443",
+            Hex(codec.EncodePenCmd(VpTxCommand.BuildQueryMotorEnable())));
+    }
+
+    [Fact]
+    public void TryParsePenCmdResponse_Motor_RspVectors()
+    {
+        var codec = new CompanyCodec();
+
+        // SET RSP：[22 00]（笔端受理）→ 信封内 [00 22 00]，rspData 空
+        Assert.True(codec.TryParsePenCmdResponse(
+            new byte[] { 0x00, 0x22, 0x00 }, out var s, out var cmd, out var ps, out var rsp));
+        Assert.Equal(VpTxCommand.SetMotorEnable, cmd);
+        Assert.Equal(CompanyStatus.Ok, ps);
+        Assert.Empty(rsp);
+
+        // SET 非法值 [22 02]：信封级透传笔端参数错误 → [00 22 01]（PC 双层归因 PenRspError）
+        Assert.True(codec.TryParsePenCmdResponse(
+            new byte[] { 0x00, 0x22, 0x01 }, out _, out _, out var badPs, out _));
+        Assert.Equal(PenCmdStatus.ParamError, badPs);
+
+        // QUERY RSP：E1 01 54 00 43 00 01 → rspData=[01]（en=1 开）
+        Assert.True(codec.TryParsePenCmdResponse(
+            new byte[] { 0x00, 0x43, 0x00, 0x01 }, out _, out var qid, out _, out var qrsp));
+        Assert.Equal(VpTxCommand.QueryMotorEnable, qid);
+        Assert.Equal(new byte[] { 0x01 }, qrsp);
+    }
+
+    [Fact]
+    public async Task VpCommand_SetMotorEnable_WiresThroughEnvelope()
+    {
+        var pen = new ScriptedPen();
+        var vp = new F5EnvelopeVpCommand(CreateService(pen, new StepClock()));
+
+        var setOff = await vp.SetMotorEnableAsync(0);
+        Assert.True(setOff.Success);
+        Assert.Equal("F5AAAA056101542200", Hex(pen.Sent[0]));
+
+        var query = await vp.QueryMotorEnableAsync();
+        Assert.True(query.Success);
+        Assert.Equal("F5AAAA0461015443", Hex(pen.Sent[1]));
+    }
 }

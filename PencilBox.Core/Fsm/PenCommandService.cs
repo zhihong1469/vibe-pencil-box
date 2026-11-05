@@ -169,6 +169,12 @@ public interface IVpCommandService
     /// <summary>`0x42` 查询 K2 启动方式（<see cref="PenCmdResult.Payload"/> = `[mode]`）</summary>
     Task<PenCmdResult> QueryVoiceKeyModeAsync(CancellationToken ct = default);
 
+    /// <summary>`0x22` 设置马达振动反馈开关（<paramref name="en"/>：0=关/1=开；NVDS 掉电保持；issues-pencil/05）</summary>
+    Task<PenCmdResult> SetMotorEnableAsync(byte en, CancellationToken ct = default);
+
+    /// <summary>`0x43` 查询马达振动反馈开关（<see cref="PenCmdResult.Payload"/> = `[en]`）</summary>
+    Task<PenCmdResult> QueryMotorEnableAsync(CancellationToken ct = default);
+
     /// <summary>原始载荷透传（CLI `send --hex` 联调用；语义仍归统一TX 规范 §7）</summary>
     Task<PenCmdResult> SendRawAsync(byte[] payload, CancellationToken ct = default);
 }
@@ -185,6 +191,12 @@ public sealed class F5EnvelopeVpCommand : IVpCommandService
 
     public Task<PenCmdResult> QueryVoiceKeyModeAsync(CancellationToken ct = default) =>
         _penCmd.SendAsync(VpTxCommand.BuildQueryVoiceKeyMode(), ct);
+
+    public Task<PenCmdResult> SetMotorEnableAsync(byte en, CancellationToken ct = default) =>
+        _penCmd.SendAsync(VpTxCommand.BuildSetMotorEnable(en), ct);
+
+    public Task<PenCmdResult> QueryMotorEnableAsync(CancellationToken ct = default) =>
+        _penCmd.SendAsync(VpTxCommand.BuildQueryMotorEnable(), ct);
 
     public Task<PenCmdResult> SendRawAsync(byte[] payload, CancellationToken ct = default) =>
         _penCmd.SendAsync(payload, ct);

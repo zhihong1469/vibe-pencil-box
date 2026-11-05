@@ -225,6 +225,23 @@ public partial class ProductHomeViewModel : ObservableObject
     /// <summary>K2 卡片可用态（USB 命令通道已连且无在途信封事务）</summary>
     public bool CanUseK2 => IsConnected && !IsK2Busy;
 
+    // ============ 马达振动反馈（0x54 信封 0x22/0x43，issues-pencil/05；全触点门控+NVDS 掉电保持）============
+    [ObservableProperty]
+    private int _motorSwitchIndex;      // 0=开/1=关；出厂默认=开（R-PC3 口径），查询回填前按默认展示
+
+    [ObservableProperty]
+    private bool _hasMotorState;        // 已从笔端查到实态（连接后自动 QUERY 初始化，R-PC2）
+
+    [ObservableProperty]
+    private string _motorResultText = "未查询：连接笔端后自动查询；写入经 0x54 信封 → 基站 → 笔端（NVDS 掉电保持）";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanUseMotor))]
+    private bool _isMotorBusy;
+
+    /// <summary>马达卡可用态（USB 命令通道已连且无在途信封事务）</summary>
+    public bool CanUseMotor => IsConnected && !IsMotorBusy;
+
     // ============ Keymap ============
     [ObservableProperty]
     private ObservableCollection<KeymapRowViewModel> _keymapRows = new();
@@ -1102,6 +1119,88 @@ public partial class ProductHomeViewModel : ObservableObject
     /// <summary>序列号空值兜底显示（多实例差异化：SN 是个体唯一标识，缺失时明示而非空白）。</summary>
     private static string OrDash(string s) => string.IsNullOrWhiteSpace(s) ? "-" : s;
 
+    // ============ 马达振动反馈（0x54 信封 0x22/0x43，issues-pencil/05）============
+
+    /// <summary>查询马达振动反馈（`0x43` QUERY_MOTOR_ENABLE；信封经基站中转当前连接笔端）。</summary>
+    [RelayCommand]
+    private async Task QueryMotorAsync()
+    {
+        if (!CanUseMotor)
+        {
+            StatusMessage = "请先连接接收器（USB 命令通道），再查询马达振动反馈（0x54 信封走基站中转）";
+            return;
+        }
+
+        IsMotorBusy = true;
+        try
+        {
+            var r = await _vpCmd.QueryMotorEnableAsync();
+            MainThreadHelper.EnsureOnMainThread(() =>
+            {
+                MotorResultText = DescribeMotor(r);
+                if (r.Success && r.Payload.Length > 0 && r.Payload[0] is 0 or 1)
+                {
+                    MotorSwitchIndex = r.Payload[0] == 1 ? 0 : 1;    // 下拉 0=开/1=关 ↔ en 1/0
+                    HasMotorState = true;
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            MotorResultText = $"查询失败：{ex.Message}";
+        }
+        finally
+        {
+            MainThreadHelper.EnsureOnMainThread(() => IsMotorBusy = false);
+        }
+    }
+
+    /// <summary>写入马达振动反馈（`0x22` SET_MOTOR_ENABLE；笔端 NVDS 掉电保持，关=全触点立即静音）。</summary>
+    [RelayCommand]
+    private async Task ApplyMotorAsync()
+    {
+        if (!CanUseMotor)
+        {
+            StatusMessage = "请先连接接收器（USB 命令通道），再写入马达振动反馈（0x54 信封走基站中转）";
+            return;
+        }
+
+        var en = MotorSwitchIndex == 0 ? (byte)1 : (byte)0;
+        IsMotorBusy = true;
+        try
+        {
+            var r = await _vpCmd.SetMotorEnableAsync(en);
+            MainThreadHelper.EnsureOnMainThread(() =>
+                MotorResultText = r.Success
+                    ? $"马达振动反馈已{(en == 1 ? "开启" : "关闭")}（NVDS 掉电保持；关=全触点静音+立即停）"
+                    : DescribeMotor(r));
+            if (r.Success)
+                HasMotorState = true;
+        }
+        catch (Exception ex)
+        {
+            MotorResultText = $"设置失败：{ex.Message}";
+        }
+        finally
+        {
+            MainThreadHelper.EnsureOnMainThread(() => IsMotorBusy = false);
+        }
+    }
+
+    /// <summary>马达开关结果 → 用户文案（映射同 K2 卡；03 在笔端固件烧验前=命令面未上线）。</summary>
+    private static string DescribeMotor(PenCmdResult r) => r.Outcome switch
+    {
+        PenCmdOutcome.Success when r.Payload.Length > 0 && r.Payload[0] is 0 or 1
+            => $"当前马达振动反馈 = {(r.Payload[0] == 1 ? "开" : "关")}",
+        PenCmdOutcome.Success => "成功（RSP 无 en 字段）",
+        PenCmdOutcome.PenNotConnected => "笔未连接（STATUS=02）：笔上电并被基站连接后重试",
+        PenCmdOutcome.PenRespTimeout => "笔端无应答（STATUS=03）：固件未含该命令面（05 号待烧验）或链路异常",
+        PenCmdOutcome.PenRspError => $"笔端拒绝（RSP status=0x{r.PenStatus:X2}）：帧长/值非法",
+        PenCmdOutcome.ParamError => "参数错误（STATUS=01）",
+        PenCmdOutcome.Timeout => "无应答（重发耗尽）：基站旧固件不识 0x54 或链路异常",
+        _ => r.Message,
+    };
+
     /// <summary>信封结果 → 用户文案（08 M4 异常映射：02→笔未连接、03→笔端无应答）。</summary>
     private static string DescribeK2(PenCmdResult r) => r.Outcome switch
     {
@@ -1510,8 +1609,15 @@ public partial class ProductHomeViewModel : ObservableObject
                 ClearChargeDisplay();
                 PenStatusMetaText = "未获取（连接后点「刷新笔端状态」）";
                 K2ModeResultText = "未查询：应用/查询经 0x54 信封 → 基站 → 当前连接笔端";
+                MotorResultText = "未查询：连接笔端后自动查询；写入经 0x54 信封 → 基站 → 笔端（NVDS 掉电保持）";
+                HasMotorState = false;
                 DonglePairText = "未连接：配对状态不可用";
                 HasPairState = false;
+            }
+            else
+            {
+                // R-PC2：连接后先 QUERY 初始化马达开关态（0x22 无事件上行，QUERY 是唯一状态源；写后本地更新）
+                _ = QueryMotorAsync();
             }
         });
     }

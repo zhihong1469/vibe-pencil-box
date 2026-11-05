@@ -176,11 +176,23 @@ public static class VpTxCommand
     /// <summary>`QUERY_VOICE_KEY_MODE`（K2 启动方式查询；issues-pencil/11）</summary>
     public const byte QueryVoiceKeyMode = 0x42;
 
+    /// <summary>`SET_MOTOR_ENABLE`（马达振动反馈开关 0/1，出厂默认开；issues-pencil/05）</summary>
+    public const byte SetMotorEnable = 0x22;
+
+    /// <summary>`QUERY_MOTOR_ENABLE`（马达振动反馈查询；issues-pencil/05）</summary>
+    public const byte QueryMotorEnable = 0x43;
+
     /// <summary>`0x21` 载荷：`[cmd_id][mode]`（mode = 方式 1/2）</summary>
     public static byte[] BuildSetVoiceKeyMode(byte mode) => [SetVoiceKeyMode, mode];
 
     /// <summary>`0x42` 载荷：`[cmd_id]`（应答 `rspData` = `[mode]`）</summary>
     public static byte[] BuildQueryVoiceKeyMode() => [QueryVoiceKeyMode];
+
+    /// <summary>`0x22` 载荷：`[cmd_id][en]`（en：0=关/1=开；帧长不符或值非法 → 笔端 `STATUS=01`）</summary>
+    public static byte[] BuildSetMotorEnable(byte en) => [SetMotorEnable, en];
+
+    /// <summary>`0x43` 载荷：`[cmd_id]`（应答 `rspData` = `[en]`）</summary>
+    public static byte[] BuildQueryMotorEnable() => [QueryMotorEnable];
 }
 
 /// <summary>
